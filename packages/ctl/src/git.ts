@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, rmSync, statSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -64,15 +64,15 @@ export async function diffAgainstHead(root: string): Promise<string> {
   const indexFile = join(dir, 'index')
 
   try {
-    // Seeding from the real index keeps unchanged files on their cached hashes
-    // instead of re-reading the whole tree. A missing or empty index is left
-    // absent rather than created empty, since git refuses a zero-byte index.
-    const real = join(await gitDir(root), 'index')
-    if (sizeOf(real) > 0) {
-      const { copyFileSync } = await import('node:fs')
-      copyFileSync(real, indexFile)
-    }
-
+    // The scratch index starts empty on purpose.
+    //
+    // Seeding it from the real index is the obvious optimization and it is
+    // wrong: the copy's mtime is newer than every file, so git trusts the
+    // stat data it inherited instead of re-reading content. An in-place edit
+    // that keeps a file's size then reads as no change at all, and the
+    // fingerprint comes back as the hash of an empty diff while the working
+    // tree plainly differs. For a value the commit gate rests on, a full
+    // re-read is the right trade.
     const env = { GIT_INDEX_FILE: indexFile }
     await git(root, ['add', '-A'], env)
 
@@ -92,12 +92,4 @@ export async function fingerprint(root: string): Promise<string> {
   return createHash('sha256')
     .update(await diffAgainstHead(root), 'utf8')
     .digest('hex')
-}
-
-function sizeOf(path: string): number {
-  try {
-    return statSync(path).size
-  } catch {
-    return 0
-  }
 }

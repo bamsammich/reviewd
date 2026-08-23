@@ -116,6 +116,20 @@ describe('fingerprint', () => {
     expect(statSync(indexPath).size).toBe(sizeBefore)
   })
 
+  it('sees an in-place edit that keeps the file size', async () => {
+    // The bug seeding a scratch index from the real one causes: the copy's
+    // mtime is newer than the file, so git trusts inherited stat data, and a
+    // same-size edit reads as no change while the tree plainly differs.
+    const clean = await fingerprint(repo.root)
+
+    repo.write('src/a.ts', 'const a = 9\n')
+    const dirty = await fingerprint(repo.root)
+
+    expect(dirty).not.toBe(clean)
+    expect(await fingerprint(repo.root)).toBe(dirty)
+    expect(await diffAgainstHead(repo.root)).toContain('const a = 9')
+  })
+
   it('sees a deletion', async () => {
     const before = await fingerprint(repo.root)
     repo.run('rm', '-q', 'src/a.ts')

@@ -15,5 +15,8 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@reviewd/protocol": "*",
     "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@reviewd/daemon": "^0.0.0"
   }
 }
