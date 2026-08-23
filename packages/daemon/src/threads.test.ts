@@ -287,6 +287,43 @@ describe('approval', () => {
 
     expect(await ctx.db.selectFrom('approval').selectAll().execute()).toHaveLength(1)
   })
+
+  // The gate matches approval rows and never reads review.status, so a verdict
+  // that reopens the review has to take the rows with it or the agent stays
+  // free to commit exactly what was just rejected.
+  it('takes back a live approval when the reviewer asks for changes', async () => {
+    const review = await reviewWithFile()
+    await submitReview(deps, review.reviewId, 'approved')
+    expect(await ctx.db.selectFrom('approval').selectAll().execute()).toHaveLength(1)
+
+    await submitReview(deps, review.reviewId, 'changes_requested')
+
+    expect(await ctx.db.selectFrom('approval').selectAll().execute()).toHaveLength(0)
+    expect((await summarize(deps, review.reviewId)).status).toBe('open')
+  })
+
+  it('takes back a live approval when notes are sent on top of it', async () => {
+    const review = await reviewWithFile()
+    await submitReview(deps, review.reviewId, 'approved')
+    await submitReview(deps, review.reviewId, 'comment')
+
+    expect(await ctx.db.selectFrom('approval').selectAll().execute()).toHaveLength(0)
+  })
+
+  it('leaves a consumed approval alone, because a commit already used it', async () => {
+    const review = await reviewWithFile()
+    await submitReview(deps, review.reviewId, 'approved')
+
+    await ctx.db
+      .updateTable('approval')
+      .set({ consumed_at: Date.now() })
+      .where('review_id', '=', review.reviewId)
+      .execute()
+
+    await submitReview(deps, review.reviewId, 'changes_requested')
+
+    expect(await ctx.db.selectFrom('approval').selectAll().execute()).toHaveLength(1)
+  })
 })
 
 describe('errors', () => {

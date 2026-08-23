@@ -53,12 +53,44 @@ export function parseViewMode(value: string | undefined): ViewMode {
   return value === 'unified' ? 'unified' : 'split'
 }
 
+/** Identifies one file block across renders. Opaque: only membership is asked. */
+export function foldKey(sourceId: string, path: string): string {
+  return `${sourceId}:${path}`
+}
+
+/**
+ * Which files the reviewer collapsed, from the cookie the page writes.
+ *
+ * The value is the review id followed by one encoded key per collapsed file.
+ * Stamping the review id means a cookie left over from another review reads as
+ * empty rather than folding whatever happens to share a path, and one cookie
+ * covers the whole tool instead of accumulating one per review ever opened.
+ */
+export function parseFolds(value: string | undefined, reviewId: string): Set<string> {
+  const folds = new Set<string>()
+  if (!value) return folds
+
+  const [owner, ...keys] = value.split('|')
+  if (owner !== reviewId) return folds
+
+  for (const key of keys) {
+    try {
+      if (key) folds.add(decodeURIComponent(key))
+    } catch {
+      // A hand-edited cookie is not worth failing a page render over.
+    }
+  }
+
+  return folds
+}
+
 export function reviewPage(
   review: ReviewSummary,
   files: FileView[],
   threads: Thread[],
   open?: OpenBox,
   view: ViewMode = 'split',
+  folded: ReadonlySet<string> = new Set(),
 ): SafeHtml {
   const drafts = threads.reduce(
     (count, thread) => count + thread.messages.filter((m) => m.submittedAt === null).length,
@@ -70,7 +102,7 @@ export function reviewPage(
 
   const body = html`
 ${topBar(review.title, html`<span class="rev">rev ${review.snapshotSeq}</span>`)}
-<main id="main" class="review with-bar view-${view}">
+<main id="main" class="review with-bar view-${view}" data-review="${review.reviewId}">
   <div class="rail">
     <h1 class="page-title">${review.title}</h1>
     ${scopeList(grouped)}
@@ -78,9 +110,15 @@ ${topBar(review.title, html`<span class="rev">rev ${review.snapshotSeq}</span>`)
   </div>
 
   <div class="files">
-    ${files.length === 0 ? html`<p class="empty">This revision changed nothing.</p>` : raw('')}
+    ${
+      files.length === 0
+        ? html`<p class="emptystate">This revision changed nothing.</p>`
+        : raw('')
+    }
     ${viewToggle(review, view)}
-    ${grouped.map((group) => sourceGroup(review, group, threads, open, grouped.length > 1))}
+    ${grouped.map((group) =>
+      sourceGroup(review, group, threads, open, grouped.length > 1, folded),
+    )}
     ${outdatedBlock(review, outdated)}
   </div>
 </main>
@@ -185,6 +223,7 @@ function sourceGroup(
   threads: Thread[],
   open: OpenBox | undefined,
   showHeading: boolean,
+  folded: ReadonlySet<string>,
 ): SafeHtml {
   return html`<section class="sourcegroup" id="src-${group.source.id}">
   ${
@@ -200,7 +239,7 @@ function sourceGroup(
   ${
     group.files.length === 0
       ? html`<p class="note">Nothing changed in this one.</p>`
-      : group.files.map((file) => fileBlock(review, file, threads, open))
+      : group.files.map((file) => fileBlock(review, file, threads, folded, open))
   }
 </section>`
 }
@@ -209,6 +248,7 @@ function fileBlock(
   review: ReviewSummary,
   file: FileView,
   threads: Thread[],
+  folded: ReadonlySet<string>,
   open?: OpenBox,
 ): SafeHtml {
   const rows = file.isBinary || file.truncated ? [] : buildRows(file.oldText, file.newText)
@@ -218,7 +258,14 @@ function fileBlock(
     (thread) => thread.sourceId === file.sourceId && thread.path === file.path,
   )
 
-  return html`<details class="file" open>
+  // A collapsed file stays collapsed across renders, except when the comment
+  // box the reviewer just opened lives inside it. Honouring the fold there
+  // would hide the box they are trying to type into.
+  const key = foldKey(file.sourceId, file.path)
+  const holdsBox = open?.sourceId === file.sourceId && open.path === file.path
+  const expanded = holdsBox || !folded.has(key)
+
+  return html`<details class="file" data-fold="${key}" ${expanded ? raw('open') : raw('')}>
   <summary>
     <h3>${file.path}</h3>
     <span class="badge">${file.changeType}</span>
@@ -366,32 +413,30 @@ function threadBlock(review: ReviewSummary, thread: Thread, showLocation: boolea
           <div class="body">${message.body}</div>
         </div>`,
       )}
-      <form method="post" action="/r/${review.reviewId}/threads/${thread.id}/replies">
-        <label for="reply-${thread.id}">Reply</label>
-        <textarea id="reply-${thread.id}" name="body" rows="2" required></textarea>
-        <div class="actions">
-          <button type="submit">Save reply</button>
-          ${
-            thread.state === 'active'
-              ? html`<button
-                  type="submit"
-                  formaction="/r/${review.reviewId}/threads/${thread.id}/resolve"
-                  formnovalidate
-                  class="quiet"
-                >
-                  Resolve
-                </button>`
-              : html`<button
-                  type="submit"
-                  formaction="/r/${review.reviewId}/threads/${thread.id}/reopen"
-                  formnovalidate
-                  class="quiet"
-                >
-                  Reopen
-                </button>`
-          }
-        </div>
-      </form>
+      <details class="reply">
+        <summary>Reply</summary>
+        <form method="post" action="/r/${review.reviewId}/threads/${thread.id}/replies">
+          <label class="visually-hidden" for="reply-${thread.id}">
+            Reply to this comment
+          </label>
+          <textarea id="reply-${thread.id}" name="body" rows="2" required></textarea>
+          <div class="actions">
+            <button type="submit" class="primary">Save reply</button>
+          </div>
+        </form>
+      </details>
+      <div class="actions">
+        <form
+          method="post"
+          action="/r/${review.reviewId}/threads/${thread.id}/${
+            thread.state === 'active' ? 'resolve' : 'reopen'
+          }"
+        >
+          <button type="submit" class="quiet">
+            ${thread.state === 'active' ? 'Resolve' : 'Reopen'}
+          </button>
+        </form>
+      </div>
     </div>
 </div>`
 }
@@ -460,12 +505,21 @@ function viewToggle(review: ReviewSummary, view: ViewMode): SafeHtml {
  * usually means; with nothing unsent it is approving, because that is what a
  * reviewer who has read and is satisfied usually means. The state line says
  * what approving does, since unblocking a commit is not visible from here.
+ *
+ * Approval is its own state rather than an extra button on the same row. A
+ * reviewer who has just approved and gets back a highlighted Approve reads it
+ * as a click that did not land, and the two other ways out of approval sitting
+ * beside it invite the wrong one. What is left is the one thing still true:
+ * the decision is made and the agent has not committed yet.
  */
 function submitBar(review: ReviewSummary, drafts: number, awaitingYou: number): SafeHtml {
   const approved = review.sources.length > 0 && review.sources.every((source) => source.approved)
 
   const state = approved
-    ? html`<strong>Approved.</strong> The agent can commit these changes.`
+    ? drafts > 0
+      ? html`<strong>Approved, ${drafts} comment${drafts === 1 ? '' : 's'} not sent.</strong>
+          Sending them takes the approval back.`
+      : html`<strong>Approved.</strong> Waiting for the agent to commit.`
     : drafts > 0
       ? html`<strong>${drafts} comment${drafts === 1 ? '' : 's'} not sent.</strong>
           Choose how to send them.`
@@ -479,26 +533,34 @@ function submitBar(review: ReviewSummary, drafts: number, awaitingYou: number): 
     <div class="verdicts">
       ${
         approved
-          ? html`<button type="submit" formaction="/r/${review.reviewId}/unapprove" class="quiet">
+          ? html`${
+              drafts > 0
+                ? html`<button type="submit" name="verdict" value="comment" class="quiet">
+                    Send as notes
+                  </button>`
+                : raw('')
+            }
+            <button
+              type="submit"
+              formaction="/r/${review.reviewId}/unapprove"
+              class="${drafts > 0 ? 'quiet' : 'primary'}"
+            >
               Unapprove
             </button>`
-          : raw('')
-      }
-      ${
-        drafts > 0
-          ? html`<button type="submit" name="verdict" value="comment" class="quiet">
-                Send as notes
-              </button>
-              <button type="submit" name="verdict" value="changes_requested" class="primary">
-                Request changes
-              </button>
-              <button type="submit" name="verdict" value="approved">Approve</button>`
-          : html`<button type="submit" name="verdict" value="changes_requested" class="quiet">
-                Request changes
-              </button>
-              <button type="submit" name="verdict" value="approved" class="primary">
-                Approve
-              </button>`
+          : drafts > 0
+            ? html`<button type="submit" name="verdict" value="comment" class="quiet">
+                  Send as notes
+                </button>
+                <button type="submit" name="verdict" value="changes_requested" class="primary">
+                  Request changes
+                </button>
+                <button type="submit" name="verdict" value="approved">Approve</button>`
+            : html`<button type="submit" name="verdict" value="changes_requested" class="quiet">
+                  Request changes
+                </button>
+                <button type="submit" name="verdict" value="approved" class="primary">
+                  Approve
+                </button>`
       }
     </div>
   </div>
@@ -506,12 +568,40 @@ function submitBar(review: ReviewSummary, drafts: number, awaitingYou: number): 
 }
 
 /**
- * Opens a comment box without a round trip.
+ * Opens a comment box without a round trip, and remembers which files are
+ * folded.
  *
  * Everything here is an enhancement: each link already works on its own, so a
- * failure to load leaves the page usable rather than inert.
+ * failure to load leaves the page usable rather than inert. Without this the
+ * folds simply do not persist, which is where the page started.
+ *
+ * The cookie carries the whole collapsed set on every toggle rather than a
+ * diff, because the set is what the next render needs and rebuilding it from
+ * the DOM cannot drift from what the reviewer is looking at.
  */
 const SCRIPT = `
+const FOLD_LIMIT = 3500;
+
+document.addEventListener('toggle', (event) => {
+  const details = event.target;
+  if (!details.dataset || !details.dataset.fold) return;
+
+  const main = document.getElementById('main');
+  if (!main || !main.dataset.review) return;
+
+  const closed = Array.from(document.querySelectorAll('details.file[data-fold]'))
+    .filter((el) => !el.open)
+    .map((el) => encodeURIComponent(el.dataset.fold));
+
+  let value = main.dataset.review;
+  for (const key of closed) {
+    if (value.length + key.length + 1 > FOLD_LIMIT) break;
+    value += '|' + key;
+  }
+
+  document.cookie = 'reviewd_folds=' + value + '; Path=/; Max-Age=31536000; SameSite=Lax';
+}, true);
+
 document.addEventListener('click', (event) => {
   const link = event.target.closest('a[data-box]');
   if (!link || event.metaKey || event.ctrlKey || event.shiftKey) return;

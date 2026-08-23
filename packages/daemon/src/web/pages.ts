@@ -24,7 +24,7 @@ export function reviewListPage(reviews: ReviewSummary[]): SafeHtml {
   </h1>
   ${
     reviews.length === 0
-      ? html`<p class="empty">
+      ? html`<p class="emptystate">
           An agent opens a review when it has changes to show, and sends you a link.
         </p>`
       : html`<ul class="reviews">
@@ -72,7 +72,7 @@ export function messagePage(title: string, message: string): SafeHtml {
   return page(
     `${title} · reviewd`,
     html`${topBar(title)}
-      <main><p class="empty">${message}</p></main>`,
+      <main><p class="emptystate">${message}</p></main>`,
   )
 }
 

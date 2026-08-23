@@ -4,7 +4,7 @@ import { listReviews, ReviewError, summarize, type Deps } from '../reviews.js'
 import { touchReview } from '../sweep.js'
 import { createThread, listThreads, replyToThread, setThreadState, submitReview, unapprove } from '../threads.js'
 import { loadFiles, messagePage, reviewListPage } from '../web/pages.js'
-import { parseOpenBox, parseViewMode, reviewPage } from '../web/review-page.js'
+import { parseFolds, parseOpenBox, parseViewMode, reviewPage } from '../web/review-page.js'
 
 /**
  * The pages a reviewer opens and the forms they act through.
@@ -40,9 +40,12 @@ export function webRoutes(deps: Deps): Hono {
       }
 
       const view = parseViewMode(cookie(c, 'reviewd_view'))
+      // Folds are written by the page itself, so this cookie is the only place
+      // that knows what the reviewer already decided was fine.
+      const folded = parseFolds(cookie(c, 'reviewd_folds'), reviewId)
 
       return c.html(
-        reviewPage(review, files, threads, parseOpenBox(c.req.query('box')), view).value,
+        reviewPage(review, files, threads, parseOpenBox(c.req.query('box')), view, folded).value,
       )
     } catch (error) {
       if (error instanceof ReviewError && error.status === 404) {

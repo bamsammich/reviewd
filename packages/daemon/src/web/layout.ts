@@ -308,6 +308,18 @@ tr.threadrow td { padding: 0; background: var(--surface-2); white-space: normal;
 }
 .thread .actions { display: flex; gap: .5rem; margin-top: .5rem; flex-wrap: wrap; }
 
+/* The reply box starts closed. A thread is usually read, not answered, and an
+   open textarea under every one of them reads as work outstanding. */
+.thread details.reply > summary {
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: .88rem; font-weight: 500; min-height: 2.5rem;
+  padding: .45rem .85rem; border-radius: 8px;
+  border: 1px solid var(--rule-strong); background: var(--surface);
+  color: var(--ink); cursor: pointer; list-style: none; margin-top: .5rem;
+}
+.thread details.reply > summary::-webkit-details-marker { display: none; }
+.thread details.reply[open] > summary { margin-bottom: .5rem; }
+
 /* ---------- controls ---------- */
 
 button, .btn {
@@ -339,7 +351,11 @@ main.with-bar { padding-bottom: 7.5rem; }
 .bar .verdicts { display: flex; gap: .5rem; flex: 1 1 auto; }
 .bar .verdicts button { flex: 1 1 auto; }
 
-.empty { color: var(--muted); padding: 2.5rem 1rem; text-align: center; }
+/* Named for the page-level "there is nothing here" message. The old name,
+   plain .empty, also matched the blank half of every added or removed line in
+   the diff, so padding meant for a lonely paragraph landed on 387 of the 538
+   rows in a six-file review and tripled their height side by side. */
+.emptystate { color: var(--muted); padding: 2.5rem 1rem; text-align: center; }
 .note { color: var(--muted); font-family: var(--mono); font-size: .78rem; padding: .6rem .8rem; }
 
 /* ---------- desktop ---------- */

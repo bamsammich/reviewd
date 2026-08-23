@@ -458,6 +458,16 @@ export async function submitReview(
 
     if (verdict === 'approved') {
       await writeApprovals(tx, reviewId, snapshot.id, t)
+    } else {
+      // The gate reads approvals, never review.status, so reopening the review
+      // without clearing them would leave the agent free to commit code the
+      // reviewer had just asked to change. Consumed rows stay: a commit
+      // already used those, and that history is not ours to rewrite.
+      await tx
+        .deleteFrom('approval')
+        .where('review_id', '=', reviewId)
+        .where('consumed_at', 'is', null)
+        .execute()
     }
 
     await tx
