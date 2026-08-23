@@ -1,17 +1,21 @@
 import type { ReviewSummary, SourceSummary, Thread } from '../../protocol.js'
 import { Palette, renderLine, type Token } from './highlight.js'
 import { escapeHtml, html, raw, type SafeHtml } from './html.js'
-import {
-  anchorForHalf,
-  buildRows,
-  toHunks,
-  toSplitRows,
-  type Half,
-  type SplitRow,
-} from './hunks.js'
+// anchorForHalf is gone from here: nothing in the renderer asks where a row is
+// without also needing the file it is in, which is what a position carries.
+import { buildRows, toHunks, toSplitRows, type Half, type SplitRow } from './hunks.js'
 import { page, topBar } from './layout.js'
 import type { FileView } from './pages.js'
 import { basenameOf, displayPath } from './paths.js'
+import {
+  covers,
+  inSameFile,
+  positionAt,
+  positionKey,
+  positionOfThread,
+  samePlace,
+  type Position,
+} from './position.js'
 
 /**
  * The review page.
@@ -22,47 +26,36 @@ import { basenameOf, displayPath } from './paths.js'
  * answers the second.
  */
 
-/** Which row currently has an open comment box, if any. */
-export interface OpenBox {
-  sourceId: string
-  path: string
-  side: 'old' | 'new'
-  line: number
-  /** Last line of a range being selected, absent while it is one line. */
-  endLine?: number | undefined
-}
+/**
+ * The comment box a reviewer has open, which is a position like any other.
+ *
+ * Kept as an alias rather than its own shape so that a box, a thread and a row
+ * are all the same kind of thing and can be compared with the same functions.
+ */
+export type OpenBox = Position
 
 /**
- * Reads an open comment box out of a URL.
+ * What one render of a page needs everywhere and never changes within it.
  *
- * The key carries the row the box hangs from, as source, side, line and path.
- * A range's last line arrives separately as `to`, and is dropped unless it is
- * a line below the start, so a hand-edited URL cannot produce a backwards or
- * zero-length selection.
+ * The test a field had to pass to be in here is that something deep in the
+ * tree reads it and nothing in between does. `folded` is read only when a file
+ * block decides whether to open, and `palette` written only when a line is
+ * drawn, but both have to travel through four functions with no use for them.
+ *
+ * Anything that varies as the render descends stays an argument — the file,
+ * the row, the half, whether a heading shows. Folding those in would hide the
+ * only things that actually differ between calls, which is the opposite of the
+ * point.
  */
-export function parseOpenBox(
-  value: string | undefined,
-  to?: string | undefined,
-): OpenBox | undefined {
-  if (!value) return undefined
-
-  const [sourceId, side, line, ...pathParts] = value.split(':')
-  const path = pathParts.join(':')
-
-  if (!sourceId || !path || (side !== 'old' && side !== 'new')) return undefined
-
-  const parsed = Number(line)
-  if (!Number.isInteger(parsed) || parsed < 1) return undefined
-
-  const end = Number(to)
-  const endLine = to !== undefined && Number.isInteger(end) && end > parsed ? end : undefined
-
-  return { sourceId, path, side, line: parsed, endLine }
+interface Page {
+  review: ReviewSummary
+  threads: Thread[]
+  open: OpenBox | undefined
+  folded: ReadonlySet<string>
+  palette: Palette
 }
 
-export function boxKey(box: OpenBox): string {
-  return `${box.sourceId}:${box.side}:${box.line}:${box.path}`
-}
+export { parsePosition as parseOpenBox, positionKey as boxKey } from './position.js'
 
 export type ViewMode = 'split' | 'unified'
 
@@ -119,6 +112,7 @@ export function reviewPage(
   // Filled while the body renders, read after. Every colour the diff used, and
   // no others, reaches the stylesheet at the end.
   const palette = new Palette()
+  const page_: Page = { review, threads, open, folded, palette }
 
   const body = html`
 ${topBar(review.title, html`<span class="rev">rev ${review.snapshotSeq}</span>`)}
@@ -136,10 +130,8 @@ ${topBar(review.title, html`<span class="rev">rev ${review.snapshotSeq}</span>`)
         : raw('')
     }
     ${viewToggle(review, view)}
-    ${grouped.map((group) =>
-      sourceGroup(review, group, threads, open, grouped.length > 1, folded, palette),
-    )}
-    ${outdatedBlock(review, outdated)}
+    ${grouped.map((group) => sourceGroup(page_, group, grouped.length > 1))}
+    ${outdatedBlock(page_, outdated)}
   </div>
 </main>
 ${submitBar(review, drafts, awaitingYou)}`
@@ -243,15 +235,7 @@ function coaching(threadCount: number, drafts: number, awaitingYou: number): Saf
   return raw('')
 }
 
-function sourceGroup(
-  review: ReviewSummary,
-  group: SourceGroup,
-  threads: Thread[],
-  open: OpenBox | undefined,
-  showHeading: boolean,
-  folded: ReadonlySet<string>,
-  palette: Palette,
-): SafeHtml {
+function sourceGroup(page: Page, group: SourceGroup, showHeading: boolean): SafeHtml {
   return html`<section class="sourcegroup" id="src-${group.source.id}">
   ${
     showHeading
@@ -266,32 +250,23 @@ function sourceGroup(
   ${
     group.files.length === 0
       ? html`<p class="note">Nothing changed in this one.</p>`
-      : group.files.map((file) => fileBlock(review, file, threads, folded, palette, open))
+      : group.files.map((file) => fileBlock(page, file))
   }
 </section>`
 }
 
-function fileBlock(
-  review: ReviewSummary,
-  file: FileView,
-  threads: Thread[],
-  folded: ReadonlySet<string>,
-  palette: Palette,
-  open?: OpenBox,
-): SafeHtml {
+function fileBlock(page: Page, file: FileView): SafeHtml {
   const rows = file.isBinary || file.truncated ? [] : buildRows(file.oldText, file.newText)
   const hunks = toHunks(rows)
 
-  const mine = threads.filter(
-    (thread) => thread.sourceId === file.sourceId && thread.path === file.path,
-  )
+  const key = foldKey(file.sourceId, file.path)
+  const mine = page.threads.filter((thread) => foldKey(thread.sourceId, thread.path) === key)
 
   // A collapsed file stays collapsed across renders, except when the comment
   // box the reviewer just opened lives inside it. Honouring the fold there
   // would hide the box they are trying to type into.
-  const key = foldKey(file.sourceId, file.path)
-  const holdsBox = open?.sourceId === file.sourceId && open.path === file.path
-  const expanded = holdsBox || !folded.has(key)
+  const holdsBox = page.open !== undefined && foldKey(page.open.sourceId, page.open.path) === key
+  const expanded = holdsBox || !page.folded.has(key)
 
   return html`<details class="file" data-fold="${key}" ${expanded ? raw('open') : raw('')}>
   <summary>
@@ -316,9 +291,7 @@ function fileBlock(
               ${hunks.map(
                 (hunk) => html`
                   <div class="hunkhead">${hunk.header}</div>
-                  ${toSplitRows(hunk.rows).map((row) =>
-                    splitRow(review, file, row, mine, palette, open),
-                  )}
+                  ${toSplitRows(hunk.rows).map((row) => splitRow(page, file, row, mine))}
                 `,
               )}
             </div>`
@@ -333,123 +306,94 @@ function fileBlock(
  * stacked when there is not. `data-unified` says which halves survive the
  * stack, so a context line is not printed twice.
  */
-function splitRow(
-  review: ReviewSummary,
-  file: FileView,
-  row: SplitRow,
-  threads: Thread[],
-  palette: Palette,
-  open?: OpenBox,
-): SafeHtml {
+/** `mine` is this file's threads, already filtered by the caller that has them. */
+function splitRow(page: Page, file: FileView, row: SplitRow, mine: Thread[]): SafeHtml {
   // Both halves, with nothing to deduplicate. A half now reports the side its
   // line number belongs to, so a thread matches exactly one of them. The
   // previous guard dropped the right half on context rows to stop a thread
   // rendering twice, which worked by hiding the real fault and would have
   // silently dropped any comment anchored to the new side of a context line.
-  const attached = [...threadsAt(threads, row.left), ...threadsAt(threads, row.right)]
-
-  const boxHere = [row.left, row.right].find((half) => isOpenOn(open, file, half))
+  const attached = [...threadsAt(file, mine, row.left), ...threadsAt(file, mine, row.right)]
+  const boxHere = [row.left, row.right].find((half) => isOpenOn(page.open, file, half))
 
   return html`<div class="row" data-unified="${row.unified}">
-  ${half(review, file, row.left, 'left', palette, open, coversLine(file, row.left, threads, open))}
-  ${half(review, file, row.right, 'right', palette, open, coversLine(file, row.right, threads, open))}
+  ${half(page, file, row.left, 'left')}
+  ${half(page, file, row.right, 'right')}
 </div>
-${attached.map((thread) => threadBlock(review, thread, false))}
-${boxHere ? newThreadBlock(review, file, anchorForHalf(boxHere)!, open?.endLine) : raw('')}`
+${attached.map((thread) => threadBlock(page, thread, false))}
+${boxHere && page.open ? newThreadBlock(page, file, page.open) : raw('')}`
 }
 
-function threadsAt(threads: Thread[], side: Half): Thread[] {
-  const anchor = anchorForHalf(side)
-  if (!anchor) return []
+/** The threads that hang from this row: same place, and still live. */
+function threadsAt(file: FileView, threads: Thread[], side: Half): Thread[] {
+  const here = positionAt(file, side)
+  if (!here) return []
 
   return threads.filter(
-    (thread) =>
-      thread.state !== 'outdated' && thread.side === anchor.side && thread.line === anchor.line,
+    (thread) => thread.state !== 'outdated' && samePlace(positionOfThread(thread), here),
   )
 }
 
 function isOpenOn(open: OpenBox | undefined, file: FileView, side: Half): boolean {
-  const anchor = anchorForHalf(side)
-  if (!open || !anchor) return false
-
-  return (
-    open.sourceId === file.sourceId &&
-    open.path === file.path &&
-    open.side === anchor.side &&
-    open.line === anchor.line
-  )
+  const here = positionAt(file, side)
+  return open !== undefined && here !== undefined && samePlace(open, here)
 }
 
-function half(
-  review: ReviewSummary,
-  file: FileView,
-  side: Half,
-  which: 'left' | 'right',
-  palette: Palette,
-  open?: OpenBox,
-  covered?: boolean,
-): SafeHtml {
-  if (side.kind === 'empty') {
+function half(page: Page, file: FileView, side: Half, which: 'left' | 'right'): SafeHtml {
+  const here = positionAt(file, side)
+
+  if (side.kind === 'empty' || !here) {
     return html`<div class="side ${which} empty" aria-hidden="true"></div>`
   }
 
-  const anchor = anchorForHalf(side)
+  const { review, open } = page
   const sign = side.kind === 'added' ? '+' : side.kind === 'removed' ? '-' : ' '
-  const key = (line: number) =>
-    boxKey({ sourceId: file.sourceId, path: file.path, side: anchor?.side ?? 'new', line })
+  const keyAt = (line: number) => positionKey({ ...here, line, endLine: null })
 
   // A line below an open box on the same file and side can extend it down to
   // itself. This is a link rather than a gesture, so it also serves as the
   // fallback when the drag handler has not loaded.
-  const extendable =
-    anchor !== null &&
-    open !== undefined &&
-    open.sourceId === file.sourceId &&
-    open.path === file.path &&
-    open.side === anchor.side &&
-    open.line < anchor.line
+  const extendable = open !== undefined && inSameFile(open, here) && open.line < here.line
 
-  const action = !anchor
-    ? raw('')
-    : extendable
-      ? html`<a
-          class="addnote extend"
-          href="${raw(
-            `/r/${review.reviewId}?box=${encodeURIComponent(key(open.line))}&to=${anchor.line}#box`,
-          )}"
-          aria-label="Extend the comment down to line ${anchor.line}"
-          title="Extend down to line ${anchor.line}"
-          >↧</a
-        >`
-      : html`<a
-          class="addnote"
-          href="${raw(`/r/${review.reviewId}?box=${encodeURIComponent(key(anchor.line))}#box`)}"
-          data-box
-          aria-label="Comment on ${file.path} line ${anchor.line}"
-          title="Comment on line ${anchor.line}"
-          >+</a
-        >`
+  const action = extendable
+    ? html`<a
+        class="addnote extend"
+        href="${raw(
+          `/r/${review.reviewId}?box=${encodeURIComponent(keyAt(open.line))}&to=${here.line}#box`,
+        )}"
+        aria-label="Extend the comment down to line ${here.line}"
+        title="Extend down to line ${here.line}"
+        >↧</a
+      >`
+    : html`<a
+        class="addnote"
+        href="${raw(`/r/${review.reviewId}?box=${encodeURIComponent(keyAt(here.line))}#box`)}"
+        data-box
+        aria-label="Comment on ${file.path} line ${here.line}"
+        title="Comment on line ${here.line}"
+        >+</a
+      >`
 
   // Highlighted where we recognise the language and the line counts agreed,
   // and the raw text otherwise. `side.text` is escaped by the template;
   // renderLine escapes each token itself.
   const tokens = tokensForHalf(file, side, which)
-  const code = tokens ? renderLine(tokens, palette) : side.text
+  const code = tokens ? renderLine(tokens, page.palette) : side.text
+
+  // The box key and line ride on the element so the drag handler can build a
+  // selection without parsing hrefs back apart.
+  const drag = raw(
+    ` data-key="${escapeHtml(keyAt(here.line))}" data-line="${here.line}"` +
+      ` data-file="${escapeHtml(foldKey(file.sourceId, file.path))}"` +
+      ` data-review="${escapeHtml(review.reviewId)}"`,
+  )
 
   // The code itself is plain text. Making it a link put the source of every
   // line into the accessibility tree as a control name, which told a screen
   // reader user nothing about what activating it would do.
-  // The box key and line ride on the element so the drag handler can build a
-  // selection without parsing hrefs back apart.
-  const drag = anchor
-    ? raw(
-        ` data-key="${escapeHtml(key(anchor.line))}" data-line="${anchor.line}"` +
-          ` data-file="${escapeHtml(foldKey(file.sourceId, file.path))}"` +
-          ` data-review="${escapeHtml(review.reviewId)}"`,
-      )
-    : raw('')
+  const covered = coveredBy(page, here) ? ' covered' : ''
 
-  return html`<div class="side ${which} ${side.kind}${covered ? ' covered' : ''}"${drag}>
+  return html`<div class="side ${which} ${side.kind}${covered}"${drag}>
   <span class="n">${side.line ?? ''}</span>
   <span class="act">${action}</span>
   <span class="sign" aria-hidden="true">${sign}</span>
@@ -464,35 +408,17 @@ function half(
  * right now, so the shading a reviewer sees while choosing an end is the same
  * shading the saved comment gets.
  */
-function coversLine(
-  file: FileView,
-  half: Half,
-  threads: Thread[],
-  open: OpenBox | undefined,
-): boolean {
-  const anchor = anchorForHalf(half)
-  if (!anchor) return false
+function coveredBy(page: Page, here: Position): boolean {
+  // A one-line comment covers only its own line, and shading a single line
+  // says nothing the row is not already saying. So only ranges shade.
+  const isRange = (position: Position) => position.endLine !== null
 
-  const within = (start: number, end: number | null | undefined) =>
-    end !== null && end !== undefined && anchor.line >= start && anchor.line <= end
+  if (page.open && isRange(page.open) && covers(page.open, here)) return true
 
-  if (
-    open?.sourceId === file.sourceId &&
-    open.path === file.path &&
-    open.side === anchor.side &&
-    within(open.line, open.endLine)
-  ) {
-    return true
-  }
-
-  return threads.some(
-    (thread) =>
-      thread.sourceId === file.sourceId &&
-      thread.path === file.path &&
-      thread.side === anchor.side &&
-      thread.state !== 'outdated' &&
-      within(thread.line, thread.endLine),
-  )
+  return page.threads.some((thread) => {
+    const position = positionOfThread(thread)
+    return thread.state !== 'outdated' && isRange(position) && covers(position, here)
+  })
 }
 
 /**
@@ -509,7 +435,7 @@ function tokensForHalf(file: FileView, side: Half, which: 'left' | 'right'): Tok
   return lines?.[side.line - 1]
 }
 
-function threadBlock(review: ReviewSummary, thread: Thread, showLocation: boolean): SafeHtml {
+function threadBlock(page: Page, thread: Thread, showLocation: boolean): SafeHtml {
   return html`<div class="threadrow">
     <div class="thread ${thread.state}" id="t-${thread.id}">
       ${
@@ -531,7 +457,7 @@ function threadBlock(review: ReviewSummary, thread: Thread, showLocation: boolea
       )}
       <details class="reply">
         <summary>Reply</summary>
-        <form method="post" action="/r/${review.reviewId}/threads/${thread.id}/replies">
+        <form method="post" action="/r/${page.review.reviewId}/threads/${thread.id}/replies">
           <label class="visually-hidden" for="reply-${thread.id}">
             Reply to this comment
           </label>
@@ -544,7 +470,7 @@ function threadBlock(review: ReviewSummary, thread: Thread, showLocation: boolea
       <div class="actions">
         <form
           method="post"
-          action="/r/${review.reviewId}/threads/${thread.id}/${
+          action="/r/${page.review.reviewId}/threads/${thread.id}/${
             thread.state === 'active' ? 'resolve' : 'reopen'
           }"
         >
@@ -557,39 +483,35 @@ function threadBlock(review: ReviewSummary, thread: Thread, showLocation: boolea
 </div>`
 }
 
-function newThreadBlock(
-  review: ReviewSummary,
-  file: FileView,
-  anchor: { side: 'old' | 'new'; line: number },
-  endLine?: number | undefined,
-): SafeHtml {
-  const id = `new-${file.sourceId}-${anchor.side}-${anchor.line}`
-  const where = endLine ? `lines ${anchor.line} to ${endLine}` : `line ${anchor.line}`
+/** The form itself, which is a position plus somewhere to type. */
+function newThreadBlock(page: Page, file: FileView, at: Position): SafeHtml {
+  const id = `new-${at.sourceId}-${at.side}-${at.line}`
+  const where = at.endLine ? `lines ${at.line} to ${at.endLine}` : `line ${at.line}`
 
   return html`<div class="threadrow">
     <div class="thread" id="box">
-      <form method="post" action="/r/${review.reviewId}/threads">
-        <input type="hidden" name="sourceId" value="${file.sourceId}">
-        <input type="hidden" name="path" value="${file.path}">
-        <input type="hidden" name="side" value="${anchor.side}">
-        <input type="hidden" name="line" value="${anchor.line}">
+      <form method="post" action="/r/${page.review.reviewId}/threads">
+        <input type="hidden" name="sourceId" value="${at.sourceId}">
+        <input type="hidden" name="path" value="${at.path}">
+        <input type="hidden" name="side" value="${at.side}">
+        <input type="hidden" name="line" value="${at.line}">
         ${
-          endLine
-            ? html`<input type="hidden" name="endLine" value="${endLine}">`
+          at.endLine
+            ? html`<input type="hidden" name="endLine" value="${at.endLine}">`
             : raw('')
         }
         <label for="${id}">Comment on ${file.path} ${where}</label>
         <textarea id="${id}" name="body" rows="3" autofocus required></textarea>
         <div class="actions">
           <button type="submit" class="primary">Save comment</button>
-          <a class="btn quiet" href="/r/${review.reviewId}">Cancel</a>
+          <a class="btn quiet" href="/r/${page.review.reviewId}">Cancel</a>
         </div>
       </form>
     </div>
 </div>`
 }
 
-function outdatedBlock(review: ReviewSummary, outdated: Thread[]): SafeHtml {
+function outdatedBlock(page: Page, outdated: Thread[]): SafeHtml {
   if (outdated.length === 0) return raw('')
 
   return html`<details class="file">
@@ -598,7 +520,7 @@ function outdatedBlock(review: ReviewSummary, outdated: Thread[]): SafeHtml {
     <span class="badge">code is gone</span>
   </summary>
   <div class="diff">
-    ${outdated.map((thread) => threadBlock(review, thread, true))}
+    ${outdated.map((thread) => threadBlock(page, thread, true))}
   </div>
 </details>`
 }

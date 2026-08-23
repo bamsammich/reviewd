@@ -312,14 +312,16 @@ describe('parsing the box out of a URL', () => {
     expect(parseOpenBox(key, '5')).toMatchObject({ line: 2, endLine: 5 })
   })
 
+  // Absent is null rather than undefined, matching the wire type and the
+  // column, so one comment on one line reads the same everywhere.
   it('ignores an end that is not after the start', () => {
-    expect(parseOpenBox(key, '2')?.endLine).toBeUndefined()
-    expect(parseOpenBox(key, '1')?.endLine).toBeUndefined()
+    expect(parseOpenBox(key, '2')?.endLine).toBeNull()
+    expect(parseOpenBox(key, '1')?.endLine).toBeNull()
   })
 
   it('ignores an end that is not a number', () => {
-    expect(parseOpenBox(key, 'tomorrow')?.endLine).toBeUndefined()
-    expect(parseOpenBox(key, '')?.endLine).toBeUndefined()
+    expect(parseOpenBox(key, 'tomorrow')?.endLine).toBeNull()
+    expect(parseOpenBox(key, '')?.endLine).toBeNull()
   })
 })
 
