@@ -240,8 +240,34 @@ const initial: Migration = {
   },
 }
 
+/**
+ * Comments that cover a range of lines rather than one.
+ *
+ * Both columns are nullable and a null `end_line` means what every existing
+ * thread means: one line, behaving exactly as before. So there is nothing to
+ * backfill.
+ *
+ * `end_anchor_hash` is not redundant with the length. Re-anchoring finds the
+ * start by hashing it and looking for that hash in the new content; carrying a
+ * length alone would then place the end by arithmetic with no way to tell
+ * whether the end still exists or the middle simply grew. Hashing the last line
+ * too is what makes "the range survived intact" answerable.
+ */
+const lineRanges: Migration = {
+  async up(db: MigrationDb): Promise<void> {
+    await db.schema.alterTable('thread').addColumn('end_line', 'integer').execute()
+    await db.schema.alterTable('thread').addColumn('end_anchor_hash', 'text').execute()
+  },
+
+  async down(db: MigrationDb): Promise<void> {
+    await db.schema.alterTable('thread').dropColumn('end_anchor_hash').execute()
+    await db.schema.alterTable('thread').dropColumn('end_line').execute()
+  },
+}
+
 export const migrations: Record<string, Migration> = {
   '0001_initial': initial,
+  '0002_line_ranges': lineRanges,
 }
 
 export class CodeMigrationProvider implements MigrationProvider {

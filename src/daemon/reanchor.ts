@@ -23,8 +23,10 @@ interface ThreadRow {
   path: string
   side: 'old' | 'new'
   line: number
+  end_line: number | null
   anchor_hash: string
   context_hash: string
+  end_anchor_hash: string | null
 }
 
 export async function reanchor(
@@ -34,7 +36,17 @@ export async function reanchor(
 ): Promise<ReanchorResult> {
   const threads = await db
     .selectFrom('thread')
-    .select(['id', 'source_id', 'path', 'side', 'line', 'anchor_hash', 'context_hash'])
+    .select([
+      'id',
+      'source_id',
+      'path',
+      'side',
+      'line',
+      'end_line',
+      'anchor_hash',
+      'context_hash',
+      'end_anchor_hash',
+    ])
     .where('review_id', '=', reviewId)
     .where('state', '!=', 'resolved')
     .execute()
@@ -69,12 +81,15 @@ export async function reanchor(
     const changedLine = found.line !== thread.line
     if (changedLine) moved += 1
 
+    const range = locateEnd(lines, thread, found.line)
+
     await db
       .updateTable('thread')
       .set({
         line: found.line,
+        end_line: range.endLine,
         context_hash: found.contextHash,
-        drifted: found.drifted ? 1 : 0,
+        drifted: found.drifted || range.drifted ? 1 : 0,
         state: 'active',
         last_seen_snapshot: snapshotId,
         updated_at: t,
@@ -126,6 +141,39 @@ export function locate(
   // The line survives but its surroundings changed, so the comment moves and
   // the UI says the code around it is not what it was written about.
   return weak ? { line: weak.line, contextHash: weak.contextHash, drifted: true } : undefined
+}
+
+/**
+ * Carries a range's end along with its start.
+ *
+ * The start is found by hashing the line and looking for that hash, which is
+ * what survives edits above. The end cannot be found the same way: a range's
+ * last line is often something unremarkable like a closing brace, and searching
+ * for it would land on the wrong one. So the length comes along and the end is
+ * placed by arithmetic, then checked.
+ *
+ * Checked against the hash stored when the comment was written, which is what
+ * separates "the range is intact" from "something inside it changed". A range
+ * whose end no longer matches stays anchored and is marked drifted: the reader
+ * is told the code moved under the comment rather than losing it.
+ */
+export function locateEnd(
+  lines: string[],
+  thread: { line: number; end_line: number | null; end_anchor_hash: string | null },
+  startLine: number,
+): { endLine: number | null; drifted: boolean } {
+  if (thread.end_line === null) return { endLine: null, drifted: false }
+
+  const length = thread.end_line - thread.line
+  const end = startLine + length
+
+  // The range now runs off the end of the file, so it covers what is left.
+  if (end > lines.length) {
+    return { endLine: Math.max(startLine, lines.length), drifted: true }
+  }
+
+  const intact = anchorFor(lines, end).anchorHash === thread.end_anchor_hash
+  return { endLine: end, drifted: !intact }
 }
 
 async function linesFor(

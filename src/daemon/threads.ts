@@ -82,7 +82,8 @@ export async function readAnchor(
   path: string,
   side: 'old' | 'new',
   lineNumber: number,
-): Promise<Anchor> {
+  endLine?: number | undefined,
+): Promise<{ start: Anchor; end: Anchor | undefined; lineCount: number | undefined }> {
   const change = await db
     .selectFrom('file_change')
     .selectAll()
@@ -98,14 +99,23 @@ export async function readAnchor(
   const blobId = side === 'new' ? change.new_blob_id : change.old_blob_id
   if (!blobId) {
     // A deleted file has no new side, an added file has no old side.
-    return { anchorHash: sha256(Buffer.from('', 'utf8')), contextHash: '', line: '' }
+    const empty = { anchorHash: sha256(Buffer.from('', 'utf8')), contextHash: '', line: '' }
+    // No content to bound a line against, so the caller is not held to one.
+    return { start: empty, end: endLine === undefined ? undefined : empty, lineCount: undefined }
   }
 
   const blob = await db.selectFrom('blob').selectAll().where('id', '=', blobId).executeTakeFirst()
 
   if (!blob) throw new ReviewError(`content for ${path} is missing`, 409)
 
-  return anchorFor(splitLines(Buffer.from(blob.bytes)), lineNumber)
+  // One read for both ends, since a range is two lines of the same file.
+  const lines = splitLines(Buffer.from(blob.bytes))
+
+  return {
+    start: anchorFor(lines, lineNumber),
+    end: endLine === undefined ? undefined : anchorFor(lines, endLine),
+    lineCount: lines.length,
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -123,6 +133,22 @@ export async function createThread(
   if (!snapshot) throw new ReviewError('review has no snapshot to comment on', 409)
 
   const sourceId = request.sourceId ?? (await onlySource(db, reviewId, request.path))
+
+  // The wire schema refuses a backwards range, but that only runs on a parsed
+  // request and this function is exported. Coercing it quietly would store a
+  // one-line comment for a caller who asked for a block and say nothing.
+  if (request.endLine !== undefined && request.endLine < request.line) {
+    throw new ReviewError(
+      `a comment cannot end on line ${request.endLine} and start on line ${request.line}`,
+      400,
+    )
+  }
+
+  // A range that ends on its own first line is one line, and storing it as a
+  // range would mean two ways to say the same thing.
+  const endLine =
+    request.endLine !== undefined && request.endLine > request.line ? request.endLine : undefined
+
   const anchor = await readAnchor(
     db,
     snapshot.id,
@@ -130,7 +156,20 @@ export async function createThread(
     request.path,
     request.side,
     request.line,
+    endLine,
   )
+
+  // A line past the end of the file hashes to the empty string, which matches
+  // nothing later and would leave the comment marked drifted forever for a
+  // reason that is really "this line was never there". Found by asking for a
+  // range ending on line 280 of a 277-line file and getting no complaint.
+  const last = endLine ?? request.line
+  if (anchor.lineCount !== undefined && last > anchor.lineCount) {
+    throw new ReviewError(
+      `${request.path} has ${anchor.lineCount} lines on the ${request.side} side, so there is no line ${last}`,
+      400,
+    )
+  }
 
   const threadId = newId()
   const t = now()
@@ -145,8 +184,10 @@ export async function createThread(
         path: request.path,
         side: request.side,
         line: request.line,
-        anchor_hash: anchor.anchorHash,
-        context_hash: anchor.contextHash,
+        end_line: endLine ?? null,
+        anchor_hash: anchor.start.anchorHash,
+        context_hash: anchor.start.contextHash,
+        end_anchor_hash: anchor.end?.anchorHash ?? null,
         state: 'active',
         origin: request.author,
         drifted: 0,
@@ -304,6 +345,7 @@ export async function listThreads(
       'thread.path',
       'thread.side',
       'thread.line',
+      'thread.end_line',
       'thread.state',
       'thread.origin',
       'thread.drifted',
@@ -357,6 +399,7 @@ export async function listThreads(
       path: row.path,
       side: row.side,
       line: row.line,
+      endLine: row.end_line,
       anchorLine: '',
       state: row.state,
       origin: row.origin,

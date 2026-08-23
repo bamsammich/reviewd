@@ -144,6 +144,8 @@ export const thread = z.object({
   path: z.string(),
   side,
   line: z.number().int(),
+  /** Last line of a range, or null when the comment is on one line. */
+  endLine: z.number().int().nullable().default(null),
   anchorLine: z.string(),
   state: threadState,
   origin: author,
@@ -153,14 +155,23 @@ export const thread = z.object({
 })
 export type Thread = z.infer<typeof thread>
 
-export const createThreadRequest = z.object({
-  sourceId: z.string().optional(),
-  path: z.string().min(1),
-  line: z.number().int().positive(),
-  side: side.default('new'),
-  body: z.string().min(1),
-  author: author.default('agent'),
-})
+export const createThreadRequest = z
+  .object({
+    sourceId: z.string().optional(),
+    path: z.string().min(1),
+    line: z.number().int().positive(),
+    /** Last line of a range. Omit for a comment on one line. */
+    endLine: z.number().int().positive().optional(),
+    side: side.default('new'),
+    body: z.string().min(1),
+    author: author.default('agent'),
+  })
+  // A range that ends before it starts is a caller mistake worth naming rather
+  // than quietly reordering, and one that ends where it starts is one line.
+  .refine((request) => request.endLine === undefined || request.endLine >= request.line, {
+    message: 'endLine must not be before line',
+    path: ['endLine'],
+  })
 export type CreateThreadRequest = z.infer<typeof createThreadRequest>
 
 export const replyRequest = z.object({

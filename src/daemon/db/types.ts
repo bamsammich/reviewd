@@ -84,6 +84,16 @@ export interface ThreadTable {
   anchor_hash: string
   context_hash: string
   /**
+   * The last line a range covers, or null for a comment on one line.
+   *
+   * Null rather than a copy of `line`, so that "is this a range" is a question
+   * about the data rather than a comparison, and so that every thread written
+   * before ranges existed keeps its original meaning.
+   */
+  end_line: number | null
+  /** Hash of the last line, which is how re-anchoring tells a range survived. */
+  end_anchor_hash: string | null
+  /**
    * Whether the conversation is live. Whose turn it is stays derived from the
    * last message, so no column here can drift away from the message list.
    */

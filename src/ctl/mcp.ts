@@ -247,13 +247,19 @@ export function createMcpServer(client = new Client(loadClientConfig().base_url)
       inputSchema: {
         reviewId: z.string(),
         path: z.string().describe('Path relative to the source root'),
-        line: z.number().int().positive(),
+        line: z.number().int().positive().describe('First line the comment covers'),
+        endLine: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('Last line, for a comment about a block rather than a line'),
         body: z.string(),
         sourceId: z.string().optional().describe('Required when two roots share this path'),
         side: z.enum(['old', 'new']).optional(),
       },
     },
-    async ({ reviewId, path, line, body, sourceId, side }) => {
+    async ({ reviewId, path, line, endLine, body, sourceId, side }) => {
       try {
         const result = await client.createThread(reviewId, {
           path,
@@ -261,6 +267,7 @@ export function createMcpServer(client = new Client(loadClientConfig().base_url)
           body,
           author: 'agent',
           side: side ?? 'new',
+          ...(endLine === undefined ? {} : { endLine }),
           ...(sourceId === undefined ? {} : { sourceId }),
         })
 
