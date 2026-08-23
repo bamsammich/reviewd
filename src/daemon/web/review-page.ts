@@ -325,12 +325,12 @@ function splitRow(
   palette: Palette,
   open?: OpenBox,
 ): SafeHtml {
-  const attached = [
-    ...threadsAt(threads, row.left),
-    ...(row.right.text === row.left.text && row.left.kind === 'context'
-      ? []
-      : threadsAt(threads, row.right)),
-  ]
+  // Both halves, with nothing to deduplicate. A half now reports the side its
+  // line number belongs to, so a thread matches exactly one of them. The
+  // previous guard dropped the right half on context rows to stop a thread
+  // rendering twice, which worked by hiding the real fault and would have
+  // silently dropped any comment anchored to the new side of a context line.
+  const attached = [...threadsAt(threads, row.left), ...threadsAt(threads, row.right)]
 
   const boxHere = [row.left, row.right].find((half) => isOpenOn(open, file, half))
 

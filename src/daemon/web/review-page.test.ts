@@ -163,6 +163,48 @@ describe('blank diff halves against the empty-state message', () => {
   })
 })
 
+/**
+ * Reported from the page rather than found in a test: one comment drawn twice.
+ *
+ * An insertion pushes the new-side numbering ahead of the old. While both
+ * columns of a context row claimed the new side, a comment on new line 2
+ * matched the inserted row and the context row whose old number was 2, so the
+ * page rendered it in both places.
+ */
+describe('a comment near an insertion', () => {
+  const inserted = (): FileView => ({
+    ...file('src/a.ts'),
+    oldText: 'a\nb\nc\n',
+    newText: 'a\nINSERTED\nb\nc\n',
+  })
+
+  const at = (side: 'old' | 'new', line: number) =>
+    thread({ side, line, anchorLine: side === 'new' && line === 2 ? 'INSERTED' : 'b' })
+
+  const count = (markup: string, id: string) =>
+    markup.split(`id="t-${id}"`).length - 1
+
+  it('draws it once', () => {
+    const markup = reviewPage(summary(), [inserted()], [at('new', 2)]).value
+
+    expect(count(markup, 't-1')).toBe(1)
+  })
+
+  it('draws a comment on the old side once too', () => {
+    const markup = reviewPage(summary(), [inserted()], [at('old', 2)]).value
+
+    expect(count(markup, 't-1')).toBe(1)
+  })
+
+  // The guard that used to stop the double render dropped the right half of
+  // every context row, so this comment would have vanished from the page.
+  it('still draws a comment on the new side of a context line', () => {
+    const markup = reviewPage(summary(), [inserted()], [at('new', 3)]).value
+
+    expect(count(markup, 't-1')).toBe(1)
+  })
+})
+
 describe('reply box', () => {
   it('starts closed, so a thread reads as read rather than owed', () => {
     const markup = reviewPage(summary(), [file('src/a.ts')], [thread()]).value

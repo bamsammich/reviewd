@@ -120,6 +120,16 @@ export interface Half {
   kind: HalfKind
   line: number | null
   text: string
+  /**
+   * Which file this half's line number belongs to.
+   *
+   * The column decides this, not the kind. A removed line is only ever on the
+   * left and an added line only ever on the right, but a context line is on
+   * both, with a different number on each. Deriving the side from the kind
+   * therefore got context lines wrong: the left column reported its old line
+   * number as if it were a new one.
+   */
+  side: 'old' | 'new'
 }
 
 /**
@@ -136,7 +146,8 @@ export interface SplitRow {
   unified: 'left' | 'right' | 'both'
 }
 
-const EMPTY: Half = { kind: 'empty', line: null, text: '' }
+const EMPTY_LEFT: Half = { kind: 'empty', line: null, text: '', side: 'old' }
+const EMPTY_RIGHT: Half = { kind: 'empty', line: null, text: '', side: 'new' }
 
 /**
  * Pairs removals with the additions that replaced them.
@@ -157,8 +168,8 @@ export function toSplitRows(rows: Row[]): SplitRow[] {
       // Identical on both sides, so a unified rendering keeps the new one and
       // drops the duplicate.
       out.push({
-        left: { kind: 'context', line: row.oldLine, text: row.text },
-        right: { kind: 'context', line: row.newLine, text: row.text },
+        left: { kind: 'context', line: row.oldLine, text: row.text, side: 'old' },
+        right: { kind: 'context', line: row.newLine, text: row.text, side: 'new' },
         unified: 'right',
       })
       i += 1
@@ -187,16 +198,20 @@ export function toSplitRows(rows: Row[]): SplitRow[] {
       // other, which tells a reviewer something untrue.
       if (del && add && del.text === add.text) {
         out.push({
-          left: { kind: 'context', line: del.oldLine, text: del.text },
-          right: { kind: 'context', line: add.newLine, text: add.text },
+          left: { kind: 'context', line: del.oldLine, text: del.text, side: 'old' },
+          right: { kind: 'context', line: add.newLine, text: add.text, side: 'new' },
           unified: 'right',
         })
         continue
       }
 
       out.push({
-        left: del ? { kind: 'removed', line: del.oldLine, text: del.text } : EMPTY,
-        right: add ? { kind: 'added', line: add.newLine, text: add.text } : EMPTY,
+        left: del
+          ? { kind: 'removed', line: del.oldLine, text: del.text, side: 'old' }
+          : EMPTY_LEFT,
+        right: add
+          ? { kind: 'added', line: add.newLine, text: add.text, side: 'new' }
+          : EMPTY_RIGHT,
         unified: del && add ? 'both' : del ? 'left' : 'right',
       })
     }
@@ -208,5 +223,5 @@ export function toSplitRows(rows: Row[]): SplitRow[] {
 /** The line a comment on this half would anchor to. */
 export function anchorForHalf(half: Half): { side: 'old' | 'new'; line: number } | null {
   if (half.kind === 'empty' || half.line === null) return null
-  return { side: half.kind === 'removed' ? 'old' : 'new', line: half.line }
+  return { side: half.side, line: half.line }
 }

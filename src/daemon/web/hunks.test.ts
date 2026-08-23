@@ -226,13 +226,62 @@ describe('toSplitRows', () => {
 })
 
 describe('anchorForHalf', () => {
-  it('anchors a removal to the old side and everything else to the new', () => {
-    expect(anchorForHalf({ kind: 'removed', line: 4, text: '' })).toEqual({ side: 'old', line: 4 })
-    expect(anchorForHalf({ kind: 'added', line: 4, text: '' })).toEqual({ side: 'new', line: 4 })
-    expect(anchorForHalf({ kind: 'context', line: 4, text: '' })).toEqual({ side: 'new', line: 4 })
+  // This used to read the side off the kind, which is right for a removal and
+  // an addition and wrong for context: a context line exists in both files
+  // with a different number in each, so only the column knows which.
+  it('anchors to the side the half is a column of', () => {
+    expect(anchorForHalf({ kind: 'removed', line: 4, text: '', side: 'old' })).toEqual({
+      side: 'old',
+      line: 4,
+    })
+    expect(anchorForHalf({ kind: 'added', line: 4, text: '', side: 'new' })).toEqual({
+      side: 'new',
+      line: 4,
+    })
+    expect(anchorForHalf({ kind: 'context', line: 4, text: '', side: 'old' })).toEqual({
+      side: 'old',
+      line: 4,
+    })
+    expect(anchorForHalf({ kind: 'context', line: 9, text: '', side: 'new' })).toEqual({
+      side: 'new',
+      line: 9,
+    })
   })
 
   it('refuses to anchor a blank half', () => {
-    expect(anchorForHalf({ kind: 'empty', line: null, text: '' })).toBeNull()
+    expect(anchorForHalf({ kind: 'empty', line: null, text: '', side: 'old' })).toBeNull()
+  })
+})
+
+/**
+ * The bug a reviewer actually saw: one comment rendered twice.
+ *
+ * An insertion pushes the new-side numbering ahead of the old, so after it the
+ * two columns of a context row carry different line numbers. While both
+ * columns claimed the new side, a comment on new line N matched the added row
+ * at N and the context row whose *old* number was N, and the page drew it in
+ * both places. The quieter half of the same fault: commenting on a left-column
+ * context line filed it against the new side, which after an insertion is a
+ * different line of code entirely.
+ */
+describe('an insertion shifting the two columns apart', () => {
+  const rows = () =>
+    toSplitRows(buildRows('a\nb\nc\nd\n', 'a\nINSERTED\nb\nc\nd\n'))
+
+  it('never gives two halves the same anchor', () => {
+    const anchors = rows()
+      .flatMap((row) => [anchorForHalf(row.left), anchorForHalf(row.right)])
+      .filter((anchor) => anchor !== null)
+      .map((anchor) => `${anchor.side}:${anchor.line}`)
+
+    expect(new Set(anchors).size).toBe(anchors.length)
+  })
+
+  it('keeps each column pointing at its own file', () => {
+    // Old line 2 and new line 3 are both "b"; new line 2 is the inserted line.
+    const b = rows().find((row) => row.left.text === 'b' && row.left.kind === 'context')
+
+    expect(anchorForHalf(b!.left)).toEqual({ side: 'old', line: 2 })
+    expect(anchorForHalf(b!.right)).toEqual({ side: 'new', line: 3 })
   })
 })
