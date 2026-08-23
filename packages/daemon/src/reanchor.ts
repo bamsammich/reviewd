@@ -1,0 +1,175 @@
+import type { Kysely } from 'kysely'
+import { now } from './db/ids.js'
+import type { Database } from './db/types.js'
+import { anchorFor, splitLines } from './threads.js'
+
+/**
+ * Moving threads onto the code they were written against.
+ *
+ * A comment anchored to line 42 of a file that gained ten lines above it
+ * belongs on line 52, not on whatever line 42 says now. The line's own hash
+ * finds it; the surrounding hash says whether the neighbourhood it was written
+ * about survived.
+ */
+
+export interface ReanchorResult {
+  moved: number
+  outdated: number
+}
+
+interface ThreadRow {
+  id: string
+  source_id: string
+  path: string
+  side: 'old' | 'new'
+  line: number
+  anchor_hash: string
+  context_hash: string
+}
+
+export async function reanchor(
+  db: Kysely<Database>,
+  reviewId: string,
+  snapshotId: string,
+): Promise<ReanchorResult> {
+  const threads = await db
+    .selectFrom('thread')
+    .select(['id', 'source_id', 'path', 'side', 'line', 'anchor_hash', 'context_hash'])
+    .where('review_id', '=', reviewId)
+    .where('state', '!=', 'resolved')
+    .execute()
+
+  if (threads.length === 0) return { moved: 0, outdated: 0 }
+
+  const t = now()
+  let moved = 0
+  let outdated = 0
+
+  // One read per file rather than per thread, since several comments on one
+  // file is the normal case.
+  const lineCache = new Map<string, string[] | null>()
+
+  for (const thread of threads) {
+    const lines = await linesFor(db, snapshotId, thread, lineCache)
+
+    if (!lines) {
+      await markOutdated(db, thread.id, snapshotId, t)
+      outdated += 1
+      continue
+    }
+
+    const found = locate(lines, thread)
+
+    if (!found) {
+      await markOutdated(db, thread.id, snapshotId, t)
+      outdated += 1
+      continue
+    }
+
+    const changedLine = found.line !== thread.line
+    if (changedLine) moved += 1
+
+    await db
+      .updateTable('thread')
+      .set({
+        line: found.line,
+        context_hash: found.contextHash,
+        drifted: found.drifted ? 1 : 0,
+        state: 'active',
+        last_seen_snapshot: snapshotId,
+        updated_at: t,
+      })
+      .where('id', '=', thread.id)
+      .execute()
+  }
+
+  return { moved, outdated }
+}
+
+/**
+ * Finds the anchored line in the new content.
+ *
+ * The old line number is tried first, because a file that did not move is the
+ * common case and scanning it would be waste. Only then does the whole file get
+ * searched for the same line elsewhere.
+ */
+export function locate(
+  lines: string[],
+  thread: { line: number; anchor_hash: string; context_hash: string },
+): { line: number; contextHash: string; drifted: boolean } | undefined {
+  const atOriginal = anchorFor(lines, thread.line)
+  if (atOriginal.anchorHash === thread.anchor_hash) {
+    return {
+      line: thread.line,
+      contextHash: atOriginal.contextHash,
+      drifted: atOriginal.contextHash !== thread.context_hash,
+    }
+  }
+
+  // The line moved, so look for it elsewhere. A context match settles which
+  // copy is the right one when the same line appears more than once.
+  let weak: { line: number; contextHash: string } | undefined
+
+  for (let i = 1; i <= lines.length; i += 1) {
+    if (i === thread.line) continue
+
+    const candidate = anchorFor(lines, i)
+    if (candidate.anchorHash !== thread.anchor_hash) continue
+
+    if (candidate.contextHash === thread.context_hash) {
+      return { line: i, contextHash: candidate.contextHash, drifted: false }
+    }
+
+    weak ??= { line: i, contextHash: candidate.contextHash }
+  }
+
+  // The line survives but its surroundings changed, so the comment moves and
+  // the UI says the code around it is not what it was written about.
+  return weak ? { line: weak.line, contextHash: weak.contextHash, drifted: true } : undefined
+}
+
+async function linesFor(
+  db: Kysely<Database>,
+  snapshotId: string,
+  thread: ThreadRow,
+  cache: Map<string, string[] | null>,
+): Promise<string[] | null> {
+  const key = `${thread.source_id}:${thread.path}:${thread.side}`
+  const cached = cache.get(key)
+  if (cached !== undefined) return cached
+
+  const change = await db
+    .selectFrom('file_change')
+    .selectAll()
+    .where('snapshot_id', '=', snapshotId)
+    .where('source_id', '=', thread.source_id)
+    .where('path', '=', thread.path)
+    .executeTakeFirst()
+
+  const blobId = change ? (thread.side === 'new' ? change.new_blob_id : change.old_blob_id) : null
+
+  if (!blobId) {
+    // The file left the change set, or lost the side this thread was on.
+    cache.set(key, null)
+    return null
+  }
+
+  const blob = await db.selectFrom('blob').selectAll().where('id', '=', blobId).executeTakeFirst()
+  const lines = blob ? splitLines(Buffer.from(blob.bytes)) : null
+
+  cache.set(key, lines)
+  return lines
+}
+
+async function markOutdated(
+  db: Kysely<Database>,
+  threadId: string,
+  snapshotId: string,
+  t: number,
+): Promise<void> {
+  await db
+    .updateTable('thread')
+    .set({ state: 'outdated', last_seen_snapshot: snapshotId, updated_at: t })
+    .where('id', '=', threadId)
+    .execute()
+}

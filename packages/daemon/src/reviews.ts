@@ -415,12 +415,16 @@ export async function createSnapshot(
       .execute()
   })
 
+  // Re-anchoring runs after the transaction commits, so it reads the snapshot
+  // it is anchoring against rather than a half-written one.
+  const { reanchor } = await import('./reanchor.js')
+  const { moved, outdated } = await reanchor(db, reviewId, snapshotId)
+
   return {
     seq,
     filesChanged: manifest.files.length,
-    // Re-anchoring arrives with its own task; a snapshot moves nothing yet.
-    threadsMoved: 0,
-    threadsOutdated: 0,
+    threadsMoved: moved,
+    threadsOutdated: outdated,
     url: reviewUrl(config, reviewId),
   }
 }
