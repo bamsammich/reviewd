@@ -1,8 +1,119 @@
 #!/usr/bin/env node
-import { VERSION } from './index.js'
+import { parseArgs } from 'node:util'
+import { Client } from './client.js'
+import { loadClientConfig } from './config.js'
+import { fingerprint, repoRoot } from './git.js'
+
+const USAGE = `reviewctl - client for the reviewd review daemon
+
+Usage: reviewctl <command> [options]
+
+Commands:
+  fingerprint [path]        Hash every change against HEAD, tracked or not
+  gate [path]               Ask whether a commit in this repository is approved
+  doctor                    Check that the daemon answers where links point
+
+Options:
+  --json                    Machine-readable output
+  -h, --help                Show this message
+
+Exit codes for gate: 0 allowed, 1 denied.
+`
+
+async function main(): Promise<void> {
+  const { values, positionals } = parseArgs({
+    options: {
+      json: { type: 'boolean', default: false },
+      help: { type: 'boolean', short: 'h', default: false },
+    },
+    allowPositionals: true,
+  })
+
+  const [command, target] = positionals
+
+  if (values.help || !command) {
+    process.stdout.write(USAGE)
+    return
+  }
+
+  switch (command) {
+    case 'fingerprint':
+      return await printFingerprint(target ?? process.cwd(), values.json ?? false)
+    case 'gate':
+      return await checkGate(target ?? process.cwd(), values.json ?? false)
+    case 'doctor':
+      return await doctor()
+    default:
+      process.stderr.write(`reviewctl: unknown command "${command}"\n\n${USAGE}`)
+      process.exitCode = 1
+  }
+}
+
+async function printFingerprint(path: string, json: boolean): Promise<void> {
+  const root = await requireRepo(path)
+  if (!root) return
+
+  const value = await fingerprint(root)
+  process.stdout.write(json ? `${JSON.stringify({ root, fingerprint: value })}\n` : `${value}\n`)
+}
 
 /**
- * Placeholder entry point. fingerprint, snapshot upload, mcp, wait, and gate
- * arrive with their own tasks.
+ * Answers the commit hook.
+ *
+ * The reason and the review URL go to stdout so the hook can hand them
+ * straight to the agent, and the exit code carries the verdict so a shell
+ * script needs no parsing.
  */
-process.stdout.write(`reviewctl ${VERSION}\n`)
+async function checkGate(path: string, json: boolean): Promise<void> {
+  const root = await requireRepo(path)
+  if (!root) return
+
+  const client = new Client(loadClientConfig().base_url)
+  const result = await client.gate(root, await fingerprint(root))
+
+  if (json) {
+    process.stdout.write(`${JSON.stringify(result)}\n`)
+  } else {
+    process.stdout.write(`${result.reason}\n`)
+    if (result.reviewUrl) process.stdout.write(`${result.reviewUrl}\n`)
+    for (const warning of result.warnings) process.stdout.write(`warning: ${warning}\n`)
+  }
+
+  process.exitCode = result.decision === 'allow' ? 0 : 1
+}
+
+/**
+ * Checks the daemon answers where its links point.
+ *
+ * A wrong public_url kills every link the agent hands over while nothing else
+ * looks broken, so it gets a command rather than a comment in a config file.
+ */
+async function doctor(): Promise<void> {
+  const config = loadClientConfig()
+  const client = new Client(config.base_url)
+
+  if (await client.health()) {
+    process.stdout.write(`reviewctl: reviewd answers at ${config.base_url}\n`)
+    return
+  }
+
+  process.stderr.write(
+    `reviewctl: nothing answers at ${config.base_url}.\n` +
+      `Start reviewd, or set base_url in ~/.config/reviewd/client.json.\n`,
+  )
+  process.exitCode = 1
+}
+
+async function requireRepo(path: string): Promise<string | null> {
+  const root = await repoRoot(path)
+  if (root) return root
+
+  process.stderr.write(`reviewctl: ${path} is not inside a git repository\n`)
+  process.exitCode = 1
+  return null
+}
+
+main().catch((error: unknown) => {
+  process.stderr.write(`reviewctl: ${error instanceof Error ? error.message : String(error)}\n`)
+  process.exitCode = 1
+})
