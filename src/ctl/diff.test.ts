@@ -2,7 +2,14 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { diffFileSet, diffGitSource, looksBinary, parseRawDiff, sha256 } from './diff.js'
+import {
+  diffFileSet,
+  diffGitSource,
+  diffSource,
+  looksBinary,
+  parseRawDiff,
+  sha256,
+} from './diff.js'
 import { tempRepo, type TempRepo } from './testing.js'
 
 let repo: TempRepo
@@ -227,6 +234,82 @@ describe('diffFileSet', () => {
     const second = (await diffFileSet(source(dir))).fingerprint
 
     expect(second).toBe(first)
+  })
+})
+
+describe('diffSource', () => {
+  let dir: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'reviewd-source-'))
+  })
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('compares a repository against HEAD when no base was given', async () => {
+    repo.write('src/a.ts', 'const a = 2\n')
+
+    const diff = await diffSource(source(repo.root))
+
+    // The bug this covers returned every tracked file as an addition.
+    expect(diff.files.map((f) => f.path)).toEqual(['src/a.ts'])
+    expect(diff.files[0]?.changeType).toBe('modified')
+  })
+
+  it('reads a directory under no version control as a file set', async () => {
+    writeFileSync(join(dir, 'one.txt'), 'first\n')
+
+    const diff = await diffSource(source(dir))
+
+    expect(diff.files.map((f) => f.path)).toEqual(['one.txt'])
+    expect(diff.files[0]?.changeType).toBe('added')
+  })
+
+  it('reads a subdirectory of a repository as a file set, not the whole repo', async () => {
+    repo.write('outside.ts', 'const outside = 1\n')
+
+    const diff = await diffSource(source(join(repo.root, 'src')))
+
+    // git add -A would have staged outside.ts too. Nothing above src is here.
+    expect(diff.files.map((f) => f.path).sort()).toEqual(['a.ts', 'b.ts'])
+  })
+
+  it('reads a linked worktree as a repository', async () => {
+    // A worktree's .git is a pointer file, not a directory. git itself does not
+    // care, and neither should the detection: rev-parse answers the same.
+    const tree = repo.worktree('feature')
+    writeFileSync(join(tree, 'src/a.ts'), 'const a = 2\n')
+
+    const diff = await diffSource(source(tree))
+
+    expect(diff.files.map((f) => f.path)).toEqual(['src/a.ts'])
+    expect(diff.files[0]?.changeType).toBe('modified')
+  })
+
+  it('still honours a base that was given', async () => {
+    repo.run('checkout', '-q', '-b', 'work')
+    repo.write('src/c.ts', 'const c = 1\n')
+    repo.commit('add c')
+
+    const diff = await diffSource(source(repo.root, 'main'))
+
+    expect(diff.files.map((f) => f.path)).toEqual(['src/c.ts'])
+  })
+
+  it('treats a repository with no commits as all additions', async () => {
+    const fresh = tempRepo()
+    try {
+      fresh.write('new.ts', 'const n = 1\n')
+
+      const diff = await diffSource(source(fresh.root))
+
+      expect(diff.files.map((f) => f.path)).toEqual(['new.ts'])
+      expect(diff.files[0]?.changeType).toBe('added')
+    } finally {
+      fresh.cleanup()
+    }
   })
 })
 

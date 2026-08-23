@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, relative, sep } from 'node:path'
 import { promisify } from 'node:util'
 import type { ChangeType, FileChangeSpec } from '../protocol.js'
-import { git } from './git.js'
+import { canonical, git, repoRoot } from './git.js'
 
 const run = promisify(execFile)
 const MAX_BUFFER = 256 * 1024 * 1024
@@ -316,11 +316,36 @@ function* walk(root: string, limit: number, prefix = ''): Generator<string> {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * Which of the two readings a source gets.
+ *
+ * An absent base used to mean "plain file set", so a repository opened without
+ * one was read as a directory and every tracked file came back as an addition.
+ * A two-file change to a dotfiles repo arrived as 279 additions and a 100MB
+ * page, and the tool schema had promised HEAD by default the whole time.
+ *
+ * A missing base is not a statement about the source, so ask the source
+ * instead: a repository compares against HEAD, and anything else is a file set.
+ *
+ * Only the top level counts as a repository. `git add -A` stages the whole
+ * repository no matter which directory it runs from, so treating a
+ * subdirectory as one would quietly widen the review past the directory that
+ * was asked for. It also could not clear the commit gate, which matches an
+ * approval on the root git reports rather than on whatever path was reviewed.
+ * A subdirectory is therefore read as what it was passed as: a directory.
+ */
 export async function diffSource(
   source: SourceInput,
   limits: DiffLimits = DEFAULT_LIMITS,
 ): Promise<SourceDiff> {
-  return source.baseRef === undefined ? diffFileSet(source, limits) : diffGitSource(source, limits)
+  if (source.baseRef !== undefined) return diffGitSource(source, limits)
+
+  const root = await repoRoot(source.rootPath)
+  const isRepoRoot = root !== null && canonical(root) === canonical(source.rootPath)
+
+  return isRepoRoot
+    ? diffGitSource({ ...source, baseRef: 'HEAD' }, limits)
+    : diffFileSet(source, limits)
 }
 
 export function relativeTo(root: string, path: string): string {

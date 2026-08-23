@@ -9,6 +9,14 @@ export interface TempRepo {
   write: (path: string, contents: string) => void
   run: (...args: string[]) => string
   commit: (message: string) => void
+  /**
+   * A linked worktree on a new branch, returning its path.
+   *
+   * Worth having a fixture for because a worktree's `.git` is a file holding a
+   * pointer rather than a directory, so anything deciding "is this a
+   * repository" by looking for a directory gets it wrong.
+   */
+  worktree: (branch: string) => string
   cleanup: () => void
 }
 
@@ -36,6 +44,9 @@ export function tempRepo(): TempRepo {
     writeFileSync(full, contents)
   }
 
+  // Worktrees live outside the repository so removing one does not disturb it.
+  const trees: string[] = []
+
   return {
     root,
     write,
@@ -44,6 +55,15 @@ export function tempRepo(): TempRepo {
       run('add', '-A')
       run('commit', '-q', '-m', message)
     },
-    cleanup: () => rmSync(root, { recursive: true, force: true }),
+    worktree: (branch: string) => {
+      const path = join(mkdtempSync(join(tmpdir(), 'reviewd-worktree-')), branch)
+      run('worktree', 'add', '-q', path, '-b', branch)
+      trees.push(path)
+      return path
+    },
+    cleanup: () => {
+      for (const tree of trees) rmSync(dirname(tree), { recursive: true, force: true })
+      rmSync(root, { recursive: true, force: true })
+    },
   }
 }

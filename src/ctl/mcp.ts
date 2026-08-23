@@ -54,7 +54,10 @@ export function createMcpServer(client = new Client(loadClientConfig().base_url)
               base: z
                 .string()
                 .optional()
-                .describe('Ref to compare against, HEAD by default. Omit for a non-git directory'),
+                .describe(
+                  'Ref to compare against. Omit and a git repository is compared against HEAD, ' +
+                    'while any other directory is read as a file set',
+                ),
               label: z.string().optional(),
             }),
           )
