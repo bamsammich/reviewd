@@ -8,6 +8,7 @@ import type {
   SnapshotResult,
   SourceSummary,
 } from '@reviewd/protocol'
+import type { Bus } from './bus.js'
 import type { ResolvedConfig } from './config.js'
 import { newId, now } from './db/ids.js'
 import type { Database } from './db/types.js'
@@ -33,6 +34,8 @@ export class ReviewError extends Error {
 export interface Deps {
   db: Kysely<Database>
   config: ResolvedConfig
+  /** Absent in unit tests that never wait on anything. */
+  bus?: Bus
 }
 
 /** Every link the daemon emits is built here, never from a request's address. */

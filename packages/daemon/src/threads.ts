@@ -471,6 +471,11 @@ export async function submitReview(
       .execute()
   })
 
+  // One event per submission, never one per comment. This is what makes a
+  // wait fire once when the reviewer presses Submit rather than four times
+  // while they are still writing.
+  deps.bus?.publish({ kind: 'submission', reviewId, verdict, at: t })
+
   return { submissionId, verdict, messageCount, submittedAt: t }
 }
 

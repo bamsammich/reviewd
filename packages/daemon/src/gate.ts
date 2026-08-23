@@ -229,6 +229,10 @@ export async function release(
   await db.deleteFrom('review').where('id', '=', reviewId).execute()
   await sweepOrphanBlobs(db)
 
+  // A session parked on this review learns the data is gone rather than
+  // waiting out its timeout against something that no longer exists.
+  deps.bus?.publish({ kind: 'released', reviewId, at: now() })
+
   return { released: true }
 }
 

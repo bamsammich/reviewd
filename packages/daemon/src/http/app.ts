@@ -1,18 +1,21 @@
 import { Hono } from 'hono'
 import type { Kysely } from 'kysely'
 import { capabilities as capabilitiesSchema } from '@reviewd/protocol'
+import { Bus } from '../bus.js'
 import type { ResolvedConfig } from '../config.js'
 import type { Database } from '../db/types.js'
 import { hardening } from './hardening.js'
 import { reviewRoutes } from './routes-reviews.js'
 import { gateRoutes } from './routes-gate.js'
 import { threadRoutes } from './routes-threads.js'
+import { waitRoutes } from './routes-wait.js'
 
 export interface AppContext {
   config: ResolvedConfig
   db: Kysely<Database>
   /** True when the daemon shares a filesystem with the reviewed code. */
   local: boolean
+  bus?: Bus
 }
 
 export type App = Hono
@@ -28,10 +31,12 @@ export function createApp(ctx: AppContext): App {
     app.use('*', middleware)
   }
 
-  const deps = { db: ctx.db, config: ctx.config }
+  const bus = ctx.bus ?? new Bus()
+  const deps = { db: ctx.db, config: ctx.config, bus }
   app.route('/', reviewRoutes(deps))
   app.route('/', threadRoutes(deps))
   app.route('/', gateRoutes(deps))
+  app.route('/', waitRoutes(deps))
 
   app.get('/api/health', (c) => c.json({ ok: true }))
 
