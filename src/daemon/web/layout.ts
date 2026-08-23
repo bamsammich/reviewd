@@ -171,23 +171,88 @@ ul.reviews .roots {
   font-size: .74rem; text-transform: uppercase; letter-spacing: .07em;
   color: var(--muted); margin: 0 0 .4rem;
 }
-.scope ul { list-style: none; margin: 0; padding: 0; display: grid; gap: .4rem; }
+.scope ul { list-style: none; margin: 0; padding: 0; display: grid; gap: .1rem; }
+.scope .branch + .branch { margin-top: .8rem; }
 .scope a.root {
-  display: flex; align-items: center; gap: .5rem .6rem; flex-wrap: wrap;
-  padding: .5rem .7rem; min-height: var(--tap);
+  display: flex; align-items: center; gap: .4rem .5rem; flex-wrap: wrap;
+  padding: .45rem .6rem; min-height: var(--tap);
   background: var(--surface); border: 1px solid var(--rule);
   border-left: 3px solid var(--rule-strong);
   border-radius: var(--radius); text-decoration: none; color: inherit;
+  margin-bottom: .3rem;
 }
 .scope a.root.ok { border-left-color: var(--add-ink); }
-.scope .name { font-family: var(--mono); font-weight: 600; font-size: .85rem; }
+.scope .vcs { flex: 0 0 auto; color: var(--muted); }
+.scope a.root.ok .vcs { color: var(--add-ink); }
 .scope .path {
-  font-family: var(--mono); font-size: .74rem; color: var(--muted);
+  font-family: var(--mono); font-size: .72rem; color: var(--muted);
   overflow-wrap: anywhere; flex: 1 1 100%;
 }
+.scope .name {
+  font-family: var(--mono); font-weight: 600; font-size: .82rem;
+  min-width: 0; overflow-wrap: anywhere;
+}
+
+/* A tree shows one segment per node, which is short. The old rail showed whole
+   paths, which are the long token that forces either an overflow or a
+   truncation hiding the end that names the file. */
+.scope .tree { padding-left: .75rem; border-left: 1px solid var(--rule); margin-left: .35rem; }
+.scope .tree .tree { margin-left: .1rem; }
+
+.scope .dir > summary {
+  display: flex; align-items: center; gap: .35rem;
+  padding: .25rem .3rem; border-radius: 6px; cursor: pointer;
+  list-style: none; min-height: 1.9rem; color: var(--muted);
+}
+.scope .dir > summary::-webkit-details-marker { display: none; }
+.scope .dir > summary::before {
+  content: "\\25be"; font-size: .7rem; flex: 0 0 auto;
+}
+.scope .dir:not([open]) > summary::before { content: "\\25b8"; }
+.scope .dir > summary .name { font-weight: 500; font-size: .78rem; color: var(--ink-2); }
+.scope .dir > summary:hover { background: var(--surface-2); }
+
+.scope a.leaf {
+  display: flex; align-items: center; gap: .4rem;
+  padding: .25rem .3rem; border-radius: 6px; min-height: 1.9rem;
+  text-decoration: none; color: inherit;
+}
+.scope a.leaf:hover { background: var(--surface-2); }
+.scope a.leaf .name { font-weight: 400; font-size: .78rem; flex: 1 1 auto; }
+
+/* A letter as well as a colour, so the change type survives being unable to
+   tell them apart. */
+.scope .mark {
+  flex: 0 0 auto; width: 1.05rem; text-align: center;
+  font-family: var(--mono); font-size: .68rem; font-weight: 700;
+  color: var(--muted);
+}
+.scope .mark.added { color: var(--add-ink); }
+.scope .mark.deleted { color: var(--del-ink); }
+.scope .mark.modified { color: var(--warn-ink); }
+
 .scope .count {
-  margin-left: auto; font-size: .76rem; color: var(--muted);
+  flex: 0 0 auto; font-size: .72rem; color: var(--muted);
   font-variant-numeric: tabular-nums;
+}
+.scope a.leaf .count {
+  background: var(--accent-soft); color: var(--accent);
+  border-radius: 999px; padding: 0 .35rem; min-width: 1.2rem; text-align: center;
+}
+
+/* The file being read. Set by script, so it simply does not appear without
+   one, which costs nothing that was not already unavailable. */
+.scope a.leaf[aria-current] {
+  background: var(--accent-soft); color: var(--accent);
+}
+.scope a.leaf[aria-current] .name { font-weight: 600; }
+
+/* Above the diff on a narrow screen rather than beside it, so a tree of any
+   size would push the code off the bottom. Bounded and given its own scroll,
+   which is a nested scroll region and a deliberate one: the alternative is
+   scrolling past the whole tree to reach the first line of code. */
+@media (max-width: 1023px) {
+  .scope { max-height: 45vh; overflow-y: auto; }
 }
 
 .hint {
@@ -326,7 +391,16 @@ a.addnote.extend { color: var(--accent); font-weight: 700; }
   a.addnote { min-height: 1.9rem; }
 }
 
-.viewtoggle { display: none; }
+/* Hiding the tree matters most on a narrow screen, where it sits above the
+   diff rather than beside it, so the row shows at every width. Only the
+   side-by-side choice is hidden below the breakpoint, where it is ignored
+   anyway. */
+.viewtoggle { display: flex; justify-content: flex-end; gap: .4rem; margin-bottom: .6rem; }
+.viewtoggle .viewmode { display: none; }
+
+/* Closed: the diff takes the whole width and the tree is gone rather than
+   emptied, so nothing keeps a column it is not using. */
+main.review.rail-closed > .rail { display: none; }
 
 /* ---------- threads ---------- */
 
@@ -422,7 +496,7 @@ main.with-bar { padding-bottom: 7.5rem; }
 @media (min-width: 1024px) {
   main { padding: 1.25rem 1.5rem; }
 
-  .viewtoggle { display: flex; justify-content: flex-end; margin-bottom: .6rem; }
+  .viewtoggle .viewmode { display: inline-flex; }
 
   /* Below this width two columns of code are unreadable, so the preference is
      ignored rather than honored into uselessness. */
@@ -443,6 +517,7 @@ main.with-bar { padding-bottom: 7.5rem; }
     align-items: start;
     max-width: 100rem; margin: 0 auto;
   }
+  main.review.rail-closed { grid-template-columns: minmax(0, 1fr); }
   main.review .rail { position: sticky; top: calc(var(--top-bar) + .5rem); }
   main.review .files { min-width: 0; }
   main.with-bar { padding-bottom: 5rem; }

@@ -1,7 +1,7 @@
 import type { ReviewSummary, Thread } from '../../protocol.js'
 import { describe, expect, it } from 'vitest'
 import type { FileView } from './pages.js'
-import { foldKey, parseFolds, parseOpenBox, reviewPage } from './review-page.js'
+import { foldKey, parseFolds, parseOpenBox, parseRail, reviewPage } from './review-page.js'
 
 const SOURCE = 'src-1'
 const REVIEW = 'rev-1'
@@ -70,8 +70,10 @@ function thread(overrides: Partial<Thread> = {}): Thread {
 
 /** The `<details>` opening tag for one file block. */
 function fileTag(markup: string, path: string): string {
+  // Matched by the fold key wherever it sits in the tag, rather than by the
+  // exact order of attributes, which is not what any of these tests are about.
   const key = foldKey(SOURCE, path)
-  const match = markup.match(new RegExp(`<details class="file" data-fold="${key}"[^>]*>`))
+  const match = markup.match(new RegExp(`<details [^>]*data-fold="${key}"[^>]*>`))
   return match?.[0] ?? ''
 }
 
@@ -322,6 +324,162 @@ describe('parsing the box out of a URL', () => {
   it('ignores an end that is not a number', () => {
     expect(parseOpenBox(key, 'tomorrow')?.endLine).toBeNull()
     expect(parseOpenBox(key, '')?.endLine).toBeNull()
+  })
+})
+
+describe('the file tree in the rail', () => {
+  const spread = (): FileView[] => [
+    { ...file('src/daemon/web/layout.ts'), changeType: 'modified' },
+    { ...file('src/daemon/web/tree.ts'), changeType: 'added' },
+    { ...file('README.md'), changeType: 'deleted' },
+  ]
+
+  it('lists every changed file by its own name, not its path', () => {
+    const markup = reviewPage(summary(), spread(), []).value
+
+    expect(markup).toContain('>layout.ts</span>')
+    expect(markup).toContain('>tree.ts</span>')
+    expect(markup).toContain('>README.md</span>')
+  })
+
+  it('collapses a run of directories into one node', () => {
+    const markup = reviewPage(summary(), spread(), []).value
+
+    expect(markup).toContain('>src/daemon/web</span>')
+  })
+
+  it('links each file to its block in the diff', () => {
+    const key = foldKey(SOURCE, 'src/daemon/web/tree.ts')
+    const markup = reviewPage(summary(), spread(), []).value
+
+    expect(markup).toContain(`href="#file-${key}"`)
+    expect(markup).toContain(`id="file-${key}"`)
+  })
+
+  // Colour alone cannot carry the change type, so the letter does the work and
+  // the colour reinforces it.
+  it('names the change type rather than only colouring it', () => {
+    const markup = reviewPage(summary(), spread(), []).value
+
+    expect(markup).toContain('<span class="mark added" aria-hidden="true">A</span>')
+    expect(markup).toContain('<span class="mark deleted" aria-hidden="true">D</span>')
+    expect(markup).toMatch(/class="visually-hidden">\s*modified/)
+  })
+
+  it('collapses directories without a script', () => {
+    const markup = reviewPage(summary(), spread(), []).value
+
+    expect(markup).toContain('<details class="dir" open>')
+  })
+
+  // A bare number read aloud says nothing. The digit is for the eye and the
+  // phrase beside it is for everyone else.
+  it('counts comments as a phrase, not just a digit', () => {
+    const threads = [
+      thread({ id: 't-1', path: 'src/daemon/web/tree.ts' }),
+      thread({ id: 't-2', path: 'src/daemon/web/tree.ts' }),
+    ]
+    const markup = reviewPage(summary(), spread(), threads).value
+
+    expect(markup).toContain('<span class="count" aria-hidden="true">2</span>')
+    expect(markup).toMatch(/2 comments/)
+  })
+
+  it('leaves an outdated comment out of the count', () => {
+    const threads = [thread({ path: 'src/daemon/web/tree.ts', state: 'outdated' })]
+    const markup = reviewPage(summary(), spread(), threads).value
+
+    expect(markup).not.toContain('<span class="count" aria-hidden="true">1</span>')
+  })
+
+  it('gives each source its own root with nothing invented above them', () => {
+    const two = summary({
+      sources: [
+        { ...summary().sources[0]!, id: 'src-1', label: 'reviewd' },
+        { ...summary().sources[0]!, id: 'src-2', label: 'dotfiles' },
+      ],
+    })
+    const markup = reviewPage(two, spread(), []).value
+
+    expect(markup.match(/class="branch"/g)).toHaveLength(2)
+    expect(markup).toContain('>reviewd</span>')
+    expect(markup).toContain('>dotfiles</span>')
+  })
+
+  // A shape is no more a label than a colour, so the icon is hidden and the
+  // distinction is repeated in text beside it.
+  it('shows a git mark for a tracked source and a folder for a plain directory', () => {
+    const tracked = reviewPage(summary(), spread(), []).value
+    const loose = reviewPage(
+      summary({ sources: [{ ...summary().sources[0]!, vcs: 'none', baseRef: null }] }),
+      spread(),
+      [],
+    ).value
+
+    expect(tracked).toContain('git repository')
+    expect(loose).toContain('>directory<')
+    expect(loose).not.toContain('git repository')
+
+    // Phosphor draws on a 256 grid, so this also catches the icons silently
+    // failing to load and rendering as nothing.
+    expect(tracked).toMatch(/<svg class="vcs"[^>]*viewBox="0 0 256 256"/)
+    expect(loose).toMatch(/<svg class="vcs"[^>]*viewBox="0 0 256 256"/)
+  })
+
+  it('keeps both icons out of the accessibility tree', () => {
+    const markup = reviewPage(summary(), spread(), []).value
+
+    expect(markup).toMatch(/<svg class="vcs"[^>]*aria-hidden="true"/)
+  })
+
+  it('says how much is in the review before any of it', () => {
+    expect(reviewPage(summary(), spread(), []).value).toContain('3 files in')
+  })
+})
+
+describe('hiding the file tree', () => {
+  const withRail = (rail: 'open' | 'closed') =>
+    reviewPage(summary(), [file('src/a.ts')], [], undefined, 'split', new Set(), rail).value
+
+  it('shows the tree by default', () => {
+    const markup = reviewPage(summary(), [file('src/a.ts')], []).value
+
+    expect(markup).toContain('rail-open')
+    expect(markup).toContain('Hide files')
+    expect(markup).toContain('aria-expanded="true"')
+  })
+
+  it('offers the way back when it is closed', () => {
+    const markup = withRail('closed')
+
+    expect(markup).toContain('rail-closed')
+    expect(markup).toContain('Show files')
+    expect(markup).toContain('aria-expanded="false"')
+  })
+
+  // The control is a link that sets a cookie, like the side-by-side choice, so
+  // it survives a reload and works with no script running.
+  it('is a link, not a script', () => {
+    expect(withRail('open')).toContain('?rail=closed')
+    expect(withRail('closed')).toContain('?rail=open')
+  })
+
+  it('still renders the tree markup so the state is only visual', () => {
+    // Closed hides the rail in CSS rather than dropping it, which keeps the
+    // page one document and the toggle instant.
+    expect(withRail('closed')).toContain('class="scope"')
+  })
+})
+
+describe('reading the rail state', () => {
+  it('defaults to open', () => {
+    expect(parseRail(undefined)).toBe('open')
+    expect(parseRail('')).toBe('open')
+    expect(parseRail('anything')).toBe('open')
+  })
+
+  it('closes only when asked', () => {
+    expect(parseRail('closed')).toBe('closed')
   })
 })
 

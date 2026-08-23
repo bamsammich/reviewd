@@ -1,5 +1,6 @@
 import type { ReviewSummary, SourceSummary, Thread } from '../../protocol.js'
 import { Palette, renderLine, type Token } from './highlight.js'
+import { FOLDER_ICON, GIT_ICON } from './icons.js'
 import { escapeHtml, html, raw, type SafeHtml } from './html.js'
 // anchorForHalf is gone from here: nothing in the renderer asks where a row is
 // without also needing the file it is in, which is what a position carries.
@@ -7,6 +8,7 @@ import { buildRows, toHunks, toSplitRows, type Half, type SplitRow } from './hun
 import { page, topBar } from './layout.js'
 import type { FileView } from './pages.js'
 import { basenameOf, displayPath } from './paths.js'
+import { buildTree, type TreeDirectory, type TreeFile, type TreeNode } from './tree.js'
 import {
   covers,
   inSameFile,
@@ -63,6 +65,19 @@ export function parseViewMode(value: string | undefined): ViewMode {
   return value === 'unified' ? 'unified' : 'split'
 }
 
+/**
+ * Whether the file tree is showing.
+ *
+ * A cookie rather than a `<details>`, because closing it should hand the space
+ * to the diff. A disclosure would hide the contents and leave the empty column
+ * behind, and the layout that has to change is a grid the server writes.
+ */
+export type RailState = 'open' | 'closed'
+
+export function parseRail(value: string | undefined): RailState {
+  return value === 'closed' ? 'closed' : 'open'
+}
+
 /** Identifies one file block across renders. Opaque: only membership is asked. */
 export function foldKey(sourceId: string, path: string): string {
   return `${sourceId}:${path}`
@@ -101,6 +116,7 @@ export function reviewPage(
   open?: OpenBox,
   view: ViewMode = 'split',
   folded: ReadonlySet<string> = new Set(),
+  rail: RailState = 'open',
 ): SafeHtml {
   const drafts = threads.reduce(
     (count, thread) => count + thread.messages.filter((m) => m.submittedAt === null).length,
@@ -116,10 +132,14 @@ export function reviewPage(
 
   const body = html`
 ${topBar(review.title, html`<span class="rev">rev ${review.snapshotSeq}</span>`)}
-<main id="main" class="review with-bar view-${view}" data-review="${review.reviewId}">
+<main
+  id="main"
+  class="review with-bar view-${view} rail-${rail}"
+  data-review="${review.reviewId}"
+>
   <div class="rail">
     <h1 class="page-title">${review.title}</h1>
-    ${scopeList(grouped)}
+    ${scopeList(grouped, threads)}
     ${coaching(threads.length, drafts, awaitingYou)}
   </div>
 
@@ -129,7 +149,7 @@ ${topBar(review.title, html`<span class="rev">rev ${review.snapshotSeq}</span>`)
         ? html`<p class="emptystate">This revision changed nothing.</p>`
         : raw('')
     }
-    ${viewToggle(review, view)}
+    ${viewToggle(review, view, rail)}
     ${grouped.map((group) => sourceGroup(page_, group, grouped.length > 1))}
     ${outdatedBlock(page_, outdated)}
   </div>
@@ -165,41 +185,106 @@ function groupBySource(sources: SourceSummary[], files: FileView[]): SourceGroup
  * same for everything a person owns. The full path stays in the title
  * attribute for anyone who needs it.
  */
-function scopeList(groups: SourceGroup[]): SafeHtml {
+/**
+ * The rail: every source, and under each one a tree of what changed.
+ *
+ * Several roots sit side by side with no parent above them, because a review
+ * spanning two repositories has no common directory and inventing one would
+ * claim a relationship that does not exist.
+ *
+ * Directories are `<details>`, so the tree collapses without a script, arrives
+ * keyboard-operable, and announces its own expanded state. Nothing here needs
+ * JavaScript except the marker for the file you are currently reading, which
+ * is the one thing the server cannot know.
+ */
+function scopeList(groups: SourceGroup[], threads: Thread[]): SafeHtml {
   if (groups.length === 0) return raw('')
+
+  const files = groups.reduce((total, group) => total + group.files.length, 0)
 
   return html`<nav class="scope" aria-labelledby="scope-heading">
   <h2 id="scope-heading">
-    Reviewing ${groups.length === 1 ? '1 place' : `${groups.length} places`}
+    ${files} file${files === 1 ? '' : 's'} in
+    ${groups.length === 1 ? '1 place' : `${groups.length} places`}
   </h2>
-  <ul>
-    ${groups.map(
-      (group) => html`<li>
-        <a
-          class="root ${group.source.approved ? 'ok' : ''}"
-          href="#src-${group.source.id}"
-          title="${group.source.rootPath}"
-          aria-label="${`${group.source.label || basenameOf(group.source.rootPath)}, ${
-            group.files.length
-          } file${group.files.length === 1 ? '' : 's'}${
-            group.source.approved ? ', approved' : ''
-          }, at ${group.source.rootPath}`}"
-        >
-          <span class="name">${group.source.label || basenameOf(group.source.rootPath)}</span>
-          ${
-            group.source.approved
-              ? html`<span class="badge approved">approved</span>`
-              : raw('')
-          }
-          <span class="count"
-            >${group.files.length} file${group.files.length === 1 ? '' : 's'}</span
-          >
-          <span class="path">${displayPath(group.source.rootPath)}</span>
-        </a>
-      </li>`,
-    )}
-  </ul>
+  ${groups.map((group) => sourceBranch(group, threads))}
 </nav>`
+}
+
+function sourceBranch(group: SourceGroup, threads: Thread[]): SafeHtml {
+  const name = group.source.label || basenameOf(group.source.rootPath)
+  const tracked = group.source.vcs === 'git'
+
+  return html`<div class="branch">
+  <a class="root ${group.source.approved ? 'ok' : ''}" href="#src-${group.source.id}">
+    ${tracked ? GIT_ICON : FOLDER_ICON}
+    <span class="visually-hidden">${tracked ? 'git repository' : 'directory'}</span>
+    <span class="name">${name}</span>
+    ${group.source.approved ? html`<span class="badge approved">approved</span>` : raw('')}
+    <span class="path" title="${group.source.rootPath}"
+      >${displayPath(group.source.rootPath)}</span
+    >
+  </a>
+  ${treeList(buildTree(group.files), threads)}
+</div>`
+}
+
+function treeList(nodes: TreeNode[], threads: Thread[]): SafeHtml {
+  if (nodes.length === 0) return raw('')
+
+  return html`<ul class="tree">
+  ${nodes.map(
+    (node) => html`<li>
+      ${node.kind === 'directory' ? treeDirectory(node, threads) : treeFile(node, threads)}
+    </li>`,
+  )}
+</ul>`
+}
+
+function treeDirectory(node: TreeDirectory, threads: Thread[]): SafeHtml {
+  return html`<details class="dir" open>
+  <summary>
+    <span class="name">${node.name}</span>
+    <span class="count" aria-hidden="true">${node.fileCount}</span>
+    <span class="visually-hidden">
+      ${node.fileCount} file${node.fileCount === 1 ? '' : 's'}
+    </span>
+  </summary>
+  ${treeList(node.children, threads)}
+</details>`
+}
+
+/** First letter of the change, because colour alone is not a label. */
+const CHANGE_MARK: Record<string, string> = {
+  added: 'A',
+  modified: 'M',
+  deleted: 'D',
+  renamed: 'R',
+  binary: 'B',
+}
+
+function treeFile(node: TreeFile, threads: Thread[]): SafeHtml {
+  const { file } = node
+  const key = foldKey(file.sourceId, file.path)
+  const comments = threads.filter(
+    (thread) =>
+      thread.state !== 'outdated' && foldKey(thread.sourceId, thread.path) === key,
+  ).length
+
+  const mark = CHANGE_MARK[file.changeType] ?? '?'
+
+  return html`<a class="leaf" href="#file-${key}" data-tree-file="${key}">
+  <span class="mark ${file.changeType}" aria-hidden="true">${mark}</span>
+  <span class="name">${node.name}</span>
+  ${
+    comments > 0
+      ? html`<span class="count" aria-hidden="true">${comments}</span>`
+      : raw('')
+  }
+  <span class="visually-hidden">
+    ${file.changeType}${comments > 0 ? `, ${comments} comment${comments === 1 ? '' : 's'}` : ''}
+  </span>
+</a>`
 }
 
 /**
@@ -268,7 +353,7 @@ function fileBlock(page: Page, file: FileView): SafeHtml {
   const holdsBox = page.open !== undefined && foldKey(page.open.sourceId, page.open.path) === key
   const expanded = holdsBox || !page.folded.has(key)
 
-  return html`<details class="file" data-fold="${key}" ${expanded ? raw('open') : raw('')}>
+  return html`<details class="file" id="file-${key}" data-fold="${key}" ${expanded ? raw('open') : raw('')}>
   <summary>
     <h3>${file.path}</h3>
     <span class="badge">${file.changeType}</span>
@@ -532,11 +617,18 @@ function outdatedBlock(page: Page, outdated: Thread[]): SafeHtml {
  * that cannot be honored is worse than no option. The stylesheet stacks the
  * halves there whatever the stored preference says.
  */
-function viewToggle(review: ReviewSummary, view: ViewMode): SafeHtml {
+function viewToggle(review: ReviewSummary, view: ViewMode, rail: RailState): SafeHtml {
   const other: ViewMode = view === 'split' ? 'unified' : 'split'
+  const flip: RailState = rail === 'open' ? 'closed' : 'open'
 
   return html`<div class="viewtoggle">
-  <a class="btn quiet" href="/r/${review.reviewId}?view=${other}">
+  <a
+    class="btn quiet"
+    href="/r/${review.reviewId}?rail=${flip}"
+    aria-expanded="${rail === 'open' ? 'true' : 'false'}"
+    >${rail === 'open' ? 'Hide files' : 'Show files'}</a
+  >
+  <a class="btn quiet viewmode" href="/r/${review.reviewId}?view=${other}">
     ${other === 'split' ? 'Side by side' : 'Unified'}
   </a>
 </div>`
@@ -725,6 +817,47 @@ if (liveMain && liveMain.dataset.review && 'EventSource' in window) {
   source.addEventListener('threads', land);
   source.addEventListener('gone', () => { source.close(); location.reload(); });
 }
+
+/* ---- marking the file being read -------------------------------------- */
+
+/* Which file the viewport is in is the one thing the tree cannot be rendered
+   knowing. Without this the tree still lists and still navigates; it just does
+   not point at where you are. */
+function markCurrentFile() {
+  const bar = document.querySelector('header.top');
+  const line = bar ? bar.getBoundingClientRect().bottom + 1 : 1;
+  let current = null;
+
+  for (const file of document.querySelectorAll('details.file[data-fold]')) {
+    const box = file.getBoundingClientRect();
+    // The file spanning the sticky line, which is the one whose header is
+    // pinned and therefore the one being read.
+    if (box.top <= line && box.bottom > line) { current = file.dataset.fold; break; }
+  }
+
+  for (const leaf of document.querySelectorAll('.scope a.leaf')) {
+    if (leaf.dataset.treeFile === current) leaf.setAttribute('aria-current', 'true');
+    else leaf.removeAttribute('aria-current');
+  }
+}
+
+/* Cancel and reschedule rather than latch a boolean. requestAnimationFrame
+   does not run in a hidden tab, so a "queued" flag set before the tab was
+   backgrounded is never cleared and the marker stays dead after the reader
+   comes back. Cancelling means the worst case is one frame not drawn. */
+let markHandle = 0;
+addEventListener('scroll', () => {
+  cancelAnimationFrame(markHandle);
+  markHandle = requestAnimationFrame(markCurrentFile);
+}, { passive: true });
+
+/* A tab that was hidden while it loaded never ran the frame, so catch up when
+   the reader looks at it. */
+addEventListener('visibilitychange', () => {
+  if (!document.hidden) markCurrentFile();
+});
+
+markCurrentFile();
 
 /* ---- dragging a range ------------------------------------------------ */
 

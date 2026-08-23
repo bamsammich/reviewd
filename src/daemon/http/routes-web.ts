@@ -6,7 +6,13 @@ import { listReviews, ReviewError, summarize, type Deps } from '../reviews.js'
 import { touchReview } from '../sweep.js'
 import { createThread, listThreads, replyToThread, setThreadState, submitReview, unapprove } from '../threads.js'
 import { loadFiles, messagePage, reviewListPage } from '../web/pages.js'
-import { parseFolds, parseOpenBox, parseViewMode, reviewPage } from '../web/review-page.js'
+import {
+  parseFolds,
+  parseOpenBox,
+  parseRail,
+  parseViewMode,
+  reviewPage,
+} from '../web/review-page.js'
 
 /** Long enough to stay quiet, short enough that a dead tab is noticed. */
 const HEARTBEAT_MS = 25_000
@@ -44,7 +50,14 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
         return c.redirect(`/r/${reviewId}`, 303)
       }
 
+      const rails = c.req.query('rail')
+      if (rails === 'open' || rails === 'closed') {
+        setCookie(c, 'reviewd_rail', rails)
+        return c.redirect(`/r/${reviewId}`, 303)
+      }
+
       const view = parseViewMode(cookie(c, 'reviewd_view'))
+      const rail = parseRail(cookie(c, 'reviewd_rail'))
       // Folds are written by the page itself, so this cookie is the only place
       // that knows what the reviewer already decided was fine.
       const folded = parseFolds(cookie(c, 'reviewd_folds'), reviewId)
@@ -57,6 +70,7 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
           parseOpenBox(c.req.query('box'), c.req.query('to')),
           view,
           folded,
+          rail,
         ).value,
       )
     } catch (error) {
