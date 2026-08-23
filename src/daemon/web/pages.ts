@@ -1,7 +1,9 @@
 import type { Kysely } from 'kysely'
 import type { ReviewSummary } from '../../protocol.js'
 import type { Database } from '../db/types.js'
+import { languageFor, tokenize, type Token } from './highlight.js'
 import { html, raw, type SafeHtml } from './html.js'
+import { splitLines } from './hunks.js'
 import { page, topBar } from './layout.js'
 import { basenameOf } from './paths.js'
 
@@ -86,6 +88,12 @@ export interface FileView {
   truncated: boolean
   oldText: string
   newText: string
+  /** One token array per line, absent when this file renders plain. */
+  oldTokens?: Token[][] | undefined
+  newTokens?: Token[][] | undefined
+  /** sha256 of each side's content, which is what the token cache keys on. */
+  oldBlobId?: string | undefined
+  newBlobId?: string | undefined
 }
 
 function age(seconds: number): string {
@@ -145,7 +153,7 @@ export async function loadFiles(db: Kysely<Database>, reviewId: string): Promise
     }
   }
 
-  return changes.map((change) => ({
+  const views: FileView[] = changes.map((change) => ({
     changeId: change.change_id,
     sourceId: change.source_id,
     sourceLabel: change.source_label,
@@ -155,5 +163,41 @@ export async function loadFiles(db: Kysely<Database>, reviewId: string): Promise
     truncated: change.truncated === 1,
     oldText: change.old_blob_id ? (blobs.get(change.old_blob_id) ?? '') : '',
     newText: change.new_blob_id ? (blobs.get(change.new_blob_id) ?? '') : '',
+    oldBlobId: change.old_blob_id ?? undefined,
+    newBlobId: change.new_blob_id ?? undefined,
   }))
+
+  await attachHighlighting(views)
+  return views
+}
+
+/**
+ * Tokenises both sides of every file that has a language we know.
+ *
+ * Here rather than in the renderer because loading a grammar is asynchronous
+ * and rendering is not, and because a page wants every file tokenised before
+ * it writes any of them.
+ */
+async function attachHighlighting(views: FileView[]): Promise<void> {
+  await Promise.all(
+    views.map(async (view) => {
+      if (view.isBinary || view.truncated) return
+
+      const language = languageFor(view.path)
+      if (!language) return
+
+      view.oldTokens = await tokenize(
+        view.oldText,
+        language,
+        splitLines(view.oldText).length,
+        view.oldBlobId,
+      )
+      view.newTokens = await tokenize(
+        view.newText,
+        language,
+        splitLines(view.newText).length,
+        view.newBlobId,
+      )
+    }),
+  )
 }

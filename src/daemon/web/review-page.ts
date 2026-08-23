@@ -1,4 +1,5 @@
 import type { ReviewSummary, SourceSummary, Thread } from '../../protocol.js'
+import { Palette, renderLine, type Token } from './highlight.js'
 import { html, raw, type SafeHtml } from './html.js'
 import {
   anchorForHalf,
@@ -99,6 +100,9 @@ export function reviewPage(
   const awaitingYou = threads.filter((t) => t.state === 'active' && t.turn === 'human').length
   const outdated = threads.filter((t) => t.state === 'outdated')
   const grouped = groupBySource(review.sources, files)
+  // Filled while the body renders, read after. Every colour the diff used, and
+  // no others, reaches the stylesheet at the end.
+  const palette = new Palette()
 
   const body = html`
 ${topBar(review.title, html`<span class="rev">rev ${review.snapshotSeq}</span>`)}
@@ -117,14 +121,20 @@ ${topBar(review.title, html`<span class="rev">rev ${review.snapshotSeq}</span>`)
     }
     ${viewToggle(review, view)}
     ${grouped.map((group) =>
-      sourceGroup(review, group, threads, open, grouped.length > 1, folded),
+      sourceGroup(review, group, threads, open, grouped.length > 1, folded, palette),
     )}
     ${outdatedBlock(review, outdated)}
   </div>
 </main>
 ${submitBar(review, drafts, awaitingYou)}`
 
-  return page(`${review.title} · reviewd`, body, raw(`<script>${SCRIPT}</script>`))
+  const highlighting = palette.css()
+
+  return page(
+    `${review.title} · reviewd`,
+    body,
+    raw(`${highlighting ? `<style>${highlighting}</style>` : ''}<script>${SCRIPT}</script>`),
+  )
 }
 
 interface SourceGroup {
@@ -224,6 +234,7 @@ function sourceGroup(
   open: OpenBox | undefined,
   showHeading: boolean,
   folded: ReadonlySet<string>,
+  palette: Palette,
 ): SafeHtml {
   return html`<section class="sourcegroup" id="src-${group.source.id}">
   ${
@@ -239,7 +250,7 @@ function sourceGroup(
   ${
     group.files.length === 0
       ? html`<p class="note">Nothing changed in this one.</p>`
-      : group.files.map((file) => fileBlock(review, file, threads, folded, open))
+      : group.files.map((file) => fileBlock(review, file, threads, folded, palette, open))
   }
 </section>`
 }
@@ -249,6 +260,7 @@ function fileBlock(
   file: FileView,
   threads: Thread[],
   folded: ReadonlySet<string>,
+  palette: Palette,
   open?: OpenBox,
 ): SafeHtml {
   const rows = file.isBinary || file.truncated ? [] : buildRows(file.oldText, file.newText)
@@ -288,7 +300,9 @@ function fileBlock(
               ${hunks.map(
                 (hunk) => html`
                   <div class="hunkhead">${hunk.header}</div>
-                  ${toSplitRows(hunk.rows).map((row) => splitRow(review, file, row, mine, open))}
+                  ${toSplitRows(hunk.rows).map((row) =>
+                    splitRow(review, file, row, mine, palette, open),
+                  )}
                 `,
               )}
             </div>`
@@ -308,6 +322,7 @@ function splitRow(
   file: FileView,
   row: SplitRow,
   threads: Thread[],
+  palette: Palette,
   open?: OpenBox,
 ): SafeHtml {
   const attached = [
@@ -320,8 +335,8 @@ function splitRow(
   const boxHere = [row.left, row.right].find((half) => isOpenOn(open, file, half))
 
   return html`<div class="row" data-unified="${row.unified}">
-  ${half(review, file, row.left, 'left')}
-  ${half(review, file, row.right, 'right')}
+  ${half(review, file, row.left, 'left', palette)}
+  ${half(review, file, row.right, 'right', palette)}
 </div>
 ${attached.map((thread) => threadBlock(review, thread, false))}
 ${boxHere ? newThreadBlock(review, file, anchorForHalf(boxHere)!) : raw('')}`
@@ -354,6 +369,7 @@ function half(
   file: FileView,
   side: Half,
   which: 'left' | 'right',
+  palette: Palette,
 ): SafeHtml {
   if (side.kind === 'empty') {
     return html`<div class="side ${which} empty" aria-hidden="true"></div>`
@@ -382,6 +398,12 @@ function half(
       >`
     : raw('')
 
+  // Highlighted where we recognise the language and the line counts agreed,
+  // and the raw text otherwise. `side.text` is escaped by the template;
+  // renderLine escapes each token itself.
+  const tokens = tokensForHalf(file, side, which)
+  const code = tokens ? renderLine(tokens, palette) : side.text
+
   // The code itself is plain text. Making it a link put the source of every
   // line into the accessibility tree as a control name, which told a screen
   // reader user nothing about what activating it would do.
@@ -389,8 +411,22 @@ function half(
   <span class="n">${side.line ?? ''}</span>
   <span class="act">${action}</span>
   <span class="sign" aria-hidden="true">${sign}</span>
-  <span class="t">${side.text}</span>
+  <span class="t">${code}</span>
 </div>`
+}
+
+/**
+ * The tokens for one line, or nothing if this file renders plain.
+ *
+ * Which side a half reads from follows the diff, not the column: a removed
+ * line sits on the left and belongs to the old text, an added line sits on the
+ * right and belongs to the new, and context appears in both.
+ */
+function tokensForHalf(file: FileView, side: Half, which: 'left' | 'right'): Token[] | undefined {
+  if (side.line === null) return undefined
+
+  const lines = which === 'left' ? file.oldTokens : file.newTokens
+  return lines?.[side.line - 1]
 }
 
 function threadBlock(review: ReviewSummary, thread: Thread, showLocation: boolean): SafeHtml {
