@@ -608,9 +608,14 @@ Phase 1 screens:
 
 - `/`: review list grouped by status, each row showing age, source count, and threads by
   turn.
-- `/r/<id>`: the review. File tree on the left grouped by source, diff on the right, split or
-  unified. Clicking a line opens a thread. Threads render inline with full message history
-  and a reply box.
+- `/r/<id>`: the review. Every root named first with its file count and approval state,
+  files grouped under a heading per root, and a visible control on every line that opens a
+  comment box. Threads render inline with full message history and a reply box.
+- Split and unified come from one markup: every row carries both halves, and the stylesheet
+  decides which to show. A narrow screen is always unified, because two columns of code do
+  not fit and an option that cannot be honored is worse than no option. Wider screens default
+  to split and offer a toggle, remembered in a cookie so the URL stays shareable without
+  carrying one person's display choice.
 - A draft tray showing unsent comments with a count, and **Submit review** taking a verdict
   of comment, request changes, or approve. Nothing reaches the agent before that button.
 - Per-source approve state. Open threads show a count beside it and never block approval,

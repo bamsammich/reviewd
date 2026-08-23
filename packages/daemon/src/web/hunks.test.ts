@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { escapeHtml, html, raw } from './html.js'
-import { anchorLineFor, buildRows, splitLines, toHunks } from './hunks.js'
+import {
+  anchorForHalf,
+  anchorLineFor,
+  buildRows,
+  splitLines,
+  toHunks,
+  toSplitRows,
+} from './hunks.js'
 
 const before = ['one', 'two', 'three'].join('\n')
 
@@ -138,5 +145,94 @@ describe('html escaping', () => {
     const rows = ['<a>', '<b>'].map((text) => html`<li>${text}</li>`)
 
     expect(html`${rows}`.value).toBe('<li>&lt;a&gt;</li><li>&lt;b&gt;</li>')
+  })
+})
+
+describe('toSplitRows', () => {
+  const before = ['one', 'two', 'three'].join('\n')
+
+  it('puts a context line on both sides and keeps the new one when stacked', () => {
+    const [row] = toSplitRows(buildRows('only', 'only'))
+
+    expect(row).toMatchObject({
+      left: { kind: 'context', line: 1, text: 'only' },
+      right: { kind: 'context', line: 1, text: 'only' },
+      unified: 'right',
+    })
+  })
+
+  it('pairs a removal with the addition that replaced it', () => {
+    const rows = toSplitRows(buildRows(before, ['one', 'CHANGED', 'three'].join('\n')))
+    const change = rows.find((row) => row.left.kind === 'removed')
+
+    expect(change).toMatchObject({
+      left: { text: 'two', line: 2 },
+      right: { text: 'CHANGED', line: 2 },
+      // Both halves survive a stack, because both are part of the edit.
+      unified: 'both',
+    })
+  })
+
+  it('pairs runs index by index and leaves the leftovers opposite a blank', () => {
+    const rows = toSplitRows(buildRows(['a', 'b'].join('\n'), ['A', 'B', 'C'].join('\n')))
+
+    expect(rows).toHaveLength(3)
+    expect(rows[2]).toMatchObject({
+      left: { kind: 'empty' },
+      right: { kind: 'added', text: 'C' },
+      unified: 'right',
+    })
+  })
+
+  it('gives a pure addition an empty left half', () => {
+    const rows = toSplitRows(buildRows(before, ['one', 'INSERTED', 'two', 'three'].join('\n')))
+    const added = rows.find((row) => row.right.kind === 'added')
+
+    expect(added?.left.kind).toBe('empty')
+    expect(added?.unified).toBe('right')
+  })
+
+  it('does not paint a pair red and green when both halves read the same', () => {
+    // Line diffing produces one of these when a file's last line has no
+    // trailing newline, and rendering it tells a reviewer something untrue.
+    const rows = toSplitRows(buildRows(before, ['one', 'two', 'three', 'four'].join('\n')))
+
+    for (const row of rows) {
+      if (row.left.text === row.right.text && row.left.kind !== 'empty') {
+        expect(row.left.kind).toBe('context')
+        expect(row.right.kind).toBe('context')
+      }
+    }
+  })
+
+  it('gives a pure deletion an empty right half', () => {
+    const rows = toSplitRows(buildRows(before, ['one', 'three'].join('\n')))
+    const removed = rows.find((row) => row.left.kind === 'removed')
+
+    expect(removed?.right.kind).toBe('empty')
+    expect(removed?.unified).toBe('left')
+  })
+
+  it('keeps every line, so the two sides stay aligned', () => {
+    const rows = buildRows(before, ['one', 'CHANGED', 'three', 'four'].join('\n'))
+    const split = toSplitRows(rows)
+
+    const left = split.filter((row) => row.left.kind !== 'empty').length
+    const right = split.filter((row) => row.right.kind !== 'empty').length
+
+    expect(left).toBe(rows.filter((r) => r.oldLine !== null).length)
+    expect(right).toBe(rows.filter((r) => r.newLine !== null).length)
+  })
+})
+
+describe('anchorForHalf', () => {
+  it('anchors a removal to the old side and everything else to the new', () => {
+    expect(anchorForHalf({ kind: 'removed', line: 4, text: '' })).toEqual({ side: 'old', line: 4 })
+    expect(anchorForHalf({ kind: 'added', line: 4, text: '' })).toEqual({ side: 'new', line: 4 })
+    expect(anchorForHalf({ kind: 'context', line: 4, text: '' })).toEqual({ side: 'new', line: 4 })
+  })
+
+  it('refuses to anchor a blank half', () => {
+    expect(anchorForHalf({ kind: 'empty', line: null, text: '' })).toBeNull()
   })
 })

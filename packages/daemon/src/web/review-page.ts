@@ -1,6 +1,13 @@
 import type { ReviewSummary, SourceSummary, Thread } from '@reviewd/protocol'
 import { html, raw, type SafeHtml } from './html.js'
-import { anchorLineFor, buildRows, toHunks, type Row } from './hunks.js'
+import {
+  anchorForHalf,
+  buildRows,
+  toHunks,
+  toSplitRows,
+  type Half,
+  type SplitRow,
+} from './hunks.js'
 import { page, topBar } from './layout.js'
 import type { FileView } from './pages.js'
 import { basenameOf, displayPath } from './paths.js'
@@ -40,11 +47,18 @@ export function boxKey(box: OpenBox): string {
   return `${box.sourceId}:${box.side}:${box.line}:${box.path}`
 }
 
+export type ViewMode = 'split' | 'unified'
+
+export function parseViewMode(value: string | undefined): ViewMode {
+  return value === 'unified' ? 'unified' : 'split'
+}
+
 export function reviewPage(
   review: ReviewSummary,
   files: FileView[],
   threads: Thread[],
   open?: OpenBox,
+  view: ViewMode = 'split',
 ): SafeHtml {
   const drafts = threads.reduce(
     (count, thread) => count + thread.messages.filter((m) => m.submittedAt === null).length,
@@ -56,7 +70,7 @@ export function reviewPage(
 
   const body = html`
 ${topBar(review.title, html`<span class="rev">rev ${review.snapshotSeq}</span>`)}
-<main id="main" class="review with-bar">
+<main id="main" class="review with-bar view-${view}">
   <div class="rail">
     <h1 class="page-title">${review.title}</h1>
     ${scopeList(grouped)}
@@ -65,6 +79,7 @@ ${topBar(review.title, html`<span class="rev">rev ${review.snapshotSeq}</span>`)
 
   <div class="files">
     ${files.length === 0 ? html`<p class="empty">This revision changed nothing.</p>` : raw('')}
+    ${viewToggle(review, view)}
     ${grouped.map((group) => sourceGroup(review, group, threads, open, grouped.length > 1))}
     ${outdatedBlock(review, outdated)}
   </div>
@@ -222,55 +237,83 @@ function fileBlock(
         ? html`<p class="note">File too large to display.</p>`
         : hunks.length === 0
           ? html`<p class="note">No textual change.</p>`
-          : html`<table class="diff">
+          : html`<div class="diff">
               ${hunks.map(
                 (hunk) => html`
-                  <tr class="hunk">
-                    <td colspan="6">${hunk.header}</td>
-                  </tr>
-                  ${hunk.rows.map((row) => rowWithThreads(review, file, row, mine, open))}
+                  <div class="hunkhead">${hunk.header}</div>
+                  ${toSplitRows(hunk.rows).map((row) => splitRow(review, file, row, mine, open))}
                 `,
               )}
-            </table>`
+            </div>`
   }
 </details>`
 }
 
-function rowWithThreads(
+/**
+ * One row of the diff, carrying both halves.
+ *
+ * Split and unified render the same markup: side by side when there is room,
+ * stacked when there is not. `data-unified` says which halves survive the
+ * stack, so a context line is not printed twice.
+ */
+function splitRow(
   review: ReviewSummary,
   file: FileView,
-  row: Row,
+  row: SplitRow,
   threads: Thread[],
   open?: OpenBox,
 ): SafeHtml {
-  const anchor = anchorLineFor(row)
-  const here = anchor
-    ? threads.filter(
-        (thread) =>
-          thread.state !== 'outdated' && thread.side === anchor.side && thread.line === anchor.line,
-      )
-    : []
+  const attached = [
+    ...threadsAt(threads, row.left),
+    ...(row.right.text === row.left.text && row.left.kind === 'context'
+      ? []
+      : threadsAt(threads, row.right)),
+  ]
 
-  const boxOpen =
-    anchor !== null &&
-    open !== undefined &&
+  const boxHere = [row.left, row.right].find((half) => isOpenOn(open, file, half))
+
+  return html`<div class="row" data-unified="${row.unified}">
+  ${half(review, file, row.left, 'left')}
+  ${half(review, file, row.right, 'right')}
+</div>
+${attached.map((thread) => threadBlock(review, thread, false))}
+${boxHere ? newThreadBlock(review, file, anchorForHalf(boxHere)!) : raw('')}`
+}
+
+function threadsAt(threads: Thread[], side: Half): Thread[] {
+  const anchor = anchorForHalf(side)
+  if (!anchor) return []
+
+  return threads.filter(
+    (thread) =>
+      thread.state !== 'outdated' && thread.side === anchor.side && thread.line === anchor.line,
+  )
+}
+
+function isOpenOn(open: OpenBox | undefined, file: FileView, side: Half): boolean {
+  const anchor = anchorForHalf(side)
+  if (!open || !anchor) return false
+
+  return (
     open.sourceId === file.sourceId &&
     open.path === file.path &&
     open.side === anchor.side &&
     open.line === anchor.line
-
-  return html`${diffRow(review, file, row, anchor)}
-${here.map((thread) => threadRow(review, thread, false))}
-${boxOpen && anchor ? newThreadRow(review, file, anchor) : raw('')}`
+  )
 }
 
-function diffRow(
+function half(
   review: ReviewSummary,
   file: FileView,
-  row: Row,
-  anchor: { side: 'old' | 'new'; line: number } | null,
+  side: Half,
+  which: 'left' | 'right',
 ): SafeHtml {
-  const sign = row.kind === 'added' ? '+' : row.kind === 'removed' ? '-' : ' '
+  if (side.kind === 'empty') {
+    return html`<div class="side ${which} empty" aria-hidden="true"></div>`
+  }
+
+  const anchor = anchorForHalf(side)
+  const sign = side.kind === 'added' ? '+' : side.kind === 'removed' ? '-' : ' '
 
   const action = anchor
     ? html`<a
@@ -295,22 +338,16 @@ function diffRow(
   // The code itself is plain text. Making it a link put the source of every
   // line into the accessibility tree as a control name, which told a screen
   // reader user nothing about what activating it would do.
-  // Narrow screens get one number instead of two. The second column costs
-  // width that code needs, and the number a reviewer quotes is whichever side
-  // the row actually has.
-  return html`<tr class="code ${row.kind}">
-  <td class="num wide">${row.oldLine ?? ''}</td>
-  <td class="num wide">${row.newLine ?? ''}</td>
-  <td class="num narrow">${row.newLine ?? row.oldLine ?? ''}</td>
-  <td class="act">${action}</td>
-  <td class="sign" aria-hidden="true">${sign}</td>
-  <td class="text">${row.text}</td>
-</tr>`
+  return html`<div class="side ${which} ${side.kind}">
+  <span class="n">${side.line ?? ''}</span>
+  <span class="act">${action}</span>
+  <span class="sign" aria-hidden="true">${sign}</span>
+  <span class="t">${side.text}</span>
+</div>`
 }
 
-function threadRow(review: ReviewSummary, thread: Thread, showLocation: boolean): SafeHtml {
-  return html`<tr class="threadrow">
-  <td colspan="6">
+function threadBlock(review: ReviewSummary, thread: Thread, showLocation: boolean): SafeHtml {
+  return html`<div class="threadrow">
     <div class="thread ${thread.state}" id="t-${thread.id}">
       ${
         showLocation
@@ -356,19 +393,17 @@ function threadRow(review: ReviewSummary, thread: Thread, showLocation: boolean)
         </div>
       </form>
     </div>
-  </td>
-</tr>`
+</div>`
 }
 
-function newThreadRow(
+function newThreadBlock(
   review: ReviewSummary,
   file: FileView,
   anchor: { side: 'old' | 'new'; line: number },
 ): SafeHtml {
   const id = `new-${file.sourceId}-${anchor.side}-${anchor.line}`
 
-  return html`<tr class="threadrow">
-  <td colspan="6">
+  return html`<div class="threadrow">
     <div class="thread" id="box">
       <form method="post" action="/r/${review.reviewId}/threads">
         <input type="hidden" name="sourceId" value="${file.sourceId}">
@@ -383,8 +418,7 @@ function newThreadRow(
         </div>
       </form>
     </div>
-  </td>
-</tr>`
+</div>`
 }
 
 function outdatedBlock(review: ReviewSummary, outdated: Thread[]): SafeHtml {
@@ -395,10 +429,27 @@ function outdatedBlock(review: ReviewSummary, outdated: Thread[]): SafeHtml {
     <h3>${outdated.length} outdated comment${outdated.length === 1 ? '' : 's'}</h3>
     <span class="badge">code is gone</span>
   </summary>
-  <table class="diff">
-    ${outdated.map((thread) => threadRow(review, thread, true))}
-  </table>
+  <div class="diff">
+    ${outdated.map((thread) => threadBlock(review, thread, true))}
+  </div>
 </details>`
+}
+
+/**
+ * Split against unified.
+ *
+ * Hidden below the breakpoint where split stops fitting, because an option
+ * that cannot be honored is worse than no option. The stylesheet stacks the
+ * halves there whatever the stored preference says.
+ */
+function viewToggle(review: ReviewSummary, view: ViewMode): SafeHtml {
+  const other: ViewMode = view === 'split' ? 'unified' : 'split'
+
+  return html`<div class="viewtoggle">
+  <a class="btn quiet" href="/r/${review.reviewId}?view=${other}">
+    ${other === 'split' ? 'Side by side' : 'Unified'}
+  </a>
+</div>`
 }
 
 /**
@@ -465,7 +516,7 @@ document.addEventListener('click', (event) => {
   const link = event.target.closest('a[data-box]');
   if (!link || event.metaKey || event.ctrlKey || event.shiftKey) return;
 
-  const row = link.closest('tr');
+  const row = link.closest('.row');
   if (!row) return;
 
   const existing = row.nextElementSibling;
@@ -481,11 +532,8 @@ document.addEventListener('click', (event) => {
   const [sourceId, side, line, ...rest] = key.split(':');
   const path = rest.join(':');
 
-  const holder = document.createElement('tr');
+  const holder = document.createElement('div');
   holder.className = 'threadrow inline-box';
-  const cell = document.createElement('td');
-  cell.colSpan = 6;
-  holder.appendChild(cell);
 
   const form = document.createElement('form');
   form.method = 'post';
@@ -532,7 +580,7 @@ document.addEventListener('click', (event) => {
   actions.append(save, cancel);
   form.appendChild(actions);
 
-  cell.appendChild(form);
+  holder.appendChild(form);
   row.after(holder);
   area.focus();
 });

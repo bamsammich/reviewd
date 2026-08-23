@@ -4,7 +4,7 @@ import { listReviews, ReviewError, summarize, type Deps } from '../reviews.js'
 import { touchReview } from '../sweep.js'
 import { createThread, listThreads, replyToThread, setThreadState, submitReview, unapprove } from '../threads.js'
 import { loadFiles, messagePage, reviewListPage } from '../web/pages.js'
-import { parseOpenBox, reviewPage } from '../web/review-page.js'
+import { parseOpenBox, parseViewMode, reviewPage } from '../web/review-page.js'
 
 /**
  * The pages a reviewer opens and the forms they act through.
@@ -31,7 +31,19 @@ export function webRoutes(deps: Deps): Hono {
         listThreads(deps, reviewId, { includeDrafts: true }),
       ])
 
-      return c.html(reviewPage(review, files, threads, parseOpenBox(c.req.query('box'))).value)
+      // The preference lives in a cookie so a reload keeps it and the URL
+      // stays shareable without carrying one person's display choice.
+      const asked = c.req.query('view')
+      if (asked === 'split' || asked === 'unified') {
+        setCookie(c, 'reviewd_view', asked)
+        return c.redirect(`/r/${reviewId}`, 303)
+      }
+
+      const view = parseViewMode(cookie(c, 'reviewd_view'))
+
+      return c.html(
+        reviewPage(review, files, threads, parseOpenBox(c.req.query('box')), view).value,
+      )
     } catch (error) {
       if (error instanceof ReviewError && error.status === 404) {
         return c.html(
@@ -107,6 +119,25 @@ export function webRoutes(deps: Deps): Hono {
   })
 
   return routes
+}
+
+function cookie(c: Context, name: string): string | undefined {
+  const header = c.req.header('cookie')
+  if (!header) return undefined
+
+  for (const part of header.split(';')) {
+    const [key, ...rest] = part.trim().split('=')
+    if (key === name) return decodeURIComponent(rest.join('='))
+  }
+
+  return undefined
+}
+
+function setCookie(c: Context, name: string, value: string): void {
+  c.header(
+    'set-cookie',
+    `${name}=${encodeURIComponent(value)}; Path=/; Max-Age=31536000; SameSite=Lax`,
+  )
 }
 
 /** A redirect after every mutation, so a reload never resubmits the form. */

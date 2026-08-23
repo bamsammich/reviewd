@@ -219,38 +219,53 @@ details.file > summary h3 {
 
 /* ---------- diff ---------- */
 
-table.diff { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12.5px; }
-table.diff td { padding: .1rem .4rem; vertical-align: top; white-space: pre-wrap; overflow-wrap: anywhere; }
-table.diff td.num {
-  width: 1%; min-width: 2.1rem; text-align: right; color: var(--muted);
-  user-select: none; white-space: nowrap; font-variant-numeric: tabular-nums;
-}
-table.diff td.act { width: 1%; padding: 0; }
+/*
+ * One markup, two views.
+ *
+ * Every row carries both halves. Side by side when there is room, stacked when
+ * there is not, and the stylesheet decides which without the server ever
+ * knowing how wide the screen is. The data-unified attribute says which halves
+ * survive the stack, so a context line is not printed twice.
+ */
 
-/* One number column on a phone, two once there is room for both. */
-table.diff td.num.wide { display: none; }
-@media (min-width: 700px) {
-  table.diff td.num.wide { display: table-cell; }
-  table.diff td.num.narrow { display: none; }
-}
-table.diff td.sign {
-  width: 1%; user-select: none; padding: .1rem .15rem;
-  border-left: 1px solid var(--rule);
-}
-table.diff tr.added td { background: var(--add-bg); }
-table.diff tr.removed td { background: var(--del-bg); }
-table.diff tr.added td.sign { color: var(--add-ink); }
-table.diff tr.removed td.sign { color: var(--del-ink); }
-table.diff tr.hunk td {
+.diff { font-family: var(--mono); font-size: 12.5px; }
+
+.hunkhead {
   background: var(--surface-2); color: var(--muted); font-size: .72rem;
-  padding: .3rem .5rem; white-space: nowrap;
+  padding: .3rem .5rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+
+.row { display: grid; grid-template-columns: 1fr; }
+
+.side {
+  display: grid;
+  grid-template-columns: 2.6rem 1.7rem 1rem minmax(0, 1fr);
+  align-items: start;
+  min-width: 0;
+}
+.side .n {
+  text-align: right; padding: .1rem .4rem; color: var(--muted);
+  user-select: none; font-variant-numeric: tabular-nums;
+}
+.side .act { padding: 0; }
+.side .sign { padding: .1rem 0; user-select: none; text-align: center; }
+.side .t { padding: .1rem .4rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.side.added { background: var(--add-bg); }
+.side.added .sign { color: var(--add-ink); }
+.side.removed { background: var(--del-bg); }
+.side.removed .sign { color: var(--del-ink); }
+.side.empty { background: var(--surface-2); }
+
+/* Stacked by default, which is what a phone gets and what unified means. */
+.row[data-unified='right'] > .side.left,
+.row[data-unified='left'] > .side.right { display: none; }
 
 /* The comment affordance. Always visible rather than revealed on hover,
    because a phone has no hover and a control nobody can find does not exist. */
 a.addnote {
   display: flex; align-items: center; justify-content: center;
-  width: 1.7rem; min-height: 1.5rem; height: 100%;
+  width: 100%; min-height: 1.5rem;
   color: var(--muted); text-decoration: none; font-weight: 700; font-size: .95rem;
   border-radius: 4px;
 }
@@ -258,9 +273,11 @@ a.addnote:hover, a.addnote:focus-visible { background: var(--accent); color: var
 
 /* Coarse pointers get rows tall enough to hit without aiming. */
 @media (pointer: coarse) {
-  table.diff td { padding-top: .25rem; padding-bottom: .25rem; }
-  a.addnote { width: 2.1rem; min-height: 1.9rem; }
+  .side .n, .side .t, .side .sign { padding-top: .25rem; padding-bottom: .25rem; }
+  a.addnote { min-height: 1.9rem; }
 }
+
+.viewtoggle { display: none; }
 
 /* ---------- threads ---------- */
 
@@ -329,6 +346,20 @@ main.with-bar { padding-bottom: 7.5rem; }
 
 @media (min-width: 1024px) {
   main { padding: 1.25rem 1.5rem; }
+
+  .viewtoggle { display: flex; justify-content: flex-end; margin-bottom: .6rem; }
+
+  /* Below this width two columns of code are unreadable, so the preference is
+     ignored rather than honored into uselessness. */
+  main.view-split .row { grid-template-columns: 1fr 1fr; }
+
+  /* Both halves come back, at a specificity that beats the stacking rules
+     above rather than relying on source order. */
+  main.view-split .row[data-unified='right'] > .side.left,
+  main.view-split .row[data-unified='left'] > .side.right,
+  main.view-split .row > .side { display: grid; }
+  main.view-split .row > .side.left { border-right: 1px solid var(--rule); }
+  main.view-split .side { grid-template-columns: 2.6rem 1.5rem .9rem minmax(0, 1fr); }
 
   main.review {
     display: grid;

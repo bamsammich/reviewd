@@ -109,3 +109,104 @@ export function anchorLineFor(row: Row): { side: 'old' | 'new'; line: number } |
   if (row.oldLine !== null) return { side: 'old', line: row.oldLine }
   return null
 }
+
+// ---------------------------------------------------------------------------
+// split view
+// ---------------------------------------------------------------------------
+
+export type HalfKind = 'context' | 'added' | 'removed' | 'empty'
+
+export interface Half {
+  kind: HalfKind
+  line: number | null
+  text: string
+}
+
+/**
+ * One row of a split diff, and which halves a unified rendering should show.
+ *
+ * Both views come from this one shape, which is what lets a stylesheet collapse
+ * split into unified on a narrow screen without the server ever knowing how
+ * wide that screen is.
+ */
+export interface SplitRow {
+  left: Half
+  right: Half
+  /** Halves worth showing once the two columns stack into one. */
+  unified: 'left' | 'right' | 'both'
+}
+
+const EMPTY: Half = { kind: 'empty', line: null, text: '' }
+
+/**
+ * Pairs removals with the additions that replaced them.
+ *
+ * A run of removals followed by a run of additions is one edit, so they line up
+ * index by index and the longer run keeps its leftovers opposite a blank. An
+ * unpaired line still occupies a row, because a split view that closes the gap
+ * stops showing which lines correspond.
+ */
+export function toSplitRows(rows: Row[]): SplitRow[] {
+  const out: SplitRow[] = []
+  let i = 0
+
+  while (i < rows.length) {
+    const row = rows[i] as Row
+
+    if (row.kind === 'context') {
+      // Identical on both sides, so a unified rendering keeps the new one and
+      // drops the duplicate.
+      out.push({
+        left: { kind: 'context', line: row.oldLine, text: row.text },
+        right: { kind: 'context', line: row.newLine, text: row.text },
+        unified: 'right',
+      })
+      i += 1
+      continue
+    }
+
+    const removed: Row[] = []
+    const added: Row[] = []
+
+    while (i < rows.length && (rows[i] as Row).kind === 'removed') {
+      removed.push(rows[i] as Row)
+      i += 1
+    }
+    while (i < rows.length && (rows[i] as Row).kind === 'added') {
+      added.push(rows[i] as Row)
+      i += 1
+    }
+
+    for (let n = 0; n < Math.max(removed.length, added.length); n += 1) {
+      const del = removed[n]
+      const add = added[n]
+
+      // A pair whose halves read the same is not an edit. Line diffing can
+      // produce one when a file's last line has no trailing newline, and
+      // rendering it paints an identical line red on one side and green on the
+      // other, which tells a reviewer something untrue.
+      if (del && add && del.text === add.text) {
+        out.push({
+          left: { kind: 'context', line: del.oldLine, text: del.text },
+          right: { kind: 'context', line: add.newLine, text: add.text },
+          unified: 'right',
+        })
+        continue
+      }
+
+      out.push({
+        left: del ? { kind: 'removed', line: del.oldLine, text: del.text } : EMPTY,
+        right: add ? { kind: 'added', line: add.newLine, text: add.text } : EMPTY,
+        unified: del && add ? 'both' : del ? 'left' : 'right',
+      })
+    }
+  }
+
+  return out
+}
+
+/** The line a comment on this half would anchor to. */
+export function anchorForHalf(half: Half): { side: 'old' | 'new'; line: number } | null {
+  if (half.kind === 'empty' || half.line === null) return null
+  return { side: half.kind === 'removed' ? 'old' : 'new', line: half.line }
+}
