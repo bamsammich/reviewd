@@ -131,7 +131,7 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
     const end = Number(form['endLine'])
     const endLine = Number.isInteger(end) && end > line ? end : undefined
 
-    await createThread(deps, reviewId, {
+    const created = await createThread(deps, reviewId, {
       sourceId: String(form['sourceId'] ?? ''),
       path: String(form['path'] ?? ''),
       line,
@@ -141,7 +141,10 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
       ...(endLine === undefined ? {} : { endLine }),
     })
 
-    return back(c, reviewId)
+    // Back to the comment just written. Without the id this redirected to the
+    // top of the review, so writing a note two thousand lines down cost the
+    // reviewer their place every time.
+    return back(c, reviewId, created.threadId)
   })
 
   routes.post('/r/:id/threads/:threadId/replies', async (c) => {

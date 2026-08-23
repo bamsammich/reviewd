@@ -99,6 +99,11 @@ a { color: var(--accent); }
 
 /* ---------- app bar ---------- */
 
+/* Anything a fragment can point at has to clear the sticky app bar, or the
+   browser scrolls it to y=0 and the bar covers its first 53 pixels — which is
+   the top of the comment you just wrote. */
+.thread, #box, .sourcegroup, details.file { scroll-margin-top: 4rem; }
+
 header.top {
   position: sticky; top: 0; z-index: 20;
   display: flex; align-items: center; gap: .6rem;

@@ -95,7 +95,7 @@ export async function waitForSubmission(
 ): Promise<void> {
   if (!reviewId) {
     process.stderr.write('reviewd: wait needs --review <id>\n')
-    process.exitCode = 1
+    process.exitCode = WAIT_EXIT.failed
     return
   }
 
@@ -110,17 +110,19 @@ export async function waitForSubmission(
     const remaining = Math.min(deadline - Date.now(), MAX_POLL_MS)
     const result = await client.wait(reviewId, remaining, since)
 
+    // Every verdict exits 0. The answer is the first line of stdout, which is
+    // where a caller reads it from regardless; an exit code that said
+    // "changes requested" was indistinguishable from a command that crashed.
     if (result.wokeOn === 'released') {
-      process.stdout.write('review released\n')
-      process.exitCode = WAIT_EXIT.gone
+      process.stdout.write('released\n')
+      process.exitCode = WAIT_EXIT.answered
       return
     }
 
     if (result.wokeOn === 'submission') {
       process.stdout.write(`${result.verdict ?? 'submitted'}\n`)
       if (result.url) process.stdout.write(`${result.url}\n`)
-      process.exitCode =
-        result.verdict === 'approved' ? WAIT_EXIT.approved : WAIT_EXIT.changesRequested
+      process.exitCode = WAIT_EXIT.answered
       return
     }
   }

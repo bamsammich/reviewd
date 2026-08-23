@@ -44,7 +44,8 @@ default bind is loopback; --bind-public is required to widen that, and the
 startup report names what became reachable.
 
 Exit codes for gate: 0 allowed, 1 denied.
-Exit codes for wait: 0 approved, 2 changes requested, 3 released, 124 timeout.
+Exit codes for wait: 0 answered, 124 timeout, 1 could not ask. The verdict is
+the first line of output, because a verdict is not a failure.
 `
 
 async function main(): Promise<void> {

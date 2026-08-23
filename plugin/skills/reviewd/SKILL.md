@@ -38,14 +38,19 @@ Run this as a **background** Bash command so the session resumes when it exits:
 reviewd wait --review <id> --timeout 3600
 ```
 
-The exit code carries the verdict, so read it rather than the output:
+The verdict is the first line of output. Read it:
 
-| Code | Meaning | What to do |
-|---|---|---|
-| 0 | approved | commit |
-| 2 | changes requested, or notes | read the threads, fix, snapshot again |
-| 3 | released or swept | the review is gone; open a new one if work remains |
-| 124 | timeout | wait again, or ask the user |
+| Output | What to do |
+|---|---|
+| `approved` | commit, then release |
+| `changes_requested` or `comment` | read the threads, fix, reply, snapshot, wait again |
+| `released` | the review is gone; open a new one if work remains |
+| `timeout` | wait again, or ask the user |
+
+The exit code says whether the wait worked, not what the answer was: 0 for any
+verdict, 124 for a timeout, 1 if the daemon could not be asked. A verdict is
+not a failure, and a harness that treats a non-zero exit as a broken command
+should not be told that requesting changes is one.
 
 Do not poll in a loop and do not call the wait repeatedly in the foreground.
 One background command per wait.

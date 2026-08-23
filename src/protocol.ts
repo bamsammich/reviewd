@@ -226,14 +226,25 @@ export const waitResult = z.object({
 export type WaitResult = z.infer<typeof waitResult>
 
 /**
- * Exit codes for `reviewd wait`. The harness reads these instead of parsing
- * output, so the agent knows the verdict before reading a byte.
+ * Exit codes for `reviewd wait`.
+ *
+ * A verdict is not a failure. These used to carry the verdict itself — 2 for
+ * changes requested, 3 for released — and every harness that runs a command in
+ * the background reads a non-zero exit as something having gone wrong. Asking
+ * for changes reported itself as a broken command, which is both alarming and
+ * untrue.
+ *
+ * So any answer at all exits 0 and the verdict goes to stdout, which is where
+ * the caller was reading it from anyway. Non-zero now means what it means
+ * everywhere else: the command could not do its job.
  */
 export const WAIT_EXIT = {
-  approved: 0,
-  changesRequested: 2,
-  gone: 3,
+  /** A verdict arrived. Which one is the first line of stdout. */
+  answered: 0,
+  /** Nobody answered before the deadline. */
   timeout: 124,
+  /** The daemon could not be reached, or the review is not there. */
+  failed: 1,
 } as const
 
 // ---------------------------------------------------------------------------
