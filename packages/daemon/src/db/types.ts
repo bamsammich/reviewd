@@ -57,6 +57,16 @@ export interface FileChangeTable {
   truncated: Bool
 }
 
+/**
+ * A snapshot covers every source at once, and each source carries its own
+ * fingerprint, because the gate asks about one repository at a time.
+ */
+export interface SnapshotSourceTable {
+  snapshot_id: string
+  source_id: string
+  fingerprint: string
+}
+
 export interface BlobTable {
   /** sha256 of the content. Content-addressed, so it dedupes across snapshots. */
   id: string
@@ -124,6 +134,7 @@ export interface Database {
   review: ReviewTable
   source: SourceTable
   snapshot: SnapshotTable
+  snapshot_source: SnapshotSourceTable
   file_change: FileChangeTable
   blob: BlobTable
   thread: ThreadTable

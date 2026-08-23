@@ -67,6 +67,21 @@ const initial: Migration = {
       .addUniqueConstraint('snapshot_review_seq_unique', ['review_id', 'seq'])
       .execute()
 
+    // A snapshot covers every source at once, but each source carries its own
+    // fingerprint, because the gate asks about one repository at a time and an
+    // approval is per source root.
+    await db.schema
+      .createTable('snapshot_source')
+      .addColumn('snapshot_id', 'text', (c) =>
+        c.notNull().references('snapshot.id').onDelete('cascade'),
+      )
+      .addColumn('source_id', 'text', (c) =>
+        c.notNull().references('source.id').onDelete('cascade'),
+      )
+      .addColumn('fingerprint', 'text', (c) => c.notNull())
+      .addPrimaryKeyConstraint('snapshot_source_pk', ['snapshot_id', 'source_id'])
+      .execute()
+
     // Content-addressed, so the same bytes across snapshots and reviews store once.
     await db.schema
       .createTable('blob')
@@ -210,6 +225,7 @@ const initial: Migration = {
   async down(db: MigrationDb): Promise<void> {
     for (const table of [
       'approval',
+      'snapshot_source',
       'submission',
       'message',
       'thread',

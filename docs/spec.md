@@ -239,7 +239,7 @@ snapshot                        -- a revision of the review
   id            TEXT PK
   review_id     TEXT FK
   seq           INTEGER        1, 2, 3...
-  fingerprint   TEXT           sha256 over the whole normalized change set
+  fingerprint   TEXT           sha256 over every source's change set at once
   created_at    INTEGER
   UNIQUE (review_id, seq)
 
@@ -254,6 +254,12 @@ file_change
   new_blob_id   TEXT NULL FK -> blob.id
   is_binary     INTEGER
   truncated     INTEGER        content exceeded max_blob_bytes
+
+snapshot_source                 -- a snapshot covers every source; each has its own fingerprint
+  snapshot_id   TEXT FK
+  source_id     TEXT FK
+  fingerprint   TEXT           what the gate matches for this root
+  PRIMARY KEY (snapshot_id, source_id)
 
 blob                            -- content-addressed, deduped across snapshots
   id            TEXT PK        sha256 of content

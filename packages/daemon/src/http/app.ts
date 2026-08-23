@@ -4,6 +4,7 @@ import { capabilities as capabilitiesSchema } from '@reviewd/protocol'
 import type { ResolvedConfig } from '../config.js'
 import type { Database } from '../db/types.js'
 import { hardening } from './hardening.js'
+import { reviewRoutes } from './routes-reviews.js'
 
 export interface AppContext {
   config: ResolvedConfig
@@ -24,6 +25,8 @@ export function createApp(ctx: AppContext): App {
   for (const middleware of hardening(ctx.config)) {
     app.use('*', middleware)
   }
+
+  app.route('/', reviewRoutes({ db: ctx.db, config: ctx.config }))
 
   app.get('/api/health', (c) => c.json({ ok: true }))
 
