@@ -36,25 +36,38 @@ deny() {
 # errs toward denying a command that was not a commit, which is the direction
 # to be wrong in, and the alternative of blanking quoted text would let
 # `sh -c '... git commit'` through unchecked.
+
+# Splits a command into the segments a shell would run, in order.
+segments() {
+  printf '%s' "$1" | sed -E 's/(\&\&|\|\||[;|`()])/\n/g'
+}
+
+# Strips leading whitespace, environment assignments, and wrappers, leaving
+# whatever the shell would actually execute.
+command_head() {
+  printf '%s' "$1" | sed -E '
+    s/^[[:space:]]+//
+    :strip
+    s/^[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+//
+    t strip
+    s/^(sudo|command|time|nice|env|xargs|rtk)[[:space:]]+//
+    t strip
+  '
+}
+
+# Flags and their arguments may sit between git and the subcommand, which is
+# what makes `git -C path commit` a commit and `git -C path show` not.
+is_commit_head() {
+  printf '%s' "$1" |
+    grep -Eq '^git([[:space:]]+-[^[:space:]]+([[:space:]]+[^-][^[:space:]]*)?)*[[:space:]]+commit([[:space:]]|$)'
+}
+
 is_commit() {
-  local segment head
+  local segment
   local IFS=$'\n'
 
-  for segment in $(printf '%s' "$1" | sed -E 's/(\&\&|\|\||[;|`()])/\n/g'); do
-    head=$(printf '%s' "$segment" | sed -E '
-      s/^[[:space:]]+//
-      :strip
-      s/^[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+//
-      t strip
-      s/^(sudo|command|time|nice|env|xargs|rtk)[[:space:]]+//
-      t strip
-    ')
-
-    # Flags and their arguments may sit between git and the subcommand, which
-    # is what makes `git -C path commit` a commit and `git -C path show` not.
-    printf '%s' "$head" |
-      grep -Eq '^git([[:space:]]+-[^[:space:]]+([[:space:]]+[^-][^[:space:]]*)?)*[[:space:]]+commit([[:space:]]|$)' &&
-      return 0
+  for segment in $(segments "$1"); do
+    is_commit_head "$(command_head "$segment")" && return 0
   done
 
   return 1
@@ -68,48 +81,58 @@ printf '%s' "$cmd" | grep -q 'REVIEWD_SKIP=1' && exit 0
 # Which repository is this commit actually for?
 #
 # The payload's cwd is where the shell starts, not where the commit runs. A
-# command can move first, `cd /repo && git commit`, or never move at all,
-# `git -C /repo commit`. Neither was visible here: the gate resolved cwd alone,
-# found no repository, and exited 0. That waved every such commit straight
-# through, and where cwd happened to be a different repository it checked the
-# wrong one's approval.
+# command can move first, `cd /repo && git commit`, or name a repository
+# without moving, `git -C /repo commit`.
 #
-# So collect every directory this command could mean, resolve each to a
-# repository root, and require them to agree. No answer, or more than one,
-# denies rather than guesses.
-candidates=$(
-  printf '%s\n' "$cwd"
-  printf '%s' "$cmd" |
-    grep -oE '(^|[;&|(])[[:space:]]*(cd|pushd)[[:space:]]+[^;&|)[:space:]]+' |
-    sed -E 's/.*(cd|pushd)[[:space:]]+//'
-  printf '%s' "$cmd" |
-    grep -oE 'git[[:space:]]+-C[[:space:]]+[^;&|)[:space:]]+' |
-    sed -E 's/.*-C[[:space:]]+//'
-)
+# An earlier version collected every directory the command mentioned and
+# demanded they agree. That denied `cd /other-repo && git commit` run from
+# anywhere else, which is an ordinary thing to do and not ambiguous at all:
+# the shell runs the cd first. So follow the shell instead of second-guessing
+# it. Walk the segments in order, carry the working directory, and stop at the
+# commit. Whatever directory it lands in is the answer.
+resolve_dir() {
+  local from=$1 path=$2
 
-roots=""
-while IFS= read -r candidate; do
-  [ -n "$candidate" ] || continue
+  path=${path#[\"\']}
+  path=${path%[\"\']}
+  case $path in '~' | '~/'*) path="$HOME${path#\~}" ;; esac
 
-  candidate=${candidate#[\"\']}
-  candidate=${candidate%[\"\']}
-  case $candidate in '~' | '~/'*) candidate="$HOME${candidate#\~}" ;; esac
+  # Relative paths are relative to where the shell has walked to so far, which
+  # is why this cds from `from` rather than resolving the fragment alone.
+  (cd "$from" 2>/dev/null && cd "$path" 2>/dev/null && pwd) || printf ''
+}
 
-  # Relative paths are relative to where the shell started, which is why this
-  # walks from cwd rather than calling realpath on the fragment alone.
-  resolved=$(cd "$cwd" 2>/dev/null && cd "$candidate" 2>/dev/null && pwd) || continue
-  [ -n "$resolved" ] || continue
+target_dir() {
+  local dir=$cwd segment head path
+  local IFS=$'\n'
 
-  top=$(git -C "$resolved" rev-parse --show-toplevel 2>/dev/null) || continue
-  [ -n "$top" ] && roots=$(printf '%s\n%s' "$roots" "$top")
-done <<CANDIDATES
-$candidates
-CANDIDATES
+  for segment in $(segments "$cmd"); do
+    head=$(command_head "$segment")
 
-roots=$(printf '%s\n' "$roots" | grep . | sort -u)
-count=$(printf '%s\n' "$roots" | grep -c .)
+    if is_commit_head "$head"; then
+      # -C decides the repository for this one invocation without moving the
+      # shell, so it wins over wherever the walk had reached.
+      path=$(printf '%s' "$head" | sed -nE 's/.*[[:space:]]-C[[:space:]]+([^[:space:]]+).*/\1/p')
+      [ -n "$path" ] && resolve_dir "$dir" "$path" || printf '%s' "$dir"
+      return
+    fi
 
-if [ "$count" -eq 0 ]; then
+    case $head in
+      cd\ * | pushd\ *)
+        path=$(printf '%s' "$head" | sed -E 's/^(cd|pushd)[[:space:]]+//; s/[[:space:]].*//')
+        [ -n "$path" ] && dir=$(resolve_dir "$dir" "$path")
+        [ -n "$dir" ] || { printf ''; return; }
+        ;;
+    esac
+  done
+
+  printf '%s' "$dir"
+}
+
+target=$(target_dir)
+root=$(git -C "${target:-/nonexistent}" rev-parse --show-toplevel 2>/dev/null) || root=""
+
+if [ -z "$root" ]; then
   deny "reviewd gate: this is a commit, but no git repository could be identified
 for it, so it cannot be checked.
 
@@ -120,28 +143,35 @@ Override this one commit only if the user explicitly asks: prefix the command
 with REVIEWD_SKIP=1."
 fi
 
-if [ "$count" -gt 1 ]; then
-  deny "reviewd gate: this command reaches more than one repository, so which one
-is being committed is ambiguous:
+gitdir=$(git -C "$root" rev-parse --absolute-git-dir 2>/dev/null) || exit 0
+[ -f "$gitdir/reviewd-gate-off" ] && exit 0
 
-$(printf '%s\n' "$roots" | sed 's/^/  /')
+# A tool that is not there is not the same as nothing to review, and both used
+# to produce an empty fingerprint and an allow. Deleting the binary during a
+# rename was enough to open the gate silently. The daemon-down branch below has
+# always denied; this now matches it.
+if ! command -v "$REVIEWD" >/dev/null 2>&1 && [ ! -x "$REVIEWD" ]; then
+  deny "reviewd gate: \"$REVIEWD\" is not on PATH, so this commit cannot be checked.
 
-Commit them one command at a time.
+Install it, or point REVIEWD_BIN at it.
 
 Override this one commit only if the user explicitly asks: prefix the command
 with REVIEWD_SKIP=1."
 fi
 
-root=$roots
-
-gitdir=$(git -C "$root" rev-parse --absolute-git-dir 2>/dev/null) || exit 0
-[ -f "$gitdir/reviewd-gate-off" ] && exit 0
-
 # Nothing to review means nothing to gate: an --amend that only edits a message
 # leaves the tree identical to HEAD.
 empty_hash=$(printf '' | shasum -a 256 | cut -d' ' -f1)
-fingerprint=$("$REVIEWD" fingerprint "$root" 2>/dev/null) || fingerprint=""
-[ -z "$fingerprint" ] && exit 0
+if ! fingerprint=$("$REVIEWD" fingerprint "$root" 2>/dev/null) || [ -z "$fingerprint" ]; then
+  deny "reviewd gate: could not read the working tree of $root, so this commit
+cannot be checked.
+
+Try it by hand to see why:
+  $REVIEWD fingerprint \"$root\"
+
+Override this one commit only if the user explicitly asks: prefix the command
+with REVIEWD_SKIP=1."
+fi
 [ "$fingerprint" = "$empty_hash" ] && exit 0
 
 answer=$("$REVIEWD" gate "$root" --json 2>/dev/null)
