@@ -3,6 +3,7 @@ import type { ReviewSummary } from '@reviewd/protocol'
 import type { Database } from '../db/types.js'
 import { html, raw, type SafeHtml } from './html.js'
 import { page, topBar } from './layout.js'
+import { basenameOf } from './paths.js'
 
 /**
  * Server-rendered review pages.
@@ -13,45 +14,57 @@ import { page, topBar } from './layout.js'
  */
 
 export function reviewListPage(reviews: ReviewSummary[]): SafeHtml {
-  const body = html` ${topBar(`${reviews.length} open`)}
-    <main>
-      ${
+  const waiting = reviews.filter((review) => review.threadsAwaitingHuman > 0).length
+
+  const body = html`${topBar(reviews.length === 0 ? 'nothing open' : `${reviews.length} open`)}
+<main id="main">
+  <h1 class="page-title">
+    ${reviews.length === 0 ? 'No open reviews' : `${reviews.length} open review${reviews.length === 1 ? '' : 's'}`}
+    ${waiting > 0 ? html`<span class="badge you">${waiting} waiting on you</span>` : raw('')}
+  </h1>
+  ${
     reviews.length === 0
-      ? html`<p class="empty">No open reviews. An agent opens one when it has changes to show.</p>`
+      ? html`<p class="empty">
+          An agent opens a review when it has changes to show, and sends you a link.
+        </p>`
       : html`<ul class="reviews">
-          ${reviews.map(
-            (review) =>
-              html`<li>
-                <a href="/r/${review.reviewId}">
-                  <div class="title">${review.title}</div>
-                  <div class="meta">
-                    ${age(review.ageSeconds)} ago &middot; ${review.filesChanged}
-                    file${review.filesChanged === 1 ? '' : 's'} &middot; revision
-                    ${review.snapshotSeq}
-                    ${
-                    review.sources.length > 1
-                      ? html`&middot; ${review.sources.length} roots`
-                      : raw('')
-                  }
-                    ${
-                    review.threadsAwaitingHuman > 0
-                      ? html` <span class="badge you">${review.threadsAwaitingHuman} for you</span>`
-                      : raw('')
-                  }
-                    ${
-                    review.status === 'approved'
-                      ? html` <span class="badge approved">approved</span>`
-                      : raw('')
-                  }
-                  </div>
-                </a>
-              </li>`,
-          )}
+          ${reviews.map((review) => reviewCard(review))}
         </ul>`
   }
-    </main>`
+</main>`
 
   return page('reviewd', body)
+}
+
+/**
+ * One review in the list.
+ *
+ * The roots come before the counts, because the first thing worth knowing
+ * about a review is which code it covers.
+ */
+function reviewCard(review: ReviewSummary): SafeHtml {
+  return html`<li>
+  <a href="/r/${review.reviewId}">
+    <div class="title">${review.title}</div>
+    <div class="roots">
+      ${review.sources.map(
+        (source) => html`<span title="${source.rootPath}"
+          >${source.label || basenameOf(source.rootPath)}</span
+        >`,
+      )}
+    </div>
+    <div class="meta">
+      ${review.filesChanged} file${review.filesChanged === 1 ? '' : 's'} &middot; rev
+      ${review.snapshotSeq} &middot; ${age(review.ageSeconds)} ago
+      ${
+        review.threadsAwaitingHuman > 0
+          ? html` <span class="badge you">${review.threadsAwaitingHuman} for you</span>`
+          : raw('')
+      }
+      ${review.status === 'approved' ? html` <span class="badge approved">approved</span>` : raw('')}
+    </div>
+  </a>
+</li>`
 }
 
 /** A page that says why there is nothing to look at. */

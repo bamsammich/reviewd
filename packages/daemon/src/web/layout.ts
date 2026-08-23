@@ -1,209 +1,386 @@
 import { html, raw, type SafeHtml } from './html.js'
 
 /**
- * The page shell.
+ * The page shell and the whole stylesheet.
  *
  * Server-rendered with a small script for the interactive parts rather than a
  * client framework. Reviewing happens on a phone on a cell connection, the
  * whole interaction surface is a few forms, and a bundle would cost more than
  * it returns.
+ *
+ * Colors are tokens defined once per theme, and both themes are defined
+ * together so a value cannot exist in one and not the other. Text tokens are
+ * chosen to clear 4.5:1 against the surface they sit on.
  */
 
 const STYLE = `
 :root {
   color-scheme: light dark;
-  --bg: #fbfbfc;
-  --surface: #fff;
-  --ink: #16181d;
-  --muted: #626a78;
-  --rule: #dfe3e9;
-  --accent: #2f5391;
-  --add-bg: #e6ffec;
-  --add-rule: #74c990;
-  --del-bg: #ffebe9;
-  --del-rule: #e0868a;
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --surface-2: #f0f2f6;
+  --ink: #14171d;
+  --ink-2: #3c4453;
+  --muted: #5b6474;
+  --rule: #dde1e8;
+  --rule-strong: #c3cad6;
+  --accent: #2a4f96;
+  --accent-ink: #ffffff;
+  --accent-soft: #e7edf9;
+  --add-bg: #e8f7ed;
+  --add-ink: #216e3c;
+  --del-bg: #fdeceb;
+  --del-ink: #a3322f;
+  --warn-ink: #8a5a12;
+
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+
+  --radius: 10px;
+  --tap: 44px;
 }
+
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0e1116; --surface: #151a21; --ink: #dee4ee; --muted: #8b95a5;
-    --rule: #262e3a; --accent: #8fade6;
-    --add-bg: #12261a; --add-rule: #2f6f43;
-    --del-bg: #2b1618; --del-rule: #8c3b40;
+    --bg: #0d1016;
+    --surface: #151a22;
+    --surface-2: #1c222c;
+    --ink: #e3e8f0;
+    --ink-2: #bcc5d3;
+    --muted: #93a0b2;
+    --rule: #262e3a;
+    --rule-strong: #3a4453;
+    --accent: #8fb0ea;
+    --accent-ink: #0d1016;
+    --accent-soft: #1a2434;
+    --add-bg: #10241a;
+    --add-ink: #63c187;
+    --del-bg: #2a1517;
+    --del-ink: #e58b85;
+    --warn-ink: #d8a95e;
   }
 }
-* { box-sizing: border-box; }
-body {
-  margin: 0; background: var(--bg); color: var(--ink);
-  font-family: var(--sans); font-size: 15px; line-height: 1.5;
-  -webkit-text-size-adjust: 100%;
-}
-a { color: var(--accent); }
-header.top {
-  position: sticky; top: 0; z-index: 5;
-  display: flex; align-items: center; gap: .75rem; flex-wrap: wrap;
-  padding: .65rem 1rem; background: var(--surface);
-  border-bottom: 1px solid var(--rule);
-}
-header.top h1 { font-size: 1rem; margin: 0; font-weight: 600; }
-header.top .spacer { flex: 1 1 auto; }
-.meta { color: var(--muted); font-size: .82rem; }
-main { padding: 1rem; max-width: 100%; }
 
-.badge {
-  display: inline-block; padding: .1rem .45rem; border-radius: 999px;
-  font-size: .72rem; font-weight: 600; border: 1px solid var(--rule);
-  color: var(--muted);
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.55;
 }
-.badge.you { border-color: var(--accent); color: var(--accent); }
-.badge.approved { border-color: var(--add-rule); color: var(--add-rule); }
+
+a { color: var(--accent); }
+
+/* Every interactive thing gets a visible ring. Removing it is the fastest way
+   to make an interface unusable by keyboard. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.skip {
+  position: absolute; left: -9999px; top: 0; z-index: 100;
+  background: var(--surface); color: var(--ink);
+  padding: .6rem 1rem; border: 1px solid var(--accent); border-radius: 0 0 var(--radius) 0;
+}
+.skip:focus { left: 0; }
+
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap;
+}
+
+/* ---------- app bar ---------- */
+
+header.top {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; gap: .6rem;
+  padding: .5rem .9rem; background: var(--surface);
+  border-bottom: 1px solid var(--rule);
+  min-height: 3rem;
+}
+header.top .home {
+  font-weight: 700; font-size: .95rem; color: var(--ink);
+  text-decoration: none; flex: 0 0 auto;
+  display: inline-flex; align-items: center; min-height: 2.25rem; padding: 0 .15rem;
+}
+header.top .crumb { color: var(--muted); flex: 0 0 auto; }
+header.top .where {
+  font-size: .95rem; font-weight: 600; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; min-width: 0;
+}
+header.top .rev {
+  color: var(--muted); font-size: .8rem; flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+main { padding: .9rem; }
+
+/* ---------- review list ---------- */
+
+.page-title { font-size: 1.25rem; margin: 0 0 .8rem; letter-spacing: -.01em; }
 
 ul.reviews { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; }
-ul.reviews li {
-  background: var(--surface); border: 1px solid var(--rule); border-radius: 8px;
+ul.reviews li { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); }
+ul.reviews a {
+  display: block; padding: .85rem 1rem; text-decoration: none; color: inherit;
+  border-radius: var(--radius);
 }
-ul.reviews a { display: block; padding: .8rem 1rem; text-decoration: none; color: inherit; }
-ul.reviews .title { font-weight: 600; margin-bottom: .2rem; }
+ul.reviews .title { font-weight: 600; margin-bottom: .3rem; }
+ul.reviews .roots {
+  font-family: var(--mono); font-size: .76rem; color: var(--muted);
+  display: flex; flex-wrap: wrap; gap: .2rem .7rem; margin-bottom: .35rem;
+}
+
+.meta { color: var(--muted); font-size: .82rem; }
+
+.badge {
+  display: inline-flex; align-items: center; gap: .25rem;
+  padding: .12rem .5rem; border-radius: 999px;
+  font-size: .72rem; font-weight: 600; border: 1px solid var(--rule-strong);
+  color: var(--muted); white-space: nowrap;
+}
+.badge.you { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.badge.approved { border-color: var(--add-ink); color: var(--add-ink); }
+.badge.draft { border-color: var(--warn-ink); color: var(--warn-ink); }
+
+/* ---------- scope: what is under review ---------- */
+
+.scope { margin: 0 0 .9rem; }
+.scope h2 {
+  font-size: .74rem; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--muted); margin: 0 0 .4rem;
+}
+.scope ul { list-style: none; margin: 0; padding: 0; display: grid; gap: .4rem; }
+.scope a.root {
+  display: flex; align-items: center; gap: .5rem .6rem; flex-wrap: wrap;
+  padding: .5rem .7rem; min-height: var(--tap);
+  background: var(--surface); border: 1px solid var(--rule);
+  border-left: 3px solid var(--rule-strong);
+  border-radius: var(--radius); text-decoration: none; color: inherit;
+}
+.scope a.root.ok { border-left-color: var(--add-ink); }
+.scope .name { font-family: var(--mono); font-weight: 600; font-size: .85rem; }
+.scope .path {
+  font-family: var(--mono); font-size: .74rem; color: var(--muted);
+  overflow-wrap: anywhere; flex: 1 1 100%;
+}
+.scope .count {
+  margin-left: auto; font-size: .76rem; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.hint {
+  margin: 0 0 .9rem; padding: .6rem .8rem; border-radius: var(--radius);
+  background: var(--accent-soft); color: var(--ink-2);
+  border: 1px solid var(--accent); font-size: .85rem;
+}
+.hint b { color: var(--ink); }
+.hint .key {
+  font-family: var(--mono); font-weight: 700; color: var(--accent);
+  padding: 0 .2rem;
+}
+
+/* ---------- files ---------- */
+
+.sourcegroup { margin-bottom: 1.1rem; }
+.sourcegroup > h2 {
+  font-size: .78rem; font-family: var(--mono); color: var(--muted);
+  margin: 0 0 .45rem; font-weight: 600;
+  display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap;
+}
 
 details.file {
   background: var(--surface); border: 1px solid var(--rule);
-  border-radius: 8px; margin-bottom: .8rem; overflow: hidden;
+  border-radius: var(--radius); margin-bottom: .7rem; overflow: hidden;
 }
 details.file > summary {
-  padding: .6rem .8rem; cursor: pointer; font-family: var(--mono);
-  font-size: .8rem; display: flex; gap: .5rem; align-items: center;
-  background: var(--surface);
-  border-bottom: 1px solid var(--rule);
-  /* Not sticky: a sticky summary inside a rounded, clipped details element
-     reserves space above itself and hides the first row of the diff. */
-  /* The default marker lays out as its own block and leaves a bar above the
-     filename once the summary is a flex container. */
-  list-style: none;
+  padding: .5rem .7rem; cursor: pointer;
+  display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
+  background: var(--surface); border-bottom: 1px solid var(--rule);
+  min-height: var(--tap); list-style: none;
 }
 details.file > summary::-webkit-details-marker { display: none; }
 details.file > summary::before {
-  content: "\\25be"; color: var(--muted); flex: 0 0 auto;
-  transition: transform .12s ease;
+  content: "\\25be"; color: var(--muted); flex: 0 0 auto; font-size: .8rem;
 }
-details.file:not([open]) > summary::before { transform: rotate(-90deg); }
-@media (prefers-reduced-motion: reduce) {
-  details.file > summary::before { transition: none; }
+details.file:not([open]) > summary::before { content: "\\25b8"; }
+details.file > summary h3 {
+  font-family: var(--mono); font-size: .84rem; font-weight: 600;
+  margin: 0; overflow-wrap: anywhere; min-width: 0;
 }
-details.file > summary .path { overflow-wrap: anywhere; }
-details.file > summary .src { color: var(--muted); }
+
+/* ---------- diff ---------- */
 
 table.diff { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12.5px; }
-table.diff td { padding: 0 .4rem; vertical-align: top; white-space: pre-wrap; overflow-wrap: anywhere; }
+table.diff td { padding: .1rem .4rem; vertical-align: top; white-space: pre-wrap; overflow-wrap: anywhere; }
 table.diff td.num {
-  width: 1%; min-width: 2.2rem; text-align: right; color: var(--muted);
-  user-select: none; border-right: 1px solid var(--rule); white-space: nowrap;
+  width: 1%; min-width: 2.1rem; text-align: right; color: var(--muted);
+  user-select: none; white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+table.diff td.act { width: 1%; padding: 0; }
+
+/* One number column on a phone, two once there is room for both. */
+table.diff td.num.wide { display: none; }
+@media (min-width: 700px) {
+  table.diff td.num.wide { display: table-cell; }
+  table.diff td.num.narrow { display: none; }
+}
+table.diff td.sign {
+  width: 1%; user-select: none; padding: .1rem .15rem;
+  border-left: 1px solid var(--rule);
 }
 table.diff tr.added td { background: var(--add-bg); }
 table.diff tr.removed td { background: var(--del-bg); }
-table.diff tr.added td.sign { color: var(--add-rule); }
-table.diff tr.removed td.sign { color: var(--del-rule); }
-table.diff td.sign { width: 1%; user-select: none; padding: 0 .2rem; }
-table.diff tr.hunk td { background: var(--bg); color: var(--muted); font-size: .75rem; padding: .3rem .5rem; white-space: nowrap; }
-table.diff tr.code { cursor: pointer; }
-table.diff tr.code:hover td.num { color: var(--accent); }
-
-.empty { color: var(--muted); padding: 2rem 1rem; text-align: center; }
-.note { color: var(--muted); font-family: var(--mono); font-size: .78rem; padding: .5rem .8rem; }
-
-/* ---------- sources, threads, tray ---------- */
-
-.sources { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: .9rem; }
-.sources .source {
-  display: inline-flex; align-items: baseline; gap: .4rem; flex-wrap: wrap;
-  background: var(--surface); border: 1px solid var(--rule); border-radius: 6px;
-  padding: .35rem .6rem; font-size: .78rem;
-}
-.sources .source.ok { border-color: var(--add-rule); }
-.sources .label { font-weight: 600; font-family: var(--mono); }
-.sources .root { color: var(--muted); font-family: var(--mono); font-size: .72rem; overflow-wrap: anywhere; }
-
-.callout {
-  margin: 0 0 .9rem; padding: .55rem .8rem; font-size: .85rem;
-  background: var(--surface); border: 1px solid var(--accent); border-radius: 6px;
+table.diff tr.added td.sign { color: var(--add-ink); }
+table.diff tr.removed td.sign { color: var(--del-ink); }
+table.diff tr.hunk td {
+  background: var(--surface-2); color: var(--muted); font-size: .72rem;
+  padding: .3rem .5rem; white-space: nowrap;
 }
 
-table.diff td .rowlink { color: inherit; text-decoration: none; display: block; }
+/* The comment affordance. Always visible rather than revealed on hover,
+   because a phone has no hover and a control nobody can find does not exist. */
+a.addnote {
+  display: flex; align-items: center; justify-content: center;
+  width: 1.7rem; min-height: 1.5rem; height: 100%;
+  color: var(--muted); text-decoration: none; font-weight: 700; font-size: .95rem;
+  border-radius: 4px;
+}
+a.addnote:hover, a.addnote:focus-visible { background: var(--accent); color: var(--accent-ink); }
+
+/* Coarse pointers get rows tall enough to hit without aiming. */
+@media (pointer: coarse) {
+  table.diff td { padding-top: .25rem; padding-bottom: .25rem; }
+  a.addnote { width: 2.1rem; min-height: 1.9rem; }
+}
+
+/* ---------- threads ---------- */
 
 /* The diff cell preserves whitespace so code renders faithfully. A thread cell
-   holds markup, and inheriting that turns every newline in the template into
-   blank space. */
-tr.threadrow td { padding: 0; background: var(--bg); white-space: normal; }
+   holds markup, and inheriting that turns every newline into blank space. */
+tr.threadrow td { padding: 0; background: var(--surface-2); white-space: normal; }
+
 .thread {
-  border-left: 3px solid var(--accent); margin: .4rem;
-  padding: .6rem .7rem; font-family: var(--sans); font-size: .88rem;
-  background: var(--surface); border-radius: 0 6px 6px 0;
+  border-left: 3px solid var(--accent); margin: .5rem;
+  padding: .65rem .75rem; font-family: var(--sans); font-size: .9rem;
+  background: var(--surface); border-radius: 0 var(--radius) var(--radius) 0;
 }
-.thread.resolved { border-left-color: var(--add-rule); opacity: .75; }
-.thread.outdated { border-left-color: var(--muted); opacity: .75; }
-.thread .drift { margin: 0 0 .4rem; color: var(--muted); font-size: .78rem; }
-.thread .msg { margin-bottom: .5rem; }
+.thread.resolved { border-left-color: var(--add-ink); }
+.thread.outdated { border-left-color: var(--muted); }
+.thread .drift { margin: 0 0 .45rem; color: var(--warn-ink); font-size: .78rem; }
+.thread .where { font-family: var(--mono); font-size: .75rem; color: var(--muted); margin: 0 0 .4rem; }
+.thread .msg { margin-bottom: .55rem; }
 .thread .who {
-  font-size: .72rem; font-weight: 600; text-transform: uppercase;
-  letter-spacing: .04em; color: var(--muted); margin-right: .35rem;
+  font-size: .7rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .05em; color: var(--muted); margin-right: .35rem;
 }
 .thread .body { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: .15rem; }
+.thread label { display: block; font-size: .78rem; color: var(--muted); margin-bottom: .25rem; }
 .thread textarea {
-  width: 100%; font: inherit; padding: .45rem .55rem; border-radius: 6px;
-  border: 1px solid var(--rule); background: var(--bg); color: var(--ink);
-  resize: vertical;
+  width: 100%; font: inherit; font-size: 16px; padding: .5rem .6rem;
+  border-radius: 8px; border: 1px solid var(--rule-strong);
+  background: var(--bg); color: var(--ink); resize: vertical; min-height: 3rem;
 }
-.thread .actions { display: flex; gap: .5rem; margin-top: .45rem; align-items: center; }
+.thread .actions { display: flex; gap: .5rem; margin-top: .5rem; flex-wrap: wrap; }
 
-button, .ghost {
-  font: inherit; font-size: .85rem; padding: .4rem .75rem; border-radius: 6px;
-  border: 1px solid var(--rule); background: var(--surface); color: var(--ink);
+/* ---------- controls ---------- */
+
+button, .btn {
+  font: inherit; font-size: .88rem; font-weight: 500;
+  min-height: 2.5rem; padding: .45rem .85rem; border-radius: 8px;
+  border: 1px solid var(--rule-strong); background: var(--surface); color: var(--ink);
   cursor: pointer; text-decoration: none; line-height: 1.2;
+  display: inline-flex; align-items: center; justify-content: center; gap: .35rem;
 }
-button.primary { border-color: var(--accent); background: var(--accent); color: #fff; }
-button.ghost, a.ghost { color: var(--muted); }
-button:hover, .ghost:hover { border-color: var(--accent); }
+button.primary, .btn.primary {
+  border-color: var(--accent); background: var(--accent); color: var(--accent-ink);
+  font-weight: 600;
+}
+button.quiet, .btn.quiet { color: var(--muted); border-color: var(--rule); background: transparent; }
+button:hover, .btn:hover { border-color: var(--accent); }
 
-main.with-tray { padding-bottom: 5.5rem; }
-form.tray {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
-  display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
-  padding: .6rem .8rem calc(.6rem + env(safe-area-inset-bottom));
+/* ---------- submit bar ---------- */
+
+main.with-bar { padding-bottom: 7.5rem; }
+
+.bar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
   background: var(--surface); border-top: 1px solid var(--rule);
+  padding: .55rem .8rem calc(.55rem + env(safe-area-inset-bottom));
 }
-form.tray .count { font-size: .82rem; color: var(--muted); }
-form.tray .spacer { flex: 1 1 auto; }
+.bar .row { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.bar .state { font-size: .82rem; color: var(--muted); flex: 1 1 100%; }
+.bar .state strong { color: var(--ink); }
+.bar .verdicts { display: flex; gap: .5rem; flex: 1 1 auto; }
+.bar .verdicts button { flex: 1 1 auto; }
 
-details.file.outdated > summary .src { font-family: var(--sans); }
+.empty { color: var(--muted); padding: 2.5rem 1rem; text-align: center; }
+.note { color: var(--muted); font-family: var(--mono); font-size: .78rem; padding: .6rem .8rem; }
 
-@media (min-width: 900px) {
-  main { padding: 1.25rem 1.75rem; }
-  body { font-size: 15.5px; }
+/* ---------- desktop ---------- */
+
+@media (min-width: 1024px) {
+  main { padding: 1.25rem 1.5rem; }
+
+  main.review {
+    display: grid;
+    grid-template-columns: minmax(15rem, 19rem) minmax(0, 1fr);
+    gap: 1.5rem;
+    align-items: start;
+    max-width: 100rem; margin: 0 auto;
+  }
+  main.review .rail { position: sticky; top: 4rem; }
+  main.review .files { min-width: 0; }
+  main.with-bar { padding-bottom: 5rem; }
+
+  .bar .row { max-width: 100rem; margin: 0 auto; flex-wrap: nowrap; }
+  .bar .state { flex: 1 1 auto; }
+  .bar .verdicts { flex: 0 0 auto; }
+  .bar .verdicts button { flex: 0 0 auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
 `
 
 export function page(title: string, body: SafeHtml, extra: SafeHtml = raw('')): SafeHtml {
   return html`<!doctype html>
-    <html lang="en">
-      <head>
-        <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-        <title>${title}</title>
-        <style>
-          ${raw(STYLE)}
-        </style>
-      </head>
-      <body>
-        ${body} ${extra}
-      </body>
-    </html>`
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>${title}</title>
+<style>${raw(STYLE)}</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+${body}
+${extra}
+</body>
+</html>`
 }
 
-export function topBar(title: string, right: SafeHtml = raw('')): SafeHtml {
+/**
+ * The app bar.
+ *
+ * `where` names the thing being looked at rather than repeating the product
+ * name, so a reviewer arriving from a notification can tell what they opened
+ * without scrolling.
+ */
+export function topBar(where: string, right: SafeHtml = raw('')): SafeHtml {
   return html`<header class="top">
-    <h1><a href="/" style="text-decoration:none;color:inherit">reviewd</a></h1>
-    <span class="meta">${title}</span>
-    <span class="spacer"></span>
-    ${right}
-  </header>`
+  <a class="home" href="/">reviewd</a>
+  <span class="crumb" aria-hidden="true">/</span>
+  <span class="where" title="${where}">${where}</span>
+  ${right}
+</header>`
 }
