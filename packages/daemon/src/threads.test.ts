@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { Bus, type ReviewEvent } from './bus.js'
 import { configSchema, resolve } from './config.js'
 import { tempDatabase, type TempDatabase } from './db/testing.js'
 import { createReview, createSnapshot, putBlob, sha256, summarize, type Deps } from './reviews.js'
@@ -16,6 +17,7 @@ import {
 
 let ctx: TempDatabase
 let deps: Deps
+let bus: Bus
 
 const FILE = ['const a = 1', 'const b = 2', 'const c = 3', 'const d = 4', 'const e = 5'].join('\n')
 
@@ -25,7 +27,8 @@ beforeEach(async () => {
     configPath: '/tmp/reviewd-test.json',
     bindPublic: false,
   })
-  deps = { db: ctx.db, config }
+  bus = new Bus()
+  deps = { db: ctx.db, config, bus }
 })
 
 afterEach(async () => {
@@ -323,6 +326,64 @@ describe('approval', () => {
     await submitReview(deps, review.reviewId, 'changes_requested')
 
     expect(await ctx.db.selectFrom('approval').selectAll().execute()).toHaveLength(1)
+  })
+})
+
+// The review page listens on this channel so an agent's reply lands without
+// the reviewer knowing to reload.
+describe('what reaches an open review page', () => {
+  function collect(reviewId: string): ReviewEvent[] {
+    const seen: ReviewEvent[] = []
+    bus.wait(reviewId, 5000).then((event) => {
+      if (event) seen.push(event)
+    })
+    return seen
+  }
+
+  const settle = () => new Promise((r) => setTimeout(r, 20))
+
+  it('announces a comment the agent opens', async () => {
+    const review = await reviewWithFile()
+    const seen = collect(review.reviewId)
+
+    const { threadId } = await createThread(deps, review.reviewId, {
+      path: 'src/a.ts',
+      line: 3,
+      side: 'new',
+      body: 'flagging this',
+      author: 'agent',
+    })
+    await settle()
+
+    expect(seen).toEqual([
+      { kind: 'thread', reviewId: review.reviewId, threadId, at: expect.any(Number) },
+    ])
+  })
+
+  it('announces a reply the agent writes', async () => {
+    const review = await reviewWithFile()
+    const { threadId } = await humanThread(review.reviewId)
+    const seen = collect(review.reviewId)
+
+    await replyToThread(deps, threadId, 'done, here is why', 'agent')
+    await settle()
+
+    expect(seen).toEqual([
+      { kind: 'thread', reviewId: review.reviewId, threadId, at: expect.any(Number) },
+    ])
+  })
+
+  // A reviewer's own comment is already on the page they wrote it from, and
+  // until they submit it, it is a draft nobody else is meant to see.
+  it('says nothing about what the reviewer writes', async () => {
+    const review = await reviewWithFile()
+    const seen = collect(review.reviewId)
+
+    const { threadId } = await humanThread(review.reviewId)
+    await replyToThread(deps, threadId, 'and another thing', 'human')
+    await settle()
+
+    expect(seen).toEqual([])
   })
 })
 

@@ -12,6 +12,10 @@ import type { Verdict } from '@reviewd/protocol'
 export type ReviewEvent =
   | { kind: 'submission'; reviewId: string; verdict: Verdict; at: number }
   | { kind: 'released'; reviewId: string; at: number }
+  // One agent message, published as it lands rather than batched like a
+  // submission. The reviewer is a person looking at a page, and making them
+  // wait for a batch that will never come is how the page went stale.
+  | { kind: 'thread'; reviewId: string; threadId: string; at: number }
 
 export class Bus {
   private readonly emitter = new EventEmitter()

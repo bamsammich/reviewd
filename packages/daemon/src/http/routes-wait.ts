@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import type { WaitResult } from '@reviewd/protocol'
-import type { Bus } from '../bus.js'
+import type { Bus, ReviewEvent } from '../bus.js'
 import { countThreadsByTurn, reviewUrl, type Deps } from '../reviews.js'
 
 const MAX_TIMEOUT_MS = 1_800_000
@@ -35,7 +35,7 @@ export function waitRoutes(deps: Deps & { bus: Bus }): Hono {
 
     if (!exists) return c.json(gone(), 200)
 
-    const event = await deps.bus.wait(reviewId, timeout, c.req.raw.signal)
+    const event = await nextVerdict(deps.bus, reviewId, timeout, c.req.raw.signal)
 
     if (!event) {
       return c.json<WaitResult>({
@@ -57,6 +57,32 @@ export function waitRoutes(deps: Deps & { bus: Bus }): Hono {
   })
 
   return routes
+}
+
+/**
+ * The next event a waiting agent should actually wake for.
+ *
+ * The bus carries one channel per review, and the review page listens on the
+ * same one for the agent's own comments. Those must not surface here: waking
+ * an agent because it wrote something itself would end a wait with no verdict
+ * to report, which reads to the caller as approval it never got.
+ */
+async function nextVerdict(
+  bus: Bus,
+  reviewId: string,
+  timeout: number,
+  signal: AbortSignal,
+): Promise<Exclude<ReviewEvent, { kind: 'thread' }> | null> {
+  const deadline = Date.now() + timeout
+
+  for (;;) {
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) return null
+
+    const event = await bus.wait(reviewId, remaining, signal)
+    if (!event) return null
+    if (event.kind !== 'thread') return event
+  }
 }
 
 /**

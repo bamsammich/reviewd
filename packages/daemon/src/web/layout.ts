@@ -358,6 +358,16 @@ main.with-bar { padding-bottom: 7.5rem; }
 .emptystate { color: var(--muted); padding: 2.5rem 1rem; text-align: center; }
 .note { color: var(--muted); font-family: var(--mono); font-size: .78rem; padding: .6rem .8rem; }
 
+/* Says an update is held rather than lost, for the one case where the page
+   cannot refresh itself: the reviewer is mid-sentence. */
+.live-notice {
+  position: fixed; left: 50%; transform: translateX(-50%);
+  bottom: calc(var(--bar-height, 4.5rem) + .75rem); z-index: 20;
+  background: var(--accent); color: var(--accent-ink);
+  font-size: .8rem; padding: .45rem .8rem; border-radius: 999px;
+  box-shadow: 0 2px 10px rgb(0 0 0 / .25); max-width: calc(100vw - 2rem);
+}
+
 /* ---------- desktop ---------- */
 
 @media (min-width: 1024px) {

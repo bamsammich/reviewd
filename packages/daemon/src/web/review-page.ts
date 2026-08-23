@@ -582,6 +582,107 @@ function submitBar(review: ReviewSummary, drafts: number, awaitingYou: number): 
 const SCRIPT = `
 const FOLD_LIMIT = 3500;
 
+/* ---- live updates ---------------------------------------------------- */
+
+/* Never destroy something being written. A refresh replaces the whole main
+   element, which would take an open comment box and whatever is typed into it
+   with it, so the update waits for the reviewer to finish instead. */
+function busyWriting() {
+  const active = document.activeElement;
+  if (active && active.tagName === 'TEXTAREA') return true;
+  if (document.querySelector('.inline-box')) return true;
+
+  for (const area of document.querySelectorAll('.thread textarea')) {
+    if (area.value.trim()) return true;
+  }
+
+  return false;
+}
+
+function openReplies() {
+  const state = {};
+  for (const details of document.querySelectorAll('details.reply[open]')) {
+    const thread = details.closest('.thread');
+    const area = details.querySelector('textarea');
+    if (thread) state[thread.id] = area ? area.value : '';
+  }
+  return state;
+}
+
+function restoreReplies(state) {
+  for (const [id, value] of Object.entries(state)) {
+    const details = document.querySelector('#' + CSS.escape(id) + ' details.reply');
+    if (!details) continue;
+    details.open = true;
+    const area = details.querySelector('textarea');
+    if (area) area.value = value;
+  }
+}
+
+async function refresh() {
+  const response = await fetch(location.href, { headers: { 'x-reviewd-refresh': '1' } });
+  if (!response.ok) return;
+
+  const next = new DOMParser().parseFromString(await response.text(), 'text/html');
+  const main = document.getElementById('main');
+  const bar = document.querySelector('form.bar');
+  const nextMain = next.getElementById('main');
+  const nextBar = next.querySelector('form.bar');
+  if (!main || !nextMain) return;
+
+  const replies = openReplies();
+  const offset = window.scrollY;
+
+  main.innerHTML = nextMain.innerHTML;
+  if (bar && nextBar) bar.outerHTML = nextBar.outerHTML;
+
+  restoreReplies(replies);
+  window.scrollTo(0, offset);
+  notice(false);
+}
+
+let waiting = false;
+
+function land() {
+  if (busyWriting()) {
+    notice(true);
+    if (!waiting) {
+      waiting = true;
+      const tick = setInterval(() => {
+        if (busyWriting()) return;
+        clearInterval(tick);
+        waiting = false;
+        refresh();
+      }, 2000);
+    }
+    return;
+  }
+
+  refresh();
+}
+
+function notice(show) {
+  let pill = document.getElementById('live-notice');
+  if (!show) { if (pill) pill.remove(); return; }
+  if (pill) return;
+
+  pill = document.createElement('div');
+  pill.id = 'live-notice';
+  pill.className = 'live-notice';
+  pill.setAttribute('role', 'status');
+  pill.textContent = 'New reply. Updating when you stop typing.';
+  document.body.appendChild(pill);
+}
+
+const liveMain = document.getElementById('main');
+if (liveMain && liveMain.dataset.review && 'EventSource' in window) {
+  const source = new EventSource('/r/' + liveMain.dataset.review + '/events');
+  source.addEventListener('threads', land);
+  source.addEventListener('gone', () => { source.close(); location.reload(); });
+}
+
+/* ---- comment box ----------------------------------------------------- */
+
 document.addEventListener('toggle', (event) => {
   const details = event.target;
   if (!details.dataset || !details.dataset.fold) return;

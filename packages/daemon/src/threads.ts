@@ -165,6 +165,13 @@ export async function createThread(
       .execute()
   })
 
+  // Only the agent's own writing is worth pushing. A reviewer's comment is
+  // already on the page they wrote it from, and until they submit it, it is a
+  // draft nobody else is meant to see.
+  if (request.author === 'agent') {
+    deps.bus?.publish({ kind: 'thread', reviewId, threadId, at: t })
+  }
+
   return { threadId }
 }
 
@@ -194,6 +201,10 @@ export async function replyToThread(
       .where('id', '=', thread.review_id)
       .execute()
   })
+
+  if (author === 'agent') {
+    deps.bus?.publish({ kind: 'thread', reviewId: thread.review_id, threadId, at: t })
+  }
 
   return { threadId, turn: await turnOf(db, threadId) }
 }

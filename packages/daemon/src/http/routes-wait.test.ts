@@ -87,6 +87,47 @@ describe('wait', () => {
     expect(result.threadsAwaitingAgent).toBe(1)
   })
 
+  // The review page listens on the same per-review channel, so the agent's own
+  // comments now travel it. Waking here on one would end the wait carrying no
+  // verdict, which the caller reads as an approval it never got.
+  it('stays parked when the agent writes a comment of its own', async () => {
+    const review = await seed()
+
+    const pending = waitFor(review.reviewId, 'timeout_ms=300&since=0')
+    await new Promise((r) => setTimeout(r, 20))
+    await createThread(deps, review.reviewId, {
+      path: 'src/a.ts',
+      line: 2,
+      side: 'new',
+      body: 'flagging a judgement call',
+      author: 'agent',
+    })
+
+    const result = (await (await pending).json()) as WaitResult
+    expect(result.wokeOn).toBe('timeout')
+    expect(result.verdict).toBeNull()
+  })
+
+  it('still wakes on a submission that follows one of its own comments', async () => {
+    const review = await seed()
+
+    const pending = waitFor(review.reviewId)
+    await new Promise((r) => setTimeout(r, 20))
+    await createThread(deps, review.reviewId, {
+      path: 'src/a.ts',
+      line: 2,
+      side: 'new',
+      body: 'flagging a judgement call',
+      author: 'agent',
+    })
+    await new Promise((r) => setTimeout(r, 20))
+    await submitReview(deps, review.reviewId, 'approved')
+
+    const result = (await (await pending).json()) as WaitResult
+    expect(result.wokeOn).toBe('submission')
+    expect(result.verdict).toBe('approved')
+  })
+
   it('answers immediately for a submission it has not seen', async () => {
     // Without this a submission landing between two waits would sit unnoticed,
     // which on a review that gets one submission is forever.

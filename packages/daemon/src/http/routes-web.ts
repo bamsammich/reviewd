@@ -1,10 +1,15 @@
 import { Hono, type Context } from 'hono'
+import { streamSSE } from 'hono/streaming'
 import { verdict as verdictSchema } from '@reviewd/protocol'
+import type { Bus } from '../bus.js'
 import { listReviews, ReviewError, summarize, type Deps } from '../reviews.js'
 import { touchReview } from '../sweep.js'
 import { createThread, listThreads, replyToThread, setThreadState, submitReview, unapprove } from '../threads.js'
 import { loadFiles, messagePage, reviewListPage } from '../web/pages.js'
 import { parseFolds, parseOpenBox, parseViewMode, reviewPage } from '../web/review-page.js'
+
+/** Long enough to stay quiet, short enough that a dead tab is noticed. */
+const HEARTBEAT_MS = 25_000
 
 /**
  * The pages a reviewer opens and the forms they act through.
@@ -13,7 +18,7 @@ import { parseFolds, parseOpenBox, parseViewMode, reviewPage } from '../web/revi
  * nothing enabled and a reload never resubmits. The script that ships only
  * saves a round trip when opening a comment box.
  */
-export function webRoutes(deps: Deps): Hono {
+export function webRoutes(deps: Deps & { bus: Bus }): Hono {
   const routes = new Hono()
 
   routes.get('/', async (c) => c.html(reviewListPage(await listReviews(deps, {})).value))
@@ -59,6 +64,51 @@ export function webRoutes(deps: Deps): Hono {
       }
       throw error
     }
+  })
+
+  /**
+   * Tells an open review page when the agent has written something.
+   *
+   * The page holds this open and refetches itself when it fires, so a reply
+   * lands without the reviewer knowing to reload. EventSource reconnects on
+   * its own and replays Last-Event-ID, which is what covers a daemon restart
+   * and the gap either side of it: anything the agent wrote while the stream
+   * was down is answered on connect rather than waiting for the next write.
+   *
+   * Only agent writes reach here. A submission is the reviewer's own action on
+   * the page that already re-rendered from it.
+   */
+  routes.get('/r/:id/events', async (c) => {
+    const reviewId = c.req.param('id')
+    const since = Number(c.req.header('last-event-id') ?? c.req.query('since') ?? 0) || 0
+    const signal = c.req.raw.signal
+
+    return streamSSE(c, async (stream) => {
+      const missed = await agentWroteAfter(deps, reviewId, since)
+      if (missed) await stream.writeSSE({ event: 'threads', id: String(missed), data: '' })
+
+      while (!signal.aborted) {
+        const event = await deps.bus.wait(reviewId, HEARTBEAT_MS, signal)
+
+        if (signal.aborted) break
+
+        if (!event) {
+          // A comment frame, not an event: it keeps the socket warm and lets
+          // the write fail once the reviewer has closed the tab.
+          await stream.writeSSE({ data: '', event: 'ping' })
+          continue
+        }
+
+        if (event.kind === 'released') {
+          await stream.writeSSE({ event: 'gone', data: '' })
+          break
+        }
+
+        if (event.kind === 'thread') {
+          await stream.writeSSE({ event: 'threads', id: String(event.at), data: '' })
+        }
+      }
+    })
   })
 
   routes.post('/r/:id/threads', async (c) => {
@@ -122,6 +172,30 @@ export function webRoutes(deps: Deps): Hono {
   })
 
   return routes
+}
+
+/**
+ * When the agent last wrote to this review, if it was after `since`.
+ *
+ * Submitted state only: a reviewer's own draft is not activity anyone needs
+ * pushed back at them, and the agent never drafts.
+ */
+async function agentWroteAfter(
+  deps: Deps,
+  reviewId: string,
+  since: number,
+): Promise<number | undefined> {
+  const latest = await deps.db
+    .selectFrom('message')
+    .innerJoin('thread', 'thread.id', 'message.thread_id')
+    .select('message.created_at as at')
+    .where('thread.review_id', '=', reviewId)
+    .where('message.author', '=', 'agent')
+    .where('message.created_at', '>', since)
+    .orderBy('message.created_at', 'desc')
+    .executeTakeFirst()
+
+  return latest?.at
 }
 
 function cookie(c: Context, name: string): string | undefined {
