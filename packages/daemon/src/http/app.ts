@@ -9,6 +9,7 @@ import { reviewRoutes } from './routes-reviews.js'
 import { gateRoutes } from './routes-gate.js'
 import { threadRoutes } from './routes-threads.js'
 import { waitRoutes } from './routes-wait.js'
+import { webRoutes } from './routes-web.js'
 
 export interface AppContext {
   config: ResolvedConfig
@@ -37,6 +38,7 @@ export function createApp(ctx: AppContext): App {
   app.route('/', threadRoutes(deps))
   app.route('/', gateRoutes(deps))
   app.route('/', waitRoutes(deps))
+  app.route('/', webRoutes(deps))
 
   app.get('/api/health', (c) => c.json({ ok: true }))
 

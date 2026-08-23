@@ -596,8 +596,13 @@ and emits the deny payload.
 
 ## 10. Web UI
 
-Server-rendered shell, React island for the diff. `@pierre/diffs` for parsing, `shiki` for
-highlighting.
+Server-rendered pages with a small script for the interactive parts. No client framework
+and no bundler.
+
+Reviewing happens on a phone, often on a cell connection, and the whole interaction surface
+is a few forms: open a comment box, save a draft, submit, approve. A framework earns nothing
+against that and costs a build step, a hydration pass, and bytes over a slow link. The diff
+is computed and rendered on the server, so a page arrives readable.
 
 Phase 1 screens:
 
