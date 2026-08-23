@@ -50,21 +50,21 @@ claude plugin install reviewd@bamsammich
 That installs the commit gate hook, the MCP server, and the skill that drives a
 review.
 
-The plugin needs `reviewd` and `reviewctl` on `PATH`. They are not on npm yet,
-so until they are, that means a checkout:
+The plugin needs `reviewd` on `PATH`. It is not on npm yet, so until it is, that
+means a checkout:
 
 ```sh
-npm install && npm run build && npm link -ws
+npm install && npm link
 ```
 
 Then check it:
 
 ```sh
-reviewctl doctor
+reviewd doctor
 ```
 
 There is no service to install. The daemon starts on first use: whichever of the
-commit gate, the MCP server, or `reviewctl` needs it first brings it up, and it
+commit gate, the MCP server, or a `reviewd` command needs it first brings it up, and it
 stays up for the rest. It logs to `~/.local/state/reviewd/reviewd.log`.
 
 To start it at login rather than on first use, `contrib/` has a launchd agent:
@@ -89,12 +89,12 @@ touch "$(git rev-parse --absolute-git-dir)/reviewd-gate-off"
 Nothing about reviewd is Claude-specific; the plugin is packaging. The two
 pieces underneath it are ordinary:
 
-- **The MCP server** is `reviewctl mcp`, speaking stdio. Register it however
+- **The MCP server** is `reviewd mcp`, speaking stdio. Register it however
   your harness registers one. `plugin/.mcp.json` is the declaration to copy.
 - **The commit gate** is `plugin/hooks/reviewd-gate.sh`. It reads a JSON payload
   on stdin carrying `.tool_input.command` and `.cwd`, and prints a Claude Code
   `PreToolUse` verdict on stdout. For a harness with a different verdict format,
-  call `reviewctl gate <root>` directly: exit 0 allows, 1 denies, and `--json`
+  call `reviewd gate <root>` directly: exit 0 allows, 1 denies, and `--json`
   gives the reason, the review URL, and any open threads.
 
 ## Developing on reviewd

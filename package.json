@@ -1,22 +1,41 @@
 {
-  "name": "reviewd-monorepo",
-  "private": true,
+  "name": "@bamsammich/reviewd",
+  "version": "0.1.0",
+  "description": "Local-first code review for working with coding agents, with a commit gate that holds code until a human has read it",
+  "license": "MIT",
+  "repository": "github:bamsammich/reviewd",
   "type": "module",
   "engines": {
     "node": ">=22"
   },
-  "workspaces": [
-    "packages/*"
+  "bin": {
+    "reviewd": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "contrib"
   ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
+    "build": "tsc --build",
+    "prepare": "npm run build",
     "typecheck": "tsc --build",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint .",
     "format": "prettier --write ."
   },
+  "dependencies": {
+    "@hono/node-server": "^2.1.1",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "better-sqlite3": "^13.0.0",
+    "diff": "^9.0.0",
+    "hono": "^4.13.3",
+    "kysely": "^0.29.0",
+    "uuid": "^14.0.0",
+    "zod": "^4.0.0"
+  },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
     "@types/node": "^24.0.0",
     "eslint": "^9.20.0",
     "prettier": "^3.4.0",

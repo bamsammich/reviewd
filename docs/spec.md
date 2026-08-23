@@ -4,8 +4,10 @@ A local-first code review service. A human reviewer reads an agent's changes in 
 GitHub-PR-style web UI, holds threaded conversations on specific lines, and no commit lands
 until the review is approved. The agent drives the service through MCP.
 
-Two binaries: `reviewd`, the daemon, and `reviewctl`, the client that computes diffs, speaks
-MCP to the coding agent, and answers the commit hook.
+One binary, `reviewd`, with two roles behind subcommands. `reviewd serve` is the daemon.
+The client subcommands — `mcp`, `gate`, `wait`, `fingerprint`, `doctor` — compute diffs,
+speak MCP to the coding agent, and answer the commit hook. The daemon still never touches
+git; the split described throughout is between processes, not between programs.
 
 Two roles appear throughout: **the reviewer**, a human, and **the agent**, a coding agent
 holding a session on the reviewer's machine.
@@ -75,20 +77,20 @@ Consequences:
 ### Local (default)
 
 ```
-agent session ──stdio──> reviewctl mcp ──HTTP──> reviewd (127.0.0.1:7777) ──> SQLite
+agent session ──stdio──> reviewd mcp ──HTTP──> reviewd (127.0.0.1:7777) ──> SQLite
                                                       │
 commit hook ──────────────HTTP───────────────────────>│
                                                       │
 browser / phone ────────HTTP(S)──────────────────────>┘
 ```
 
-One launchd agent, one SQLite file, one port. `reviewctl mcp` is a short-lived stdio process
+One launchd agent, one SQLite file, one port. `reviewd mcp` is a short-lived stdio process
 the agent harness spawns per session.
 
 ### Split
 
 ```
-dev machine:  agent session ──> reviewctl mcp ──┐
+dev machine:  agent session ──> reviewd mcp ──┐
               commit hook ─────────────────────┤
                                                └──HTTPS──> reviewd (server) ──> SQLite
 ```
@@ -206,7 +208,7 @@ process holds the only writer, so contention is limited to long-poll readers.
 
 ### Event bus
 
-The long-poll behind `reviewctl wait` needs notice when a thread changes. An in-process
+The long-poll behind `reviewd wait` needs notice when a thread changes. An in-process
 `EventEmitter` behind `bus.publish(channel, payload)` / `bus.subscribe(channel, handler)`.
 
 The indirection is one file and keeps the long-poll handler out of the web layer's connection
@@ -456,10 +458,10 @@ Content-addressed blobs mean revision N+1 of a 200-file review uploads only what
 
 ## 8. MCP interface
 
-`reviewctl mcp` speaks stdio:
+`reviewd mcp` speaks stdio:
 
 ```bash
-claude mcp add reviewd -- reviewctl mcp
+claude mcp add reviewd -- reviewd mcp
 ```
 
 ### Design rules
@@ -507,11 +509,11 @@ call.
 The reviewer submits from a phone, while the session runs on a machine with no one at the
 keyboard. Three channels carry the result back, in decreasing order of reliability.
 
-**1. A background process that exits.** The primary path. `reviewctl` blocks on the daemon's
+**1. A background process that exits.** The primary path. `reviewd` blocks on the daemon's
 long-poll and exits when something happens:
 
 ```bash
-reviewctl wait --review <id> --timeout 3600
+reviewd wait --review <id> --timeout 3600
 ```
 
 An agent harness runs this as a background command and resumes the session on exit, so the
@@ -535,7 +537,7 @@ with no live process, so the others degrade into it.
 correctness.
 
 The reverse direction is section 11: `review_create` fires the webhook and a link reaches the
-phone. The round trip is notification out, `reviewctl wait` parked, approval in, session
+phone. The round trip is notification out, `reviewd wait` parked, approval in, session
 resumed.
 
 ---
@@ -584,12 +586,12 @@ Warnings accompany an `allow` and print above the commit without blocking it. Op
 an approved review generate one, as does a second review touching the same root, which
 indicates another session working in the same place.
 
-`reviewctl fingerprint` computes it client-side: stage every change, tracked and untracked,
+`reviewd fingerprint` computes it client-side: stage every change, tracked and untracked,
 into a throwaway index, diff that index against HEAD in one pass, and hash the result.
 Staging must not change the answer, so the command leaves the real index untouched and a
 partially staged tree keeps the arrangement it had.
 
-The hook detects `git commit`, resolves the repository root, shells out to `reviewctl gate`,
+The hook detects `git commit`, resolves the repository root, shells out to `reviewd gate`,
 and emits the deny payload.
 
 ---
@@ -665,13 +667,13 @@ proxy it is whatever that proxy answers on.
 
 It is the most consequential string in the file. A wrong value makes every link dead while
 nothing else appears broken, so it gets guardrails: `reviewd` prints the resolved value at
-startup, `reviewctl doctor` fetches it and reports whether the daemon answers there, and a
+startup, `reviewd doctor` fetches it and reports whether the daemon answers there, and a
 loopback `public_url` paired with a non-loopback `host` warns on every boot.
 
 `database.path` defaults to `$XDG_STATE_HOME/reviewd/reviews.db`, falling back to
 `~/.local/state/reviewd/reviews.db`. The directory is created on first run.
 
-`reviewctl` reads `~/.config/reviewd/client.json` for `{base_url}`, defaulting to
+`reviewd` reads `~/.config/reviewd/client.json` for `{base_url}`, defaulting to
 `http://127.0.0.1:7777`.
 
 ---
@@ -681,7 +683,7 @@ loopback `public_url` paired with a non-loopback `host` warns on every boot.
 1. **Schema, migrations, tests green.** One CI job against a temp-file database. 2 hours.
 2. **Daemon core**: sources, snapshots, blobs, threads, gate API, request hardening. Half a
    day.
-3. **`reviewctl`**: fingerprint, diff computation, upload, MCP shim, `wait`. Half a day.
+3. **The client subcommands**: fingerprint, diff computation, upload, MCP shim, `wait`. Half a day.
 4. **Web UI.** The bulk. A day and a half.
 5. **Re-anchoring, notifications, sweeps.** Half a day.
 6. **Integration**: commit hook and agent skills. 2 hours.

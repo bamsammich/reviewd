@@ -35,7 +35,7 @@ daemon returns is the only one that works on a device other than this machine.
 Run this as a **background** Bash command so the session resumes when it exits:
 
 ```bash
-reviewctl wait --review <id> --timeout 3600
+reviewd wait --review <id> --timeout 3600
 ```
 
 The exit code carries the verdict, so read it rather than the output:

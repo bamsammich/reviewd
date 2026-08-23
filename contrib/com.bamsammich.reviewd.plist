@@ -15,6 +15,7 @@
   <key>ProgramArguments</key>
   <array>
     <string>/opt/homebrew/bin/reviewd</string>
+    <string>serve</string>
   </array>
 
   <key>RunAtLoad</key>

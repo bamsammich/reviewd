@@ -8,7 +8,7 @@
 
 set -u
 
-REVIEWCTL="${REVIEWD_CTL:-reviewctl}"
+REVIEWD="${REVIEWD_BIN:-reviewd}"
 
 payload=$(cat)
 cmd=$(printf '%s' "$payload" | jq -r '.tool_input.command // empty')
@@ -140,11 +140,11 @@ gitdir=$(git -C "$root" rev-parse --absolute-git-dir 2>/dev/null) || exit 0
 # Nothing to review means nothing to gate: an --amend that only edits a message
 # leaves the tree identical to HEAD.
 empty_hash=$(printf '' | shasum -a 256 | cut -d' ' -f1)
-fingerprint=$("$REVIEWCTL" fingerprint "$root" 2>/dev/null) || fingerprint=""
+fingerprint=$("$REVIEWD" fingerprint "$root" 2>/dev/null) || fingerprint=""
 [ -z "$fingerprint" ] && exit 0
 [ "$fingerprint" = "$empty_hash" ] && exit 0
 
-answer=$("$REVIEWCTL" gate "$root" --json 2>/dev/null)
+answer=$("$REVIEWD" gate "$root" --json 2>/dev/null)
 status=$?
 
 if [ -z "$answer" ]; then
@@ -188,7 +188,7 @@ message="$message
 
 Open a review with the reviewd MCP tools (review_create, then review_snapshot
 after edits), and wait for a verdict with:
-  reviewctl wait --review <id>
+  reviewd wait --review <id>
 
 Override this one commit only if the user explicitly asks: prefix the command
 with REVIEWD_SKIP=1."
