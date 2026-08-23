@@ -1,8 +1,8 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 
 const run = promisify(execFile)
@@ -26,6 +26,23 @@ export async function git(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     throw new GitError(`git ${args.join(' ')} failed in ${root}: ${message}`)
+  }
+}
+
+/**
+ * The one spelling of a path that everything agrees on.
+ *
+ * A root reaches the daemon from two directions: whatever a caller typed when
+ * opening a review, and what `git rev-parse` reports when the commit hook asks.
+ * git resolves symlinks and a caller usually does not, so on macOS a review
+ * opened on /var/folders/... is asked about as /private/var/folders/... and the
+ * gate denies every commit while insisting nobody has looked at the repository.
+ */
+export function canonical(path: string): string {
+  try {
+    return realpathSync.native(path)
+  } catch {
+    return resolve(path)
   }
 }
 

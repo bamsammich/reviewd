@@ -2,7 +2,6 @@ import type { Kysely } from 'kysely'
 import type { ReviewSummary } from '@reviewd/protocol'
 import type { Database } from '../db/types.js'
 import { html, raw, type SafeHtml } from './html.js'
-import { anchorLineFor, buildRows, toHunks, type Row } from './hunks.js'
 import { page, topBar } from './layout.js'
 
 /**
@@ -74,73 +73,6 @@ export interface FileView {
   truncated: boolean
   oldText: string
   newText: string
-}
-
-export function reviewPage(review: ReviewSummary, files: FileView[]): SafeHtml {
-  const body = html` ${topBar(
-  review.title,
-  html`<span class="meta">rev ${review.snapshotSeq}</span>`,
-)}
-    <main>
-      ${
-    files.length === 0
-      ? html`<p class="empty">This revision changed nothing.</p>`
-      : files.map((file) => fileBlock(file))
-  }
-    </main>`
-
-  return page(`${review.title} · reviewd`, body)
-}
-
-function fileBlock(file: FileView): SafeHtml {
-  const rows = file.isBinary || file.truncated ? [] : buildRows(file.oldText, file.newText)
-  const hunks = toHunks(rows)
-
-  return html`<details class="file" open>
-    <summary>
-      <span class="path">${file.path}</span>
-      <span class="src">${file.sourceLabel}</span>
-      <span class="badge">${file.changeType}</span>
-    </summary>
-    ${
-    file.isBinary
-      ? html`<p class="note">Binary file, not shown.</p>`
-      : file.truncated
-        ? html`<p class="note">File too large to display.</p>`
-        : hunks.length === 0
-          ? html`<p class="note">No textual change.</p>`
-          : html`<table class="diff">
-              ${hunks.map(
-                (hunk) => html`
-                  <tr class="hunk">
-                    <td colspan="4">${hunk.header}</td>
-                  </tr>
-                  ${hunk.rows.map((row) => diffRow(file, row))}
-                `,
-              )}
-            </table>`
-  }
-  </details>`
-}
-
-function diffRow(file: FileView, row: Row): SafeHtml {
-  const anchor = anchorLineFor(row)
-  const sign = row.kind === 'added' ? '+' : row.kind === 'removed' ? '-' : ' '
-
-  // Every row carries what a comment on it would anchor to, so the script that
-  // opens a comment box needs no lookup table.
-  return html`<tr
-    class="code ${row.kind}"
-    data-source="${file.sourceId}"
-    data-path="${file.path}"
-    data-side="${anchor?.side ?? ''}"
-    data-line="${anchor?.line ?? ''}"
-  >
-    <td class="num">${row.oldLine ?? ''}</td>
-    <td class="num">${row.newLine ?? ''}</td>
-    <td class="sign">${sign}</td>
-    <td class="text">${row.text}</td>
-  </tr>`
 }
 
 function age(seconds: number): string {

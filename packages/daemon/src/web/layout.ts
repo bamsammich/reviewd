@@ -111,6 +111,71 @@ table.diff tr.code:hover td.num { color: var(--accent); }
 .empty { color: var(--muted); padding: 2rem 1rem; text-align: center; }
 .note { color: var(--muted); font-family: var(--mono); font-size: .78rem; padding: .5rem .8rem; }
 
+/* ---------- sources, threads, tray ---------- */
+
+.sources { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: .9rem; }
+.sources .source {
+  display: inline-flex; align-items: baseline; gap: .4rem; flex-wrap: wrap;
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 6px;
+  padding: .35rem .6rem; font-size: .78rem;
+}
+.sources .source.ok { border-color: var(--add-rule); }
+.sources .label { font-weight: 600; font-family: var(--mono); }
+.sources .root { color: var(--muted); font-family: var(--mono); font-size: .72rem; overflow-wrap: anywhere; }
+
+.callout {
+  margin: 0 0 .9rem; padding: .55rem .8rem; font-size: .85rem;
+  background: var(--surface); border: 1px solid var(--accent); border-radius: 6px;
+}
+
+table.diff td .rowlink { color: inherit; text-decoration: none; display: block; }
+
+/* The diff cell preserves whitespace so code renders faithfully. A thread cell
+   holds markup, and inheriting that turns every newline in the template into
+   blank space. */
+tr.threadrow td { padding: 0; background: var(--bg); white-space: normal; }
+.thread {
+  border-left: 3px solid var(--accent); margin: .4rem;
+  padding: .6rem .7rem; font-family: var(--sans); font-size: .88rem;
+  background: var(--surface); border-radius: 0 6px 6px 0;
+}
+.thread.resolved { border-left-color: var(--add-rule); opacity: .75; }
+.thread.outdated { border-left-color: var(--muted); opacity: .75; }
+.thread .drift { margin: 0 0 .4rem; color: var(--muted); font-size: .78rem; }
+.thread .msg { margin-bottom: .5rem; }
+.thread .who {
+  font-size: .72rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .04em; color: var(--muted); margin-right: .35rem;
+}
+.thread .body { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: .15rem; }
+.thread textarea {
+  width: 100%; font: inherit; padding: .45rem .55rem; border-radius: 6px;
+  border: 1px solid var(--rule); background: var(--bg); color: var(--ink);
+  resize: vertical;
+}
+.thread .actions { display: flex; gap: .5rem; margin-top: .45rem; align-items: center; }
+
+button, .ghost {
+  font: inherit; font-size: .85rem; padding: .4rem .75rem; border-radius: 6px;
+  border: 1px solid var(--rule); background: var(--surface); color: var(--ink);
+  cursor: pointer; text-decoration: none; line-height: 1.2;
+}
+button.primary { border-color: var(--accent); background: var(--accent); color: #fff; }
+button.ghost, a.ghost { color: var(--muted); }
+button:hover, .ghost:hover { border-color: var(--accent); }
+
+main.with-tray { padding-bottom: 5.5rem; }
+form.tray {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+  display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+  padding: .6rem .8rem calc(.6rem + env(safe-area-inset-bottom));
+  background: var(--surface); border-top: 1px solid var(--rule);
+}
+form.tray .count { font-size: .82rem; color: var(--muted); }
+form.tray .spacer { flex: 1 1 auto; }
+
+details.file.outdated > summary .src { font-family: var(--sans); }
+
 @media (min-width: 900px) {
   main { padding: 1.25rem 1.75rem; }
   body { font-size: 15.5px; }

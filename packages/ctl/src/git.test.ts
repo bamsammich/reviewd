@@ -1,7 +1,7 @@
 import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { diffAgainstHead, fingerprint, gitDir, repoRoot } from './git.js'
+import { canonical, diffAgainstHead, fingerprint, gitDir, repoRoot } from './git.js'
 import { tempRepo, type TempRepo } from './testing.js'
 
 let repo: TempRepo
@@ -25,6 +25,24 @@ describe('repoRoot', () => {
 
   it('answers null outside a repository', async () => {
     expect(await repoRoot('/')).toBeNull()
+  })
+})
+
+describe('canonical', () => {
+  it('agrees with what git reports for the same directory', async () => {
+    // The bug this exists for: on macOS /var is a symlink to /private/var, so
+    // a review opened on the path a caller typed is asked about under the path
+    // git resolves, and the gate denies every commit while insisting nobody
+    // has looked at the repository.
+    expect(canonical(repo.root)).toBe(await repoRoot(repo.root))
+  })
+
+  it('is stable when applied twice', () => {
+    expect(canonical(canonical(repo.root))).toBe(canonical(repo.root))
+  })
+
+  it('resolves a path that does not exist rather than throwing', () => {
+    expect(canonical('/tmp/reviewd-not-here')).toBe('/tmp/reviewd-not-here')
   })
 })
 

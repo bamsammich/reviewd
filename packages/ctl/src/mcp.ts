@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { Client } from './client.js'
 import { loadClientConfig } from './config.js'
 import { DEFAULT_LIMITS } from './diff.js'
+import { canonical } from './git.js'
 import { pushSnapshot } from './push.js'
 
 /**
@@ -66,7 +67,9 @@ export function createMcpServer(client = new Client(loadClientConfig().base_url)
         const review = await client.createReview({
           title,
           sources: sources.map((s) => ({
-            path: s.path,
+            // Canonical, so the path stored here is the one the commit hook
+            // will compute when it asks the gate about this repository.
+            path: canonical(s.path),
             includeUntracked: true,
             ...(s.base === undefined ? {} : { base: s.base }),
             ...(s.label === undefined ? {} : { label: s.label }),
@@ -176,7 +179,7 @@ export function createMcpServer(client = new Client(loadClientConfig().base_url)
       try {
         const reviews = await client.listReviews({
           ...(status === undefined ? {} : { status }),
-          ...(root === undefined ? {} : { root }),
+          ...(root === undefined ? {} : { root: canonical(root) }),
         })
 
         return ok(
