@@ -16,6 +16,8 @@ import {
   summarize,
   type Deps,
 } from '../reviews.js'
+import { touchReview } from '../sweep.js'
+import { notify } from '../notify.js'
 
 /**
  * Review, snapshot, and blob routes.
@@ -34,6 +36,17 @@ export function reviewRoutes(deps: Deps): Hono {
     }
 
     const summary = await createReview(deps, parsed.data)
+
+    if (parsed.data.notify) {
+      // Fired without awaiting: a push that does not arrive should never fail
+      // the review it was announcing.
+      void notify(deps.config, {
+        title: summary.title,
+        url: summary.url,
+        threadsAwaitingYou: summary.threadsAwaitingHuman,
+      })
+    }
+
     return c.json(summary, 201)
   })
 
@@ -49,7 +62,13 @@ export function reviewRoutes(deps: Deps): Hono {
     return c.json(summaries)
   })
 
-  routes.get('/api/reviews/:id', async (c) => c.json(await summarize(deps, c.req.param('id'))))
+  routes.get('/api/reviews/:id', async (c) => {
+    const summary = await summarize(deps, c.req.param('id'))
+    // Reading a review is activity. Without this, a review someone opens every
+    // day but does not write to would be swept out from under them.
+    await touchReview(deps.db, summary.reviewId)
+    return c.json(summary)
+  })
 
   routes.post('/api/reviews/:id/blobs/check', async (c) => {
     const parsed = blobCheckRequest.safeParse(await c.req.json())

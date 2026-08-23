@@ -4,6 +4,7 @@ import { serve } from '@hono/node-server'
 import { assertBindAllowed, loadConfig, startupReport } from './config.js'
 import { openDatabase } from './db/index.js'
 import { createApp } from './http/app.js'
+import { scheduleSweep } from './sweep.js'
 
 const USAGE = `reviewd - local-first code review daemon
 
@@ -53,6 +54,7 @@ async function main(): Promise<void> {
   const app = createApp({ config, db, local: true })
 
   serve({ fetch: app.fetch, hostname: config.host, port: config.port })
+  const stopSweep = scheduleSweep({ db, config })
 
   for (const line of startupReport(config)) {
     process.stdout.write(`${line}\n`)
@@ -60,6 +62,7 @@ async function main(): Promise<void> {
   process.stdout.write(`reviewd database ${config.databasePath}\n`)
 
   const shutdown = (): void => {
+    stopSweep()
     void db.destroy().finally(() => process.exit(0))
   }
   process.on('SIGINT', shutdown)
