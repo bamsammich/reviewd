@@ -5,6 +5,7 @@ import type { ResolvedConfig } from '../config.js'
 import type { Database } from '../db/types.js'
 import { hardening } from './hardening.js'
 import { reviewRoutes } from './routes-reviews.js'
+import { threadRoutes } from './routes-threads.js'
 
 export interface AppContext {
   config: ResolvedConfig
@@ -26,7 +27,9 @@ export function createApp(ctx: AppContext): App {
     app.use('*', middleware)
   }
 
-  app.route('/', reviewRoutes({ db: ctx.db, config: ctx.config }))
+  const deps = { db: ctx.db, config: ctx.config }
+  app.route('/', reviewRoutes(deps))
+  app.route('/', threadRoutes(deps))
 
   app.get('/api/health', (c) => c.json({ ok: true }))
 
