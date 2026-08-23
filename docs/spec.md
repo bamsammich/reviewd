@@ -577,7 +577,8 @@ Deny reasons the daemon distinguishes:
 
 1. No review covers this root.
 2. A review covers it and carries no approval at any fingerprint.
-3. An approval exists at an older fingerprint. The reason names which files moved.
+3. An approval exists at an older fingerprint. The reason names the snapshot it was
+   approved at, since a fingerprint alone cannot say which files moved.
 
 Warnings accompany an `allow` and print above the commit without blocking it. Open threads on
 an approved review generate one, as does a second review touching the same root, which
