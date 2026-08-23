@@ -39,6 +39,12 @@ const STYLE = `
 
   --radius: 10px;
   --tap: 44px;
+
+  /* How far down the page anything sticky has to start, so the app bar does
+     not sit on top of it. Declared once because three things need to agree:
+     the bar's own height, where a pinned file header parks, and where a
+     fragment scrolls its target to. */
+  --top-bar: 3.35rem;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -102,14 +108,16 @@ a { color: var(--accent); }
 /* Anything a fragment can point at has to clear the sticky app bar, or the
    browser scrolls it to y=0 and the bar covers its first 53 pixels — which is
    the top of the comment you just wrote. */
-.thread, #box, .sourcegroup, details.file { scroll-margin-top: 4rem; }
+.thread, #box, .sourcegroup, details.file {
+  scroll-margin-top: calc(var(--top-bar) + .5rem);
+}
 
 header.top {
   position: sticky; top: 0; z-index: 20;
   display: flex; align-items: center; gap: .6rem;
   padding: .5rem .9rem; background: var(--surface);
   border-bottom: 1px solid var(--rule);
-  min-height: 3rem;
+  min-height: var(--top-bar);
 }
 header.top .home {
   font-weight: 700; font-size: .95rem; color: var(--ink);
@@ -202,15 +210,33 @@ ul.reviews .roots {
   display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap;
 }
 
+/* No overflow: hidden here, which is what used to round the corners over the
+   diff. A clipping ancestor stops position: sticky working on anything inside
+   it, so the clipping moved down to the diff itself and the radius is split
+   between the two. */
 details.file {
   background: var(--surface); border: 1px solid var(--rule);
-  border-radius: var(--radius); margin-bottom: .7rem; overflow: hidden;
+  border-radius: var(--radius); margin-bottom: .7rem;
 }
+details.file > .diff {
+  overflow: hidden; border-radius: 0 0 var(--radius) var(--radius);
+}
+
+/* The file you are reading stays named while you read it. Pinned under the app
+   bar, above the diff but below the two bars that own the edges of the
+   screen. */
 details.file > summary {
+  position: sticky; top: var(--top-bar); z-index: 10;
   padding: .5rem .7rem; cursor: pointer;
   display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
   background: var(--surface); border-bottom: 1px solid var(--rule);
+  border-radius: var(--radius) var(--radius) 0 0;
   min-height: var(--tap); list-style: none;
+}
+
+/* Nothing to pin above, and the corners are its own. */
+details.file:not([open]) > summary {
+  position: static; border-radius: var(--radius); border-bottom: 0;
 }
 details.file > summary::-webkit-details-marker { display: none; }
 details.file > summary::before {
@@ -417,7 +443,7 @@ main.with-bar { padding-bottom: 7.5rem; }
     align-items: start;
     max-width: 100rem; margin: 0 auto;
   }
-  main.review .rail { position: sticky; top: 4rem; }
+  main.review .rail { position: sticky; top: calc(var(--top-bar) + .5rem); }
   main.review .files { min-width: 0; }
   main.with-bar { padding-bottom: 5rem; }
 
