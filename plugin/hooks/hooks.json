@@ -1,0 +1,19 @@
+{
+  "description": "Refuses git commit until reviewd holds an approval for the working tree",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/reviewd-gate.sh"],
+            "timeout": 15,
+            "statusMessage": "Checking this commit against its review..."
+          }
+        ]
+      }
+    ]
+  }
+}

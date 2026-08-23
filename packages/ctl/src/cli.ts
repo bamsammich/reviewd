@@ -3,6 +3,7 @@ import { parseArgs } from 'node:util'
 import { WAIT_EXIT } from '@reviewd/protocol'
 import { Client } from './client.js'
 import { loadClientConfig } from './config.js'
+import { ensureDaemon, logPath } from './ensure.js'
 import { fingerprint, repoRoot } from './git.js'
 import { runMcpServer } from './mcp.js'
 
@@ -48,6 +49,9 @@ async function main(): Promise<void> {
 
   switch (command) {
     case 'mcp':
+      // An agent reaching for a review tool should not have to be told the
+      // service behind it is not running.
+      await ensureDaemon(loadClientConfig().base_url)
       return await runMcpServer()
     case 'wait':
       return await waitForSubmission(values.review, Number(values.timeout ?? 3600))
@@ -82,7 +86,10 @@ async function checkGate(path: string, json: boolean): Promise<void> {
   const root = await requireRepo(path)
   if (!root) return
 
-  const client = new Client(loadClientConfig().base_url)
+  const baseUrl = loadClientConfig().base_url
+  await ensureDaemon(baseUrl)
+
+  const client = new Client(baseUrl)
   const result = await client.gate(root, await fingerprint(root))
 
   if (json) {
@@ -104,16 +111,20 @@ async function checkGate(path: string, json: boolean): Promise<void> {
  */
 async function doctor(): Promise<void> {
   const config = loadClientConfig()
-  const client = new Client(config.base_url)
+  const result = await ensureDaemon(config.base_url)
 
-  if (await client.health()) {
-    process.stdout.write(`reviewctl: reviewd answers at ${config.base_url}\n`)
+  if (result.running) {
+    const how = result.started ? ', started just now' : ''
+    process.stdout.write(`reviewctl: reviewd answers at ${config.base_url}${how}\n`)
+    if (result.started) process.stdout.write(`reviewctl: logging to ${logPath()}\n`)
     return
   }
 
   process.stderr.write(
-    `reviewctl: nothing answers at ${config.base_url}.\n` +
-      `Start reviewd, or set base_url in ~/.config/reviewd/client.json.\n`,
+    `reviewctl: nothing answers at ${config.base_url}, and starting one failed.\n` +
+      `  ${result.error ?? 'no reason given'}\n\n` +
+      `Check that reviewd is on PATH, read ${logPath()},\n` +
+      `or set base_url in ~/.config/reviewd/client.json.\n`,
   )
   process.exitCode = 1
 }
@@ -136,7 +147,10 @@ async function waitForSubmission(
     return
   }
 
-  const client = new Client(loadClientConfig().base_url)
+  const waitUrl = loadClientConfig().base_url
+  await ensureDaemon(waitUrl)
+
+  const client = new Client(waitUrl)
   const deadline = Date.now() + timeoutSeconds * 1000
   const since = Date.now()
 

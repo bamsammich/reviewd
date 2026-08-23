@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd agent for the reviewd daemon.
+
+  launchd expands neither ~ nor $HOME, so the two log paths below carry a
+  placeholder that the install step substitutes. See the Install section of
+  the README.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.bamsammich.reviewd</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/reviewd</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- The commit gate asks this daemon before every commit, so a crash that
+       stays down would block work until someone noticed. -->
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>__HOME__/.local/state/reviewd/reviewd.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/.local/state/reviewd/reviewd.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+</dict>
+</plist>

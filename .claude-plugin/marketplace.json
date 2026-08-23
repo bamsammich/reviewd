@@ -1,0 +1,16 @@
+{
+  "$schema": "https://www.schemastore.org/claude-code-marketplace.json",
+  "name": "bamsammich",
+  "description": "reviewd: a commit gate that holds code until a human has read it.",
+  "owner": {
+    "name": "Travis Huddleston"
+  },
+  "plugins": [
+    {
+      "name": "reviewd",
+      "description": "Opens a code review an agent pushes to, readable on any device, and refuses git commit until it is approved.",
+      "source": "./plugin",
+      "category": "workflow"
+    }
+  ]
+}

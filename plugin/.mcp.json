@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "reviewd": {
+      "type": "stdio",
+      "command": "reviewctl",
+      "args": ["mcp"]
+    }
+  }
+}

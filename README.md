@@ -38,6 +38,84 @@ breaks down fast:
 Remote access is a documented recipe, not a dependency. Loopback works out of the box; LAN,
 VPN, reverse proxy, and Tailscale each get a config block in the docs.
 
+## Install
+
+Two commands. Needs Node 26, git, and `jq`.
+
+```sh
+claude plugin marketplace add bamsammich/reviewd
+claude plugin install reviewd@bamsammich
+```
+
+That installs the commit gate hook, the MCP server, and the skill that drives a
+review.
+
+The plugin needs `reviewd` and `reviewctl` on `PATH`. They are not on npm yet,
+so until they are, that means a checkout:
+
+```sh
+npm install && npm run build && npm link -ws
+```
+
+Then check it:
+
+```sh
+reviewctl doctor
+```
+
+There is no service to install. The daemon starts on first use: whichever of the
+commit gate, the MCP server, or `reviewctl` needs it first brings it up, and it
+stays up for the rest. It logs to `~/.local/state/reviewd/reviewd.log`.
+
+To start it at login rather than on first use, `contrib/` has a launchd agent:
+
+```sh
+sed "s|__HOME__|$HOME|g" contrib/com.bamsammich.reviewd.plist \
+  > ~/Library/LaunchAgents/com.bamsammich.reviewd.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.bamsammich.reviewd.plist
+```
+
+That is a convenience, not a requirement. launchd expands neither `~` nor
+`$HOME`, which is what the `sed` is for.
+
+To take one repository out of the gate:
+
+```sh
+touch "$(git rev-parse --absolute-git-dir)/reviewd-gate-off"
+```
+
+### On a harness that is not Claude Code
+
+Nothing about reviewd is Claude-specific; the plugin is packaging. The two
+pieces underneath it are ordinary:
+
+- **The MCP server** is `reviewctl mcp`, speaking stdio. Register it however
+  your harness registers one. `plugin/.mcp.json` is the declaration to copy.
+- **The commit gate** is `plugin/hooks/reviewd-gate.sh`. It reads a JSON payload
+  on stdin carrying `.tool_input.command` and `.cwd`, and prints a Claude Code
+  `PreToolUse` verdict on stdout. For a harness with a different verdict format,
+  call `reviewctl gate <root>` directly: exit 0 allows, 1 denies, and `--json`
+  gives the reason, the review URL, and any open threads.
+
+## Developing on reviewd
+
+Load the plugin from a checkout without installing it:
+
+```sh
+claude --plugin-dir ./plugin
+```
+
+A local copy takes precedence over an installed one of the same name for that
+session, so this works without uninstalling first. `/reload-plugins` picks up
+edits.
+
+```sh
+npm test                          # the daemon and client suites
+./plugin/hooks/reviewd-gate.test.sh   # the commit gate, which is shell
+claude plugin validate ./plugin
+```
+
 ## Status
 
-Pre-implementation. See [docs/spec.md](docs/spec.md) for the phase 1 design.
+Working. The daemon, the CLI, the web UI, the MCP interface, and the commit gate
+all run. See [docs/spec.md](docs/spec.md) for the phase 1 design.
