@@ -1,6 +1,6 @@
 import type { ReviewSummary, SourceSummary, Thread } from '../../protocol.js'
 import { Palette, renderLine, type Token } from './highlight.js'
-import { html, raw, type SafeHtml } from './html.js'
+import { escapeHtml, html, raw, type SafeHtml } from './html.js'
 import {
   anchorForHalf,
   buildRows,
@@ -28,9 +28,22 @@ export interface OpenBox {
   path: string
   side: 'old' | 'new'
   line: number
+  /** Last line of a range being selected, absent while it is one line. */
+  endLine?: number | undefined
 }
 
-export function parseOpenBox(value: string | undefined): OpenBox | undefined {
+/**
+ * Reads an open comment box out of a URL.
+ *
+ * The key carries the row the box hangs from, as source, side, line and path.
+ * A range's last line arrives separately as `to`, and is dropped unless it is
+ * a line below the start, so a hand-edited URL cannot produce a backwards or
+ * zero-length selection.
+ */
+export function parseOpenBox(
+  value: string | undefined,
+  to?: string | undefined,
+): OpenBox | undefined {
   if (!value) return undefined
 
   const [sourceId, side, line, ...pathParts] = value.split(':')
@@ -41,7 +54,10 @@ export function parseOpenBox(value: string | undefined): OpenBox | undefined {
   const parsed = Number(line)
   if (!Number.isInteger(parsed) || parsed < 1) return undefined
 
-  return { sourceId, path, side, line: parsed }
+  const end = Number(to)
+  const endLine = to !== undefined && Number.isInteger(end) && end > parsed ? end : undefined
+
+  return { sourceId, path, side, line: parsed, endLine }
 }
 
 export function boxKey(box: OpenBox): string {
@@ -335,11 +351,11 @@ function splitRow(
   const boxHere = [row.left, row.right].find((half) => isOpenOn(open, file, half))
 
   return html`<div class="row" data-unified="${row.unified}">
-  ${half(review, file, row.left, 'left', palette)}
-  ${half(review, file, row.right, 'right', palette)}
+  ${half(review, file, row.left, 'left', palette, open, coversLine(file, row.left, threads, open))}
+  ${half(review, file, row.right, 'right', palette, open, coversLine(file, row.right, threads, open))}
 </div>
 ${attached.map((thread) => threadBlock(review, thread, false))}
-${boxHere ? newThreadBlock(review, file, anchorForHalf(boxHere)!) : raw('')}`
+${boxHere ? newThreadBlock(review, file, anchorForHalf(boxHere)!, open?.endLine) : raw('')}`
 }
 
 function threadsAt(threads: Thread[], side: Half): Thread[] {
@@ -370,6 +386,8 @@ function half(
   side: Half,
   which: 'left' | 'right',
   palette: Palette,
+  open?: OpenBox,
+  covered?: boolean,
 ): SafeHtml {
   if (side.kind === 'empty') {
     return html`<div class="side ${which} empty" aria-hidden="true"></div>`
@@ -377,26 +395,40 @@ function half(
 
   const anchor = anchorForHalf(side)
   const sign = side.kind === 'added' ? '+' : side.kind === 'removed' ? '-' : ' '
+  const key = (line: number) =>
+    boxKey({ sourceId: file.sourceId, path: file.path, side: anchor?.side ?? 'new', line })
 
-  const action = anchor
-    ? html`<a
-        class="addnote"
-        href="${raw(
-          `/r/${review.reviewId}?box=${encodeURIComponent(
-            boxKey({
-              sourceId: file.sourceId,
-              path: file.path,
-              side: anchor.side,
-              line: anchor.line,
-            }),
-          )}#box`,
-        )}"
-        data-box
-        aria-label="Comment on ${file.path} line ${anchor.line}"
-        title="Comment on line ${anchor.line}"
-        >+</a
-      >`
-    : raw('')
+  // A line below an open box on the same file and side can extend it down to
+  // itself. This is a link rather than a gesture, so it also serves as the
+  // fallback when the drag handler has not loaded.
+  const extendable =
+    anchor !== null &&
+    open !== undefined &&
+    open.sourceId === file.sourceId &&
+    open.path === file.path &&
+    open.side === anchor.side &&
+    open.line < anchor.line
+
+  const action = !anchor
+    ? raw('')
+    : extendable
+      ? html`<a
+          class="addnote extend"
+          href="${raw(
+            `/r/${review.reviewId}?box=${encodeURIComponent(key(open.line))}&to=${anchor.line}#box`,
+          )}"
+          aria-label="Extend the comment down to line ${anchor.line}"
+          title="Extend down to line ${anchor.line}"
+          >↧</a
+        >`
+      : html`<a
+          class="addnote"
+          href="${raw(`/r/${review.reviewId}?box=${encodeURIComponent(key(anchor.line))}#box`)}"
+          data-box
+          aria-label="Comment on ${file.path} line ${anchor.line}"
+          title="Comment on line ${anchor.line}"
+          >+</a
+        >`
 
   // Highlighted where we recognise the language and the line counts agreed,
   // and the raw text otherwise. `side.text` is escaped by the template;
@@ -407,12 +439,60 @@ function half(
   // The code itself is plain text. Making it a link put the source of every
   // line into the accessibility tree as a control name, which told a screen
   // reader user nothing about what activating it would do.
-  return html`<div class="side ${which} ${side.kind}">
+  // The box key and line ride on the element so the drag handler can build a
+  // selection without parsing hrefs back apart.
+  const drag = anchor
+    ? raw(
+        ` data-key="${escapeHtml(key(anchor.line))}" data-line="${anchor.line}"` +
+          ` data-file="${escapeHtml(foldKey(file.sourceId, file.path))}"` +
+          ` data-review="${escapeHtml(review.reviewId)}"`,
+      )
+    : raw('')
+
+  return html`<div class="side ${which} ${side.kind}${covered ? ' covered' : ''}"${drag}>
   <span class="n">${side.line ?? ''}</span>
   <span class="act">${action}</span>
   <span class="sign" aria-hidden="true">${sign}</span>
   <span class="t">${code}</span>
 </div>`
+}
+
+/**
+ * Whether a line falls inside a comment's range.
+ *
+ * Both a thread that already covers a block and a selection being extended
+ * right now, so the shading a reviewer sees while choosing an end is the same
+ * shading the saved comment gets.
+ */
+function coversLine(
+  file: FileView,
+  half: Half,
+  threads: Thread[],
+  open: OpenBox | undefined,
+): boolean {
+  const anchor = anchorForHalf(half)
+  if (!anchor) return false
+
+  const within = (start: number, end: number | null | undefined) =>
+    end !== null && end !== undefined && anchor.line >= start && anchor.line <= end
+
+  if (
+    open?.sourceId === file.sourceId &&
+    open.path === file.path &&
+    open.side === anchor.side &&
+    within(open.line, open.endLine)
+  ) {
+    return true
+  }
+
+  return threads.some(
+    (thread) =>
+      thread.sourceId === file.sourceId &&
+      thread.path === file.path &&
+      thread.side === anchor.side &&
+      thread.state !== 'outdated' &&
+      within(thread.line, thread.endLine),
+  )
 }
 
 /**
@@ -481,8 +561,10 @@ function newThreadBlock(
   review: ReviewSummary,
   file: FileView,
   anchor: { side: 'old' | 'new'; line: number },
+  endLine?: number | undefined,
 ): SafeHtml {
   const id = `new-${file.sourceId}-${anchor.side}-${anchor.line}`
+  const where = endLine ? `lines ${anchor.line} to ${endLine}` : `line ${anchor.line}`
 
   return html`<div class="threadrow">
     <div class="thread" id="box">
@@ -491,7 +573,12 @@ function newThreadBlock(
         <input type="hidden" name="path" value="${file.path}">
         <input type="hidden" name="side" value="${anchor.side}">
         <input type="hidden" name="line" value="${anchor.line}">
-        <label for="${id}">Comment on ${file.path} line ${anchor.line}</label>
+        ${
+          endLine
+            ? html`<input type="hidden" name="endLine" value="${endLine}">`
+            : raw('')
+        }
+        <label for="${id}">Comment on ${file.path} ${where}</label>
         <textarea id="${id}" name="body" rows="3" autofocus required></textarea>
         <div class="actions">
           <button type="submit" class="primary">Save comment</button>
@@ -716,6 +803,93 @@ if (liveMain && liveMain.dataset.review && 'EventSource' in window) {
   source.addEventListener('threads', land);
   source.addEventListener('gone', () => { source.close(); location.reload(); });
 }
+
+/* ---- dragging a range ------------------------------------------------ */
+
+/* Drag down the gutter to pick a block, the way a diff on the web usually
+   works. Only the gutter starts a drag — the line numbers, the + control and
+   the sign column — so dragging across the code still selects text.
+
+   Everything here is an enhancement over the link on each line, which already
+   extends a selection in two taps. That path is what a phone uses, since a
+   drag on a touch screen is a scroll. */
+let anchorSide = null;
+let dragging = false;
+
+function gutter(event) {
+  const target = event.target instanceof Element ? event.target : null;
+  if (!target || !target.closest('.n, .act, .sign')) return null;
+  return target.closest('.side[data-key]');
+}
+
+function paint(from, to) {
+  const a = Math.min(Number(from.dataset.line), Number(to.dataset.line));
+  const b = Math.max(Number(from.dataset.line), Number(to.dataset.line));
+
+  for (const side of document.querySelectorAll('.side[data-line]')) {
+    // Same file and same column, or line 40 of every other file lights up too.
+    const hit = side.dataset.file === from.dataset.file &&
+      sameColumn(side, from) &&
+      Number(side.dataset.line) >= a &&
+      Number(side.dataset.line) <= b;
+
+    side.classList.toggle('selecting', hit);
+  }
+}
+
+function sameColumn(one, other) {
+  return one.classList.contains('left') === other.classList.contains('left');
+}
+
+function clearPaint() {
+  for (const side of document.querySelectorAll('.side.selecting')) {
+    side.classList.remove('selecting');
+  }
+}
+
+document.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0) return;
+
+  const side = gutter(event);
+  if (!side) return;
+
+  anchorSide = side;
+  dragging = false;
+});
+
+document.addEventListener('pointermove', (event) => {
+  if (!anchorSide) return;
+
+  const side = gutter(event);
+  if (!side || !sameColumn(side, anchorSide)) return;
+  if (side === anchorSide && !dragging) return;
+
+  // Only once the pointer has actually left the line it started on, so a plain
+  // click on the + control is still a click.
+  dragging = true;
+  event.preventDefault();
+  paint(anchorSide, side);
+});
+
+document.addEventListener('pointerup', (event) => {
+  const from = anchorSide;
+  anchorSide = null;
+  clearPaint();
+
+  if (!from || !dragging) { dragging = false; return; }
+  dragging = false;
+
+  const side = gutter(event);
+  if (!side || !sameColumn(side, from)) return;
+
+  const a = Math.min(Number(from.dataset.line), Number(side.dataset.line));
+  const b = Math.max(Number(from.dataset.line), Number(side.dataset.line));
+  const start = a === Number(from.dataset.line) ? from : side;
+
+  const url = '/r/' + start.dataset.review + '?box=' + encodeURIComponent(start.dataset.key) +
+    (b > a ? '&to=' + b : '') + '#box';
+  location.assign(url);
+});
 
 /* ---- comment box ----------------------------------------------------- */
 

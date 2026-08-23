@@ -50,7 +50,14 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
       const folded = parseFolds(cookie(c, 'reviewd_folds'), reviewId)
 
       return c.html(
-        reviewPage(review, files, threads, parseOpenBox(c.req.query('box')), view, folded).value,
+        reviewPage(
+          review,
+          files,
+          threads,
+          parseOpenBox(c.req.query('box'), c.req.query('to')),
+          view,
+          folded,
+        ).value,
       )
     } catch (error) {
       if (error instanceof ReviewError && error.status === 404) {
@@ -121,6 +128,9 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
 
     if (!body || !Number.isInteger(line)) return back(c, reviewId)
 
+    const end = Number(form['endLine'])
+    const endLine = Number.isInteger(end) && end > line ? end : undefined
+
     await createThread(deps, reviewId, {
       sourceId: String(form['sourceId'] ?? ''),
       path: String(form['path'] ?? ''),
@@ -128,6 +138,7 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
       side,
       body,
       author: 'human',
+      ...(endLine === undefined ? {} : { endLine }),
     })
 
     return back(c, reviewId)

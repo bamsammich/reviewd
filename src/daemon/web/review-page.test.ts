@@ -1,7 +1,7 @@
 import type { ReviewSummary, Thread } from '../../protocol.js'
 import { describe, expect, it } from 'vitest'
 import type { FileView } from './pages.js'
-import { foldKey, parseFolds, reviewPage } from './review-page.js'
+import { foldKey, parseFolds, parseOpenBox, reviewPage } from './review-page.js'
 
 const SOURCE = 'src-1'
 const REVIEW = 'rev-1'
@@ -55,6 +55,7 @@ function thread(overrides: Partial<Thread> = {}): Thread {
     path: 'src/a.ts',
     side: 'new',
     line: 1,
+    endLine: null,
     anchorLine: 'const a = 2',
     state: 'active',
     origin: 'human',
@@ -202,6 +203,123 @@ describe('a comment near an insertion', () => {
     const markup = reviewPage(summary(), [inserted()], [at('new', 3)]).value
 
     expect(count(markup, 't-1')).toBe(1)
+  })
+})
+
+/**
+ * Choosing a range is two taps: the line it starts on, then the line it ends
+ * on. Both are ordinary links, so it works before any script runs and needs
+ * neither a drag nor a modifier key — neither of which a phone has.
+ */
+describe('selecting a range', () => {
+  const many = (): FileView => ({
+    ...file('src/a.ts'),
+    oldText: '',
+    newText: 'one\ntwo\nthree\nfour\nfive\n',
+  })
+
+  const boxOn = (line: number, endLine?: number) => ({
+    sourceId: SOURCE,
+    path: 'src/a.ts',
+    side: 'new' as const,
+    line,
+    endLine,
+  })
+
+  // The drag handler reads these rather than parsing hrefs back apart. Drag
+  // itself is a browser behaviour and is checked in one, but a row without
+  // them is a row a drag cannot reach.
+  it('gives every commentable line what a drag needs', () => {
+    const markup = reviewPage(summary(), [many()], []).value
+    const withKey = markup.match(/data-key="[^"]+" data-line="\d+"/g) ?? []
+
+    expect(withKey).toHaveLength(5)
+    expect(markup).toContain('data-line="5"')
+  })
+
+  it('leaves a blank half out of a drag', () => {
+    const markup = reviewPage(summary(), [many()], []).value
+    const blanks = markup.match(/class="side left empty"[^>]*data-key/g) ?? []
+
+    expect(blanks).toHaveLength(0)
+  })
+
+  it('offers no extend control until a box is open', () => {
+    const markup = reviewPage(summary(), [many()], []).value
+
+    expect(markup).not.toContain('addnote extend')
+  })
+
+  it('offers one on every line below the open box', () => {
+    const markup = reviewPage(summary(), [many()], [], boxOn(2)).value
+
+    // Lines 3, 4 and 5 can extend; 1 and 2 cannot.
+    expect(markup.match(/addnote extend/g)).toHaveLength(3)
+    expect(markup).toContain('to=5')
+    expect(markup).not.toContain('to=2')
+  })
+
+  it('keeps the box on its own line while extending', () => {
+    const markup = reviewPage(summary(), [many()], [], boxOn(2, 4)).value
+
+    // The key still names line 2, so the box hangs where it was opened.
+    expect(markup).toContain('name="line" value="2"')
+    expect(markup).toContain('name="endLine" value="4"')
+  })
+
+  it('says what the comment will cover', () => {
+    expect(reviewPage(summary(), [many()], [], boxOn(2, 4)).value).toContain('lines 2 to 4')
+    expect(reviewPage(summary(), [many()], [], boxOn(2)).value).toContain('line 2')
+  })
+
+  it('sends no endLine for a one-line comment', () => {
+    expect(reviewPage(summary(), [many()], [], boxOn(2)).value).not.toContain('name="endLine"')
+  })
+
+  // Counted off the class attribute rather than the word, which also appears
+  // in the stylesheet this page carries.
+  const shaded = (markup: string) => markup.match(/class="side [^"]*\bcovered\b/g)?.length ?? 0
+
+  it('shades the lines being covered as they are chosen', () => {
+    expect(shaded(reviewPage(summary(), [many()], [], boxOn(2, 4)).value)).toBe(3)
+  })
+
+  it('shades the lines a saved range covers', () => {
+    const range = thread({ line: 2, endLine: 4, side: 'new' })
+
+    expect(shaded(reviewPage(summary(), [many()], [range]).value)).toBe(3)
+  })
+
+  it('shades nothing for a comment on one line', () => {
+    const one = thread({ line: 2, side: 'new' })
+
+    expect(shaded(reviewPage(summary(), [many()], [one]).value)).toBe(0)
+  })
+
+  // An outdated comment is one whose code is gone, so shading lines that
+  // happen to sit at those numbers now would point at the wrong thing.
+  it('shades nothing for an outdated range', () => {
+    const range = thread({ line: 2, endLine: 4, side: 'new', state: 'outdated' })
+
+    expect(shaded(reviewPage(summary(), [many()], [range]).value)).toBe(0)
+  })
+})
+
+describe('parsing the box out of a URL', () => {
+  const key = `${SOURCE}:new:2:src/a.ts`
+
+  it('reads a range', () => {
+    expect(parseOpenBox(key, '5')).toMatchObject({ line: 2, endLine: 5 })
+  })
+
+  it('ignores an end that is not after the start', () => {
+    expect(parseOpenBox(key, '2')?.endLine).toBeUndefined()
+    expect(parseOpenBox(key, '1')?.endLine).toBeUndefined()
+  })
+
+  it('ignores an end that is not a number', () => {
+    expect(parseOpenBox(key, 'tomorrow')?.endLine).toBeUndefined()
+    expect(parseOpenBox(key, '')?.endLine).toBeUndefined()
   })
 })
 

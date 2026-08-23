@@ -271,6 +271,24 @@ a.addnote {
 }
 a.addnote:hover, a.addnote:focus-visible { background: var(--accent); color: var(--accent-ink); }
 
+/* The lines a comment covers, whether it is saved or still being chosen. A
+   left border rather than a background, because added and removed lines
+   already own their background and a second one would fight it. */
+.side.covered { box-shadow: inset 2px 0 0 var(--accent); }
+.side.covered .n { color: var(--ink-2); }
+
+/* Offered on every line below an open comment box, and the path a touch
+   screen takes, where a drag is a scroll. */
+a.addnote.extend { color: var(--accent); font-weight: 700; }
+
+/* Under the pointer mid-drag. Brighter than the saved shading, because this
+   one answers "what am I about to pick" rather than "what does this cover". */
+.side.selecting { background: var(--accent-soft); }
+.side.selecting .t, .side.selecting .n { color: var(--ink); }
+
+/* The gutter is the drag handle, so it should not look like text to grab. */
+.side .n, .side .sign { -webkit-user-select: none; user-select: none; }
+
 /* Coarse pointers get rows tall enough to hit without aiming. */
 @media (pointer: coarse) {
   .side .n, .side .t, .side .sign { padding-top: .25rem; padding-bottom: .25rem; }
