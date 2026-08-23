@@ -1,14 +1,21 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util'
+import { WAIT_EXIT } from '@reviewd/protocol'
 import { Client } from './client.js'
 import { loadClientConfig } from './config.js'
 import { fingerprint, repoRoot } from './git.js'
+import { runMcpServer } from './mcp.js'
+
+/** One long-poll round. Shorter than the deadline so a proxy idle timeout cannot strand it. */
+const MAX_POLL_MS = 300_000
 
 const USAGE = `reviewctl - client for the reviewd review daemon
 
 Usage: reviewctl <command> [options]
 
 Commands:
+  mcp                       Serve the MCP tools an agent drives reviews with
+  wait --review <id>        Block until the reviewer submits, then exit
   fingerprint [path]        Hash every change against HEAD, tracked or not
   gate [path]               Ask whether a commit in this repository is approved
   doctor                    Check that the daemon answers where links point
@@ -18,12 +25,15 @@ Options:
   -h, --help                Show this message
 
 Exit codes for gate: 0 allowed, 1 denied.
+Exit codes for wait: 0 approved, 2 changes requested, 3 released, 124 timeout.
 `
 
 async function main(): Promise<void> {
   const { values, positionals } = parseArgs({
     options: {
       json: { type: 'boolean', default: false },
+      review: { type: 'string' },
+      timeout: { type: 'string' },
       help: { type: 'boolean', short: 'h', default: false },
     },
     allowPositionals: true,
@@ -37,6 +47,10 @@ async function main(): Promise<void> {
   }
 
   switch (command) {
+    case 'mcp':
+      return await runMcpServer()
+    case 'wait':
+      return await waitForSubmission(values.review, Number(values.timeout ?? 3600))
     case 'fingerprint':
       return await printFingerprint(target ?? process.cwd(), values.json ?? false)
     case 'gate':
@@ -102,6 +116,51 @@ async function doctor(): Promise<void> {
       `Start reviewd, or set base_url in ~/.config/reviewd/client.json.\n`,
   )
   process.exitCode = 1
+}
+
+/**
+ * Blocks until the reviewer submits, then exits.
+ *
+ * Designed to run as a background command: the harness resumes the session when
+ * the process exits, so the wait costs nothing while it runs and fires the
+ * moment a submission lands. The exit code carries the verdict, so the agent
+ * knows what happened before reading a byte of output.
+ */
+async function waitForSubmission(
+  reviewId: string | undefined,
+  timeoutSeconds: number,
+): Promise<void> {
+  if (!reviewId) {
+    process.stderr.write('reviewctl: wait needs --review <id>\n')
+    process.exitCode = 1
+    return
+  }
+
+  const client = new Client(loadClientConfig().base_url)
+  const deadline = Date.now() + timeoutSeconds * 1000
+  const since = Date.now()
+
+  while (Date.now() < deadline) {
+    const remaining = Math.min(deadline - Date.now(), MAX_POLL_MS)
+    const result = await client.wait(reviewId, remaining, since)
+
+    if (result.wokeOn === 'released') {
+      process.stdout.write('review released\n')
+      process.exitCode = WAIT_EXIT.gone
+      return
+    }
+
+    if (result.wokeOn === 'submission') {
+      process.stdout.write(`${result.verdict ?? 'submitted'}\n`)
+      if (result.url) process.stdout.write(`${result.url}\n`)
+      process.exitCode =
+        result.verdict === 'approved' ? WAIT_EXIT.approved : WAIT_EXIT.changesRequested
+      return
+    }
+  }
+
+  process.stdout.write('timeout\n')
+  process.exitCode = WAIT_EXIT.timeout
 }
 
 async function requireRepo(path: string): Promise<string | null> {

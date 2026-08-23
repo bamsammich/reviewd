@@ -1,0 +1,330 @@
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
+import { z } from 'zod'
+import { Client } from './client.js'
+import { loadClientConfig } from './config.js'
+import { DEFAULT_LIMITS } from './diff.js'
+import { pushSnapshot } from './push.js'
+
+/**
+ * The MCP surface an agent drives reviews through.
+ *
+ * Three rules shape every tool here. No diff content crosses the model context,
+ * so results carry counts and ids rather than file bodies. Results stay small
+ * enough to call in a loop. And every mutating tool returns a URL the daemon
+ * built from public_url, because the agent must never assemble one: it reaches
+ * the daemon on loopback, and a loopback link is dead on the phone the reviewer
+ * is holding.
+ */
+
+interface ToolResult {
+  // The SDK's result type carries an open index signature for extensions.
+  [key: string]: unknown
+  content: { type: 'text'; text: string }[]
+  isError?: boolean
+}
+
+function ok(value: unknown): ToolResult {
+  return { content: [{ type: 'text', text: JSON.stringify(value) }] }
+}
+
+function fail(error: unknown): ToolResult {
+  const message = error instanceof Error ? error.message : String(error)
+  return { content: [{ type: 'text', text: message }], isError: true }
+}
+
+export function createMcpServer(client = new Client(loadClientConfig().base_url)): McpServer {
+  const server = new McpServer({ name: 'reviewd', version: '0.0.0' })
+
+  server.registerTool(
+    'review_create',
+    {
+      title: 'Open a review',
+      description:
+        'Opens a review over one or more directories and pushes the current changes. ' +
+        'Returns a URL to hand the reviewer. Several roots in one review is ordinary: ' +
+        'pass every directory the change touches.',
+      inputSchema: {
+        title: z.string().describe('What this change does, in a few words'),
+        sources: z
+          .array(
+            z.object({
+              path: z.string().describe('Absolute path to a repository or directory'),
+              base: z
+                .string()
+                .optional()
+                .describe('Ref to compare against, HEAD by default. Omit for a non-git directory'),
+              label: z.string().optional(),
+            }),
+          )
+          .min(1),
+        notify: z.boolean().optional().describe('Send the configured push notification'),
+      },
+    },
+    async ({ title, sources, notify }) => {
+      try {
+        const review = await client.createReview({
+          title,
+          sources: sources.map((s) => ({
+            path: s.path,
+            includeUntracked: true,
+            ...(s.base === undefined ? {} : { base: s.base }),
+            ...(s.label === undefined ? {} : { label: s.label }),
+          })),
+          createdBy: 'agent',
+          notify: notify ?? false,
+        })
+
+        const snapshot = await pushSnapshot(
+          client,
+          review.reviewId,
+          review.sources.map((s) => ({
+            id: s.id,
+            rootPath: s.rootPath,
+            baseRef: s.baseRef ?? undefined,
+          })),
+          DEFAULT_LIMITS,
+        )
+
+        return ok({
+          reviewId: review.reviewId,
+          url: review.url,
+          filesChanged: snapshot.filesChanged,
+          sources: review.sources.map((s) => ({ id: s.id, label: s.label, root: s.rootPath })),
+        })
+      } catch (error) {
+        return fail(error)
+      }
+    },
+  )
+
+  server.registerTool(
+    'review_snapshot',
+    {
+      title: 'Push a new revision',
+      description:
+        'Recomputes every root and pushes a new revision after editing. Comments re-anchor ' +
+        'to the code they were written against.',
+      inputSchema: { reviewId: z.string() },
+    },
+    async ({ reviewId }) => {
+      try {
+        const review = await client.getReview(reviewId)
+        const result = await pushSnapshot(
+          client,
+          reviewId,
+          review.sources.map((s) => ({
+            id: s.id,
+            rootPath: s.rootPath,
+            baseRef: s.baseRef ?? undefined,
+          })),
+          DEFAULT_LIMITS,
+        )
+
+        return ok(result)
+      } catch (error) {
+        return fail(error)
+      }
+    },
+  )
+
+  server.registerTool(
+    'review_get',
+    {
+      title: 'Check a review',
+      description:
+        'Status, current revision, per-source approval, and thread counts by whose turn it is. ' +
+        'The one call that works with no live process, so a resumed session asks this first.',
+      inputSchema: { reviewId: z.string() },
+    },
+    async ({ reviewId }) => {
+      try {
+        const review = await client.getReview(reviewId)
+        return ok({
+          reviewId: review.reviewId,
+          title: review.title,
+          status: review.status,
+          url: review.url,
+          revision: review.snapshotSeq,
+          filesChanged: review.filesChanged,
+          threadsAwaitingAgent: review.threadsAwaitingAgent,
+          threadsAwaitingHuman: review.threadsAwaitingHuman,
+          sources: review.sources.map((s) => ({
+            id: s.id,
+            label: s.label,
+            root: s.rootPath,
+            approved: s.approved,
+          })),
+        })
+      } catch (error) {
+        return fail(error)
+      }
+    },
+  )
+
+  server.registerTool(
+    'review_list',
+    {
+      title: 'List reviews',
+      description: 'Open reviews, optionally narrowed to those covering one directory.',
+      inputSchema: {
+        status: z.enum(['open', 'approved']).optional(),
+        root: z.string().optional().describe('Only reviews covering this directory'),
+      },
+    },
+    async ({ status, root }) => {
+      try {
+        const reviews = await client.listReviews({
+          ...(status === undefined ? {} : { status }),
+          ...(root === undefined ? {} : { root }),
+        })
+
+        return ok(
+          reviews.map((review) => ({
+            reviewId: review.reviewId,
+            title: review.title,
+            status: review.status,
+            url: review.url,
+            ageSeconds: review.ageSeconds,
+            threadsAwaitingAgent: review.threadsAwaitingAgent,
+          })),
+        )
+      } catch (error) {
+        return fail(error)
+      }
+    },
+  )
+
+  server.registerTool(
+    'threads_list',
+    {
+      title: 'Read comment threads',
+      description:
+        'Submitted messages only. Unsent drafts stay invisible, so nothing here is a comment ' +
+        'the reviewer has not sent yet. Filter by turn "agent" for the only question worth ' +
+        'asking: what is owed.',
+      inputSchema: {
+        reviewId: z.string(),
+        state: z.enum(['active', 'resolved', 'outdated']).optional(),
+        turn: z.enum(['human', 'agent']).optional(),
+      },
+    },
+    async ({ reviewId, state, turn }) => {
+      try {
+        const threads = await client.listThreads(reviewId, {
+          ...(state === undefined ? {} : { state }),
+          ...(turn === undefined ? {} : { turn }),
+        })
+
+        return ok(
+          threads.map((thread) => ({
+            threadId: thread.id,
+            source: thread.sourceLabel,
+            path: thread.path,
+            line: thread.line,
+            state: thread.state,
+            turn: thread.turn,
+            drifted: thread.drifted,
+            messages: thread.messages.map((m) => ({ author: m.author, body: m.body })),
+          })),
+        )
+      } catch (error) {
+        return fail(error)
+      }
+    },
+  )
+
+  server.registerTool(
+    'thread_create',
+    {
+      title: 'Ask about your own change',
+      description:
+        'Opens a thread on a line of your own output, anchored where it applies. Use it for a ' +
+        'judgment call worth flagging rather than burying the question in chat.',
+      inputSchema: {
+        reviewId: z.string(),
+        path: z.string().describe('Path relative to the source root'),
+        line: z.number().int().positive(),
+        body: z.string(),
+        sourceId: z.string().optional().describe('Required when two roots share this path'),
+        side: z.enum(['old', 'new']).optional(),
+      },
+    },
+    async ({ reviewId, path, line, body, sourceId, side }) => {
+      try {
+        const result = await client.createThread(reviewId, {
+          path,
+          line,
+          body,
+          author: 'agent',
+          side: side ?? 'new',
+          ...(sourceId === undefined ? {} : { sourceId }),
+        })
+
+        return ok(result)
+      } catch (error) {
+        return fail(error)
+      }
+    },
+  )
+
+  server.registerTool(
+    'thread_reply',
+    {
+      title: 'Reply in a thread',
+      description: 'Answers the reviewer. Your messages send immediately rather than drafting.',
+      inputSchema: { threadId: z.string(), body: z.string() },
+    },
+    async ({ threadId, body }) => {
+      try {
+        return ok(await client.reply(threadId, body, 'agent'))
+      } catch (error) {
+        return fail(error)
+      }
+    },
+  )
+
+  server.registerTool(
+    'thread_resolve',
+    {
+      title: 'Close a thread',
+      description:
+        'Closes a thread you addressed. The reviewer sees it was closed by an agent and can ' +
+        'reopen it in one click.',
+      inputSchema: { threadId: z.string(), note: z.string().optional() },
+    },
+    async ({ threadId, note }) => {
+      try {
+        return ok(await client.setThreadState(threadId, 'resolved', note))
+      } catch (error) {
+        return fail(error)
+      }
+    },
+  )
+
+  server.registerTool(
+    'review_release',
+    {
+      title: 'Acknowledge and discard a review',
+      description:
+        'Says you saw the outcome, committed, and need none of the data. Refuses while an ' +
+        'approval has not been used by a commit, since releasing first would delete the very ' +
+        'approval that clears it. Pass force to abandon a review on purpose.',
+      inputSchema: { reviewId: z.string(), force: z.boolean().optional() },
+    },
+    async ({ reviewId, force }) => {
+      try {
+        return ok(await client.release(reviewId, force ?? false))
+      } catch (error) {
+        return fail(error)
+      }
+    },
+  )
+
+  return server
+}
+
+export async function runMcpServer(): Promise<void> {
+  const server = createMcpServer()
+  await server.connect(new StdioServerTransport())
+}
