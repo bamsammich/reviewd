@@ -1,0 +1,25 @@
+{
+  "name": "@reviewd/daemon",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "reviewd": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "start": "node ./dist/cli.js"
+  },
+  "dependencies": {
+    "@reviewd/protocol": "*",
+    "better-sqlite3": "^13.0.0",
+    "kysely": "^0.29.0",
+    "uuid": "^14.0.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0"
+  }
+}

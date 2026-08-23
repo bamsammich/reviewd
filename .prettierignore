@@ -1,0 +1,7 @@
+dist/
+node_modules/
+coverage/
+# The spec is hand-wrapped at 100 columns and holds ASCII diagrams that a
+# reflow would mangle.
+docs/
+*.md

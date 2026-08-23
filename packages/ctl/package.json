@@ -1,0 +1,19 @@
+{
+  "name": "@reviewd/ctl",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "reviewctl": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc --build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@reviewd/protocol": "*",
+    "zod": "^4.0.0"
+  }
+}
