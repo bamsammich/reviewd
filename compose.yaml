@@ -1,0 +1,40 @@
+# reviewd in a container, published where the reviewer is.
+#
+# The daemon holds no credentials, so reachability is the whole access boundary:
+# whatever can open the port can read the code and approve the commits. Inside
+# the container it binds 0.0.0.0 because a container's loopback reaches nothing
+# else. The address it is published on below is the decision that matters.
+#
+#   REVIEWD_PUBLISH=127.0.0.1   this machine only, which is the default
+#   REVIEWD_PUBLISH=192.0.2.10  one interface, so whatever routes to it can read
+#   REVIEWD_PUBLISH=0.0.0.0     every interface the host holds, now and later
+#
+# Publishing on an address a VPN provides needs that interface up before the
+# container starts, or the port fails to bind.
+
+# Named rather than taken from the directory, so a second checkout or a git
+# worktree talks to the same daemon and the same reviews instead of quietly
+# starting its own.
+name: reviewd
+
+services:
+  reviewd:
+    build: .
+    image: reviewd:local
+    init: true
+    restart: unless-stopped
+
+    ports:
+      - '${REVIEWD_PUBLISH:-127.0.0.1}:7777:7777'
+
+    volumes:
+      # config.json is read from here, and the container refuses to start
+      # without one. Read-only because the daemon writes this file only to
+      # create defaults, and defaults are what the entrypoint is refusing.
+      - '${REVIEWD_CONFIG_DIR:-./contrib/docker/config}:/config/reviewd:ro'
+      # Reviews, threads, and every blob a client uploaded. This is a copy of
+      # the code under review, so it belongs wherever that is acceptable.
+      - 'reviewd-state:/state/reviewd'
+
+volumes:
+  reviewd-state:

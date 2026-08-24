@@ -8,3 +8,7 @@ coverage/
 *.db-shm
 .env
 .env.local
+
+# The container's config.json names one machine's address, so it belongs to
+# whoever runs it rather than to the repository.
+contrib/docker/config/

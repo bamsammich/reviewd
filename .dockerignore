@@ -1,0 +1,16 @@
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/
+.git/
+.github/
+.claude/
+docs/
+plugin/
+contrib/docker/config/
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.local
+.DS_Store
