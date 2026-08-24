@@ -16,7 +16,7 @@ function summary(overrides: Partial<ReviewSummary> = {}): ReviewSummary {
     lastActivityAt: 0,
     ageSeconds: 0,
     snapshotSeq: 1,
-    filesChanged: 1,
+    fileCount: 1,
     threadsAwaitingAgent: 0,
     threadsAwaitingHuman: 0,
     sources: [

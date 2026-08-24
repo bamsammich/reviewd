@@ -87,7 +87,7 @@ describe('the tool surface', () => {
 
     // Never the loopback address the agent reached the daemon on.
     expect(created['url']).toMatch(/^https:\/\/mac\.tailnet-name\.ts\.net\/r\//)
-    expect(created['filesChanged']).toBe(1)
+    expect(created['fileCount']).toBe(1)
   })
 
   it('keeps diff content out of every result', async () => {

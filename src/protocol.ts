@@ -80,7 +80,12 @@ export const reviewSummary = z.object({
   lastActivityAt: z.number().int(),
   ageSeconds: z.number().int(),
   snapshotSeq: z.number().int(),
-  filesChanged: z.number().int(),
+  /**
+   * Files in the current revision. Under git that is the changed files; a
+   * source with no base to compare against puts its whole tree in a revision,
+   * so this counts what a reviewer has to read rather than what moved.
+   */
+  fileCount: z.number().int(),
   threadsAwaitingAgent: z.number().int(),
   threadsAwaitingHuman: z.number().int(),
   sources: z.array(sourceSummary),
@@ -112,7 +117,8 @@ export type SnapshotManifest = z.infer<typeof snapshotManifest>
 
 export const snapshotResult = z.object({
   seq: z.number().int(),
-  filesChanged: z.number().int(),
+  /** Files in this revision, on the same terms as `reviewSummary.fileCount`. */
+  fileCount: z.number().int(),
   threadsMoved: z.number().int(),
   threadsOutdated: z.number().int(),
   url: z.string(),

@@ -131,7 +131,7 @@ export async function summarize({ db, config }: Deps, reviewId: string): Promise
     : []
   const approved = new Set(approvals.map((a) => a.source_id))
 
-  const filesChanged = latest
+  const fileCount = latest
     ? await db
         .selectFrom('file_change')
         .select(({ fn }) => fn.countAll<number>().as('n'))
@@ -159,7 +159,7 @@ export async function summarize({ db, config }: Deps, reviewId: string): Promise
     lastActivityAt: review.last_activity_at,
     ageSeconds: Math.max(0, Math.floor((now() - review.created_at) / 1000)),
     snapshotSeq: latest?.seq ?? 0,
-    filesChanged: filesChanged?.n ?? 0,
+    fileCount: fileCount?.n ?? 0,
     threadsAwaitingAgent: turns.agent,
     threadsAwaitingHuman: turns.human,
     sources: sourceSummaries,
@@ -422,7 +422,7 @@ export async function createSnapshot(
 
   return {
     seq,
-    filesChanged: manifest.files.length,
+    fileCount: manifest.files.length,
     threadsMoved: moved,
     threadsOutdated: outdated,
     url: reviewUrl(config, reviewId),

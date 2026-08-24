@@ -79,7 +79,7 @@ describe('one review across two repositories', () => {
 
     // One snapshot, one file from each repository.
     expect(snapshot.seq).toBe(1)
-    expect(snapshot.filesChanged).toBe(2)
+    expect(snapshot.fileCount).toBe(2)
 
     // The reviewer comments on one root and the agent asks about the other.
     await client.createThread(review.reviewId, {
