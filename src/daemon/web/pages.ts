@@ -19,21 +19,21 @@ export function reviewListPage(reviews: ReviewSummary[]): SafeHtml {
   const waiting = reviews.filter((review) => review.threadsAwaitingHuman > 0).length
 
   const body = html`${topBar(reviews.length === 0 ? 'nothing open' : `${reviews.length} open`)}
-<main id="main">
-  <h1 class="page-title">
-    ${reviews.length === 0 ? 'No open reviews' : `${reviews.length} open review${reviews.length === 1 ? '' : 's'}`}
-    ${waiting > 0 ? html`<span class="badge you">${waiting} waiting on you</span>` : raw('')}
-  </h1>
-  ${
-    reviews.length === 0
-      ? html`<p class="emptystate">
-          An agent opens a review when it has changes to show, and sends you a link.
-        </p>`
-      : html`<ul class="reviews">
-          ${reviews.map((review) => reviewCard(review))}
-        </ul>`
-  }
-</main>`
+    <main id="main">
+      <h1 class="page-title">
+        ${reviews.length === 0 ? 'No open reviews' : `${reviews.length} open review${reviews.length === 1 ? '' : 's'}`}
+        ${waiting > 0 ? html`<span class="badge you">${waiting} waiting on you</span>` : raw('')}
+      </h1>
+      ${
+        reviews.length === 0
+          ? html`<p class="emptystate">
+              An agent opens a review when it has changes to show, and sends you a link.
+            </p>`
+          : html`<ul class="reviews">
+              ${reviews.map((review) => reviewCard(review))}
+            </ul>`
+      }
+    </main>`
 
   return page('reviewd', body)
 }
@@ -46,27 +46,28 @@ export function reviewListPage(reviews: ReviewSummary[]): SafeHtml {
  */
 function reviewCard(review: ReviewSummary): SafeHtml {
   return html`<li>
-  <a href="/r/${review.reviewId}">
-    <div class="title">${review.title}</div>
-    <div class="roots">
-      ${review.sources.map(
-        (source) => html`<span title="${source.rootPath}"
-          >${source.label || basenameOf(source.rootPath)}</span
-        >`,
-      )}
-    </div>
-    <div class="meta">
-      ${review.fileCount} file${review.fileCount === 1 ? '' : 's'} &middot; rev
-      ${review.snapshotSeq} &middot; ${age(review.ageSeconds)} ago
-      ${
-        review.threadsAwaitingHuman > 0
-          ? html` <span class="badge you">${review.threadsAwaitingHuman} for you</span>`
-          : raw('')
-      }
-      ${review.status === 'approved' ? html` <span class="badge approved">approved</span>` : raw('')}
-    </div>
-  </a>
-</li>`
+    <a href="/r/${review.reviewId}">
+      <div class="title">${review.title}</div>
+      <div class="roots">
+        ${review.sources.map(
+          (source) =>
+            html`<span title="${source.rootPath}"
+              >${source.label || basenameOf(source.rootPath)}</span
+            >`,
+        )}
+      </div>
+      <div class="meta">
+        ${review.fileCount} file${review.fileCount === 1 ? '' : 's'} &middot; rev
+        ${review.snapshotSeq} &middot; ${age(review.ageSeconds)} ago
+        ${
+          review.threadsAwaitingHuman > 0
+            ? html` <span class="badge you">${review.threadsAwaitingHuman} for you</span>`
+            : raw('')
+        }
+        ${review.status === 'approved' ? html` <span class="badge approved">approved</span>` : raw('')}
+      </div>
+    </a>
+  </li>`
 }
 
 /** A page that says why there is nothing to look at. */

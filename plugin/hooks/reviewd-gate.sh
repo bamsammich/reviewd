@@ -118,7 +118,12 @@ command_head() {
 # commits from content this script never measured, and `commit-tree` with
 # `update-ref` builds one out of plumbing. They are listed rather than the
 # regex being loosened, so a reader can see exactly which doors are covered.
-COMMIT_VERBS='commit|merge|rebase|cherry-pick|revert|am|commit-tree|update-ref|apply'
+#
+# `apply` was in this list and is not a door: it writes the working tree and
+# stops there, so the commit that follows still has to pass the gate with the
+# bytes it wrote. Gating it denied an ordinary way to move a patch around and
+# bought nothing, which is the trade the paragraph above refuses to make.
+COMMIT_VERBS='commit|merge|rebase|cherry-pick|revert|am|commit-tree|update-ref'
 
 # Flags and their arguments may sit between git and the subcommand, which is
 # what makes `git -C path commit` a commit and `git -C path show` not.
@@ -277,7 +282,6 @@ fi
 # is `reviewd gate`'s job now, because it is the only side that also checks
 # what the index is holding.
 answer=$("$REVIEWD" gate "$root" --json 2>/dev/null)
-status=$?
 
 if [ -z "$answer" ]; then
   # A daemon that is down denies rather than waves everything through, because
@@ -285,10 +289,15 @@ if [ -z "$answer" ]; then
   # message carries both ways out.
   deny "reviewd is not answering, so this commit cannot be checked.
 
-Start it:
-  launchctl kickstart -k gui/\$(id -u)/com.bamsammich.reviewd
+It normally starts on first use, so something stopped it from coming up. The
+log says what:
+  ~/.local/state/reviewd/reviewd.log
 
-Then commit again. To turn the gate off for this repository only:
+Start it by hand with \`reviewd serve\`, or restart whatever runs it for you: a
+launchd agent (launchctl kickstart -k gui/\$(id -u)/com.bamsammich.reviewd), a
+systemd unit, or the container. Then commit again.
+
+To turn the gate off for this repository only:
   touch \"$gitdir/reviewd-gate-off\"
 
 Override this one commit only if the user explicitly asks: prefix the command
@@ -326,4 +335,3 @@ Override this one commit only if the user explicitly asks: prefix the command
 with REVIEWD_SKIP=1."
 
 deny "$message"
-exit "$status"

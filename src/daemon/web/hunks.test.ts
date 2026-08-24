@@ -265,8 +265,7 @@ describe('anchorForHalf', () => {
  * different line of code entirely.
  */
 describe('an insertion shifting the two columns apart', () => {
-  const rows = () =>
-    toSplitRows(buildRows('a\nb\nc\nd\n', 'a\nINSERTED\nb\nc\nd\n'))
+  const rows = () => toSplitRows(buildRows('a\nb\nc\nd\n', 'a\nINSERTED\nb\nc\nd\n'))
 
   it('never gives two halves the same anchor', () => {
     const anchors = rows()

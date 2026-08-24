@@ -131,44 +131,42 @@ export function reviewPage(
   const palette = new Palette()
   const page_: Page = { review, threads, open, folded, palette }
 
-  const body = html`
-${topBar(review.title, html`<span class="rev">rev ${review.snapshotSeq}</span>`)}
-<main
-  id="main"
-  class="review with-bar view-${view} rail-${rail}"
-  data-review="${review.reviewId}"
->
-  <!--
+  const body = html` ${topBar(review.title, html`<span class="rev">rev ${review.snapshotSeq}</span>`)}
+    <main
+      id="main"
+      class="review with-bar view-${view} rail-${rail}"
+      data-review="${review.reviewId}"
+    >
+      <!--
     The token the script copies into the comment box it builds, and the state
     the poll compares against. Both live inside main so that a refresh, which
     replaces main's contents, brings new ones rather than leaving the page
     holding a token and a revision number from before it caught up.
   -->
-  <input
-    type="hidden"
-    id="page-token"
-    value="${mintPageToken(review.reviewId, review.snapshotSeq, Date.now())}"
-    data-revision="${review.snapshotSeq}"
-    data-awaiting="${awaitingYou}"
-  >
-  <div class="rail">
-    <h1 class="page-title">${review.title}</h1>
-    ${scopeList(grouped, threads)}
-    ${coaching(threads.length, drafts, awaitingYou)}
-  </div>
+      <input
+        type="hidden"
+        id="page-token"
+        value="${mintPageToken(review.reviewId, review.snapshotSeq, Date.now())}"
+        data-revision="${review.snapshotSeq}"
+        data-awaiting="${awaitingYou}"
+      />
+      <div class="rail">
+        <h1 class="page-title">${review.title}</h1>
+        ${scopeList(grouped, threads)} ${coaching(threads.length, drafts, awaitingYou)}
+      </div>
 
-  <div class="files">
-    ${
-      files.length === 0
-        ? html`<p class="emptystate">This revision changed nothing.</p>`
-        : raw('')
-    }
-    ${viewToggle(review, view, rail)}
-    ${grouped.map((group) => sourceGroup(page_, group, grouped.length > 1))}
-    ${outdatedBlock(page_, outdated)}
-  </div>
-</main>
-${submitBar(review, drafts, awaitingYou)}`
+      <div class="files">
+        ${
+          files.length === 0
+            ? html`<p class="emptystate">This revision changed nothing.</p>`
+            : raw('')
+        }
+        ${viewToggle(review, view, rail)}
+        ${grouped.map((group) => sourceGroup(page_, group, grouped.length > 1))}
+        ${outdatedBlock(page_, outdated)}
+      </div>
+    </main>
+    ${submitBar(review, drafts, awaitingYou)}`
 
   const highlighting = palette.css()
 
@@ -217,12 +215,12 @@ function scopeList(groups: SourceGroup[], threads: Thread[]): SafeHtml {
   const files = groups.reduce((total, group) => total + group.files.length, 0)
 
   return html`<nav class="scope" aria-labelledby="scope-heading">
-  <h2 id="scope-heading">
-    ${files} file${files === 1 ? '' : 's'} in
-    ${groups.length === 1 ? '1 place' : `${groups.length} places`}
-  </h2>
-  ${groups.map((group) => sourceBranch(group, threads))}
-</nav>`
+    <h2 id="scope-heading">
+      ${files} file${files === 1 ? '' : 's'} in
+      ${groups.length === 1 ? '1 place' : `${groups.length} places`}
+    </h2>
+    ${groups.map((group) => sourceBranch(group, threads))}
+  </nav>`
 }
 
 function sourceBranch(group: SourceGroup, threads: Thread[]): SafeHtml {
@@ -230,42 +228,43 @@ function sourceBranch(group: SourceGroup, threads: Thread[]): SafeHtml {
   const tracked = group.source.vcs === 'git'
 
   return html`<div class="branch">
-  <a class="root ${group.source.approved ? 'ok' : ''}" href="#src-${group.source.id}">
-    ${tracked ? GIT_ICON : FOLDER_ICON}
-    <span class="visually-hidden">${tracked ? 'git repository' : 'directory'}</span>
-    <span class="name">${name}</span>
-    ${group.source.approved ? html`<span class="badge approved">approved</span>` : raw('')}
-    <span class="path" title="${group.source.rootPath}"
-      >${displayPath(group.source.rootPath)}</span
-    >
-  </a>
-  ${treeList(buildTree(group.files), threads)}
-</div>`
+    <a class="root ${group.source.approved ? 'ok' : ''}" href="#src-${group.source.id}">
+      ${tracked ? GIT_ICON : FOLDER_ICON}
+      <span class="visually-hidden">${tracked ? 'git repository' : 'directory'}</span>
+      <span class="name">${name}</span>
+      ${group.source.approved ? html`<span class="badge approved">approved</span>` : raw('')}
+      <span class="path" title="${group.source.rootPath}"
+        >${displayPath(group.source.rootPath)}</span
+      >
+    </a>
+    ${treeList(buildTree(group.files), threads)}
+  </div>`
 }
 
 function treeList(nodes: TreeNode[], threads: Thread[]): SafeHtml {
   if (nodes.length === 0) return raw('')
 
   return html`<ul class="tree">
-  ${nodes.map(
-    (node) => html`<li>
-      ${node.kind === 'directory' ? treeDirectory(node, threads) : treeFile(node, threads)}
-    </li>`,
-  )}
-</ul>`
+    ${nodes.map(
+      (node) =>
+        html`<li>
+          ${node.kind === 'directory' ? treeDirectory(node, threads) : treeFile(node, threads)}
+        </li>`,
+    )}
+  </ul>`
 }
 
 function treeDirectory(node: TreeDirectory, threads: Thread[]): SafeHtml {
   return html`<details class="dir" open>
-  <summary>
-    <span class="name">${node.name}</span>
-    <span class="count" aria-hidden="true">${node.fileCount}</span>
-    <span class="visually-hidden">
-      ${node.fileCount} file${node.fileCount === 1 ? '' : 's'}
-    </span>
-  </summary>
-  ${treeList(node.children, threads)}
-</details>`
+    <summary>
+      <span class="name">${node.name}</span>
+      <span class="count" aria-hidden="true">${node.fileCount}</span>
+      <span class="visually-hidden">
+        ${node.fileCount} file${node.fileCount === 1 ? '' : 's'}
+      </span>
+    </summary>
+    ${treeList(node.children, threads)}
+  </details>`
 }
 
 /** First letter of the change, because colour alone is not a label. */
@@ -281,24 +280,19 @@ function treeFile(node: TreeFile, threads: Thread[]): SafeHtml {
   const { file } = node
   const key = foldKey(file.sourceId, file.path)
   const comments = threads.filter(
-    (thread) =>
-      thread.state !== 'outdated' && foldKey(thread.sourceId, thread.path) === key,
+    (thread) => thread.state !== 'outdated' && foldKey(thread.sourceId, thread.path) === key,
   ).length
 
   const mark = CHANGE_MARK[file.changeType] ?? '?'
 
   return html`<a class="leaf" href="#file-${key}" data-tree-file="${key}">
-  <span class="mark ${file.changeType}" aria-hidden="true">${mark}</span>
-  <span class="name">${node.name}</span>
-  ${
-    comments > 0
-      ? html`<span class="count" aria-hidden="true">${comments}</span>`
-      : raw('')
-  }
-  <span class="visually-hidden">
-    ${file.changeType}${comments > 0 ? `, ${comments} comment${comments === 1 ? '' : 's'}` : ''}
-  </span>
-</a>`
+    <span class="mark ${file.changeType}" aria-hidden="true">${mark}</span>
+    <span class="name">${node.name}</span>
+    ${comments > 0 ? html`<span class="count" aria-hidden="true">${comments}</span>` : raw('')}
+    <span class="visually-hidden">
+      ${file.changeType}${comments > 0 ? `, ${comments} comment${comments === 1 ? '' : 's'}` : ''}
+    </span>
+  </a>`
 }
 
 /**
@@ -336,22 +330,22 @@ function coaching(threadCount: number, drafts: number, awaitingYou: number): Saf
 
 function sourceGroup(page: Page, group: SourceGroup, showHeading: boolean): SafeHtml {
   return html`<section class="sourcegroup" id="src-${group.source.id}">
-  ${
-    showHeading
-      ? html`<h2>
-          <span>${group.source.label || basenameOf(group.source.rootPath)}</span>
-          <span class="path" title="${group.source.rootPath}"
-            >${displayPath(group.source.rootPath, undefined, 52)}</span
-          >
-        </h2>`
-      : raw('')
-  }
-  ${
-    group.files.length === 0
-      ? html`<p class="note">Nothing changed in this one.</p>`
-      : group.files.map((file) => fileBlock(page, file))
-  }
-</section>`
+    ${
+      showHeading
+        ? html`<h2>
+            <span>${group.source.label || basenameOf(group.source.rootPath)}</span>
+            <span class="path" title="${group.source.rootPath}"
+              >${displayPath(group.source.rootPath, undefined, 52)}</span
+            >
+          </h2>`
+        : raw('')
+    }
+    ${
+      group.files.length === 0
+        ? html`<p class="note">Nothing changed in this one.</p>`
+        : group.files.map((file) => fileBlock(page, file))
+    }
+  </section>`
 }
 
 function fileBlock(page: Page, file: FileView): SafeHtml {
@@ -367,35 +361,40 @@ function fileBlock(page: Page, file: FileView): SafeHtml {
   const holdsBox = page.open !== undefined && foldKey(page.open.sourceId, page.open.path) === key
   const expanded = holdsBox || !page.folded.has(key)
 
-  return html`<details class="file" id="file-${key}" data-fold="${key}" ${expanded ? raw('open') : raw('')}>
-  <summary>
-    <h3>${file.path}</h3>
-    <span class="badge">${file.changeType}</span>
+  return html`<details
+    class="file"
+    id="file-${key}"
+    data-fold="${key}"
+    ${expanded ? raw('open') : raw('')}
+  >
+    <summary>
+      <h3>${file.path}</h3>
+      <span class="badge">${file.changeType}</span>
+      ${
+        mine.length > 0
+          ? html`<span class="badge you"
+              >${mine.length} comment${mine.length === 1 ? '' : 's'}</span
+            >`
+          : raw('')
+      }
+    </summary>
     ${
-      mine.length > 0
-        ? html`<span class="badge you"
-            >${mine.length} comment${mine.length === 1 ? '' : 's'}</span
-          >`
-        : raw('')
+      file.isBinary
+        ? html`<p class="note">Binary file, not shown.</p>`
+        : file.truncated
+          ? html`<p class="note">File too large to display.</p>`
+          : hunks.length === 0
+            ? html`<p class="note">No textual change.</p>`
+            : html`<div class="diff">
+                ${hunks.map(
+                  (hunk) => html`
+                    <div class="hunkhead">${hunk.header}</div>
+                    ${toSplitRows(hunk.rows).map((row) => splitRow(page, file, row, mine))}
+                  `,
+                )}
+              </div>`
     }
-  </summary>
-  ${
-    file.isBinary
-      ? html`<p class="note">Binary file, not shown.</p>`
-      : file.truncated
-        ? html`<p class="note">File too large to display.</p>`
-        : hunks.length === 0
-          ? html`<p class="note">No textual change.</p>`
-          : html`<div class="diff">
-              ${hunks.map(
-                (hunk) => html`
-                  <div class="hunkhead">${hunk.header}</div>
-                  ${toSplitRows(hunk.rows).map((row) => splitRow(page, file, row, mine))}
-                `,
-              )}
-            </div>`
-  }
-</details>`
+  </details>`
 }
 
 /**
@@ -416,11 +415,10 @@ function splitRow(page: Page, file: FileView, row: SplitRow, mine: Thread[]): Sa
   const boxHere = [row.left, row.right].find((half) => isOpenOn(page.open, file, half))
 
   return html`<div class="row" data-unified="${row.unified}">
-  ${half(page, file, row.left, 'left')}
-  ${half(page, file, row.right, 'right')}
-</div>
-${attached.map((thread) => threadBlock(page, thread, false))}
-${boxHere && page.open ? newThreadBlock(page, file, page.open) : raw('')}`
+      ${half(page, file, row.left, 'left')} ${half(page, file, row.right, 'right')}
+    </div>
+    ${attached.map((thread) => threadBlock(page, thread, false))}
+    ${boxHere && page.open ? newThreadBlock(page, file, page.open) : raw('')}`
 }
 
 /** The threads that hang from this row: same place, and still live. */
@@ -492,12 +490,12 @@ function half(page: Page, file: FileView, side: Half, which: 'left' | 'right'): 
   // reader user nothing about what activating it would do.
   const covered = coveredBy(page, here) ? ' covered' : ''
 
-  return html`<div class="side ${which} ${side.kind}${covered}"${drag}>
-  <span class="n">${side.line ?? ''}</span>
-  <span class="act">${action}</span>
-  <span class="sign" aria-hidden="true">${sign}</span>
-  <span class="t">${code}</span>
-</div>`
+  return html`<div class="side ${which} ${side.kind}${covered}" ${drag}>
+    <span class="n">${side.line ?? ''}</span>
+    <span class="act">${action}</span>
+    <span class="sign" aria-hidden="true">${sign}</span>
+    <span class="t">${code}</span>
+  </div>`
 }
 
 /**
@@ -548,19 +546,18 @@ function threadBlock(page: Page, thread: Thread, showLocation: boolean): SafeHtm
           : raw('')
       }
       ${thread.messages.map(
-        (message) => html`<div class="msg">
-          <span class="who">${message.author === 'human' ? 'you' : 'agent'}</span>
-          ${message.submittedAt === null ? html`<span class="badge draft">not sent</span>` : raw('')}
-          <div class="body">${message.body}</div>
-        </div>`,
+        (message) =>
+          html`<div class="msg">
+            <span class="who">${message.author === 'human' ? 'you' : 'agent'}</span>
+            ${message.submittedAt === null ? html`<span class="badge draft">not sent</span>` : raw('')}
+            <div class="body">${message.body}</div>
+          </div>`,
       )}
       <details class="reply">
         <summary>Reply</summary>
         <form method="post" action="/r/${page.review.reviewId}/threads/${thread.id}/replies">
           ${tokenField(page)}
-          <label class="visually-hidden" for="reply-${thread.id}">
-            Reply to this comment
-          </label>
+          <label class="visually-hidden" for="reply-${thread.id}"> Reply to this comment </label>
           <textarea id="reply-${thread.id}" name="body" rows="2" required></textarea>
           <div class="actions">
             <button type="submit" class="primary">Save reply</button>
@@ -581,7 +578,7 @@ function threadBlock(page: Page, thread: Thread, showLocation: boolean): SafeHtm
         </form>
       </div>
     </div>
-</div>`
+  </div>`
 }
 
 /**
@@ -592,7 +589,7 @@ function threadBlock(page: Page, thread: Thread, showLocation: boolean): SafeHtm
  */
 function tokenField(page: Page): SafeHtml {
   const token = mintPageToken(page.review.reviewId, page.review.snapshotSeq, Date.now())
-  return html`<input type="hidden" name="token" value="${token}">`
+  return html`<input type="hidden" name="token" value="${token}" />`
 }
 
 /** The form itself, which is a position plus somewhere to type. */
@@ -604,15 +601,11 @@ function newThreadBlock(page: Page, file: FileView, at: Position): SafeHtml {
     <div class="thread" id="box">
       <form method="post" action="/r/${page.review.reviewId}/threads">
         ${tokenField(page)}
-        <input type="hidden" name="sourceId" value="${at.sourceId}">
-        <input type="hidden" name="path" value="${at.path}">
-        <input type="hidden" name="side" value="${at.side}">
-        <input type="hidden" name="line" value="${at.line}">
-        ${
-          at.endLine
-            ? html`<input type="hidden" name="endLine" value="${at.endLine}">`
-            : raw('')
-        }
+        <input type="hidden" name="sourceId" value="${at.sourceId}" />
+        <input type="hidden" name="path" value="${at.path}" />
+        <input type="hidden" name="side" value="${at.side}" />
+        <input type="hidden" name="line" value="${at.line}" />
+        ${at.endLine ? html`<input type="hidden" name="endLine" value="${at.endLine}" />` : raw('')}
         <label for="${id}">Comment on ${file.path} ${where}</label>
         <textarea id="${id}" name="body" rows="3" autofocus required></textarea>
         <div class="actions">
@@ -621,21 +614,19 @@ function newThreadBlock(page: Page, file: FileView, at: Position): SafeHtml {
         </div>
       </form>
     </div>
-</div>`
+  </div>`
 }
 
 function outdatedBlock(page: Page, outdated: Thread[]): SafeHtml {
   if (outdated.length === 0) return raw('')
 
   return html`<details class="file">
-  <summary>
-    <h3>${outdated.length} outdated comment${outdated.length === 1 ? '' : 's'}</h3>
-    <span class="badge">code is gone</span>
-  </summary>
-  <div class="diff">
-    ${outdated.map((thread) => threadBlock(page, thread, true))}
-  </div>
-</details>`
+    <summary>
+      <h3>${outdated.length} outdated comment${outdated.length === 1 ? '' : 's'}</h3>
+      <span class="badge">code is gone</span>
+    </summary>
+    <div class="diff">${outdated.map((thread) => threadBlock(page, thread, true))}</div>
+  </details>`
 }
 
 /**
@@ -650,16 +641,16 @@ function viewToggle(review: ReviewSummary, view: ViewMode, rail: RailState): Saf
   const flip: RailState = rail === 'open' ? 'closed' : 'open'
 
   return html`<div class="viewtoggle">
-  <a
-    class="btn quiet"
-    href="/r/${review.reviewId}?rail=${flip}"
-    aria-expanded="${rail === 'open' ? 'true' : 'false'}"
-    >${rail === 'open' ? 'Hide files' : 'Show files'}</a
-  >
-  <a class="btn quiet viewmode" href="/r/${review.reviewId}?view=${other}">
-    ${other === 'split' ? 'Side by side' : 'Unified'}
-  </a>
-</div>`
+    <a
+      class="btn quiet"
+      href="/r/${review.reviewId}?rail=${flip}"
+      aria-expanded="${rail === 'open' ? 'true' : 'false'}"
+      >${rail === 'open' ? 'Hide files' : 'Show files'}</a
+    >
+    <a class="btn quiet viewmode" href="/r/${review.reviewId}?view=${other}">
+      ${other === 'split' ? 'Side by side' : 'Unified'}
+    </a>
+  </div>`
 }
 
 /**
@@ -686,8 +677,8 @@ function submitBar(review: ReviewSummary, drafts: number, awaitingYou: number): 
           Sending them takes the approval back.`
       : html`<strong>Approved.</strong> Waiting for the agent to commit.`
     : drafts > 0
-      ? html`<strong>${drafts} comment${drafts === 1 ? '' : 's'} not sent.</strong>
-          Choose how to send them.`
+      ? html`<strong>${drafts} comment${drafts === 1 ? '' : 's'} not sent.</strong> Choose how to
+          send them.`
       : awaitingYou > 0
         ? html`<strong>${awaitingYou} waiting on you.</strong> Reply above, or decide now.`
         : html`Approving lets the agent commit.`
@@ -697,44 +688,44 @@ function submitBar(review: ReviewSummary, drafts: number, awaitingYou: number): 
   const token = mintPageToken(review.reviewId, review.snapshotSeq, Date.now())
 
   return html`<form class="bar" method="post" action="/r/${review.reviewId}/submit">
-  <input type="hidden" name="token" value="${token}">
-  <div class="row">
-    <p class="state" aria-live="polite">${state}</p>
-    <div class="verdicts">
-      ${
-        approved
-          ? html`${
-              drafts > 0
-                ? html`<button type="submit" name="verdict" value="comment" class="quiet">
-                    Send as notes
-                  </button>`
-                : raw('')
-            }
-            <button
-              type="submit"
-              formaction="/r/${review.reviewId}/unapprove"
-              class="${drafts > 0 ? 'quiet' : 'primary'}"
-            >
-              Unapprove
-            </button>`
-          : drafts > 0
-            ? html`<button type="submit" name="verdict" value="comment" class="quiet">
-                  Send as notes
-                </button>
-                <button type="submit" name="verdict" value="changes_requested" class="primary">
-                  Request changes
-                </button>
-                <button type="submit" name="verdict" value="approved">Approve</button>`
-            : html`<button type="submit" name="verdict" value="changes_requested" class="quiet">
-                  Request changes
-                </button>
-                <button type="submit" name="verdict" value="approved" class="primary">
-                  Approve
+    <input type="hidden" name="token" value="${token}" />
+    <div class="row">
+      <p class="state" aria-live="polite">${state}</p>
+      <div class="verdicts">
+        ${
+          approved
+            ? html`${
+                drafts > 0
+                  ? html`<button type="submit" name="verdict" value="comment" class="quiet">
+                        Send as notes
+                      </button>`
+                  : raw('')
+              }
+                <button
+                  type="submit"
+                  formaction="/r/${review.reviewId}/unapprove"
+                  class="${drafts > 0 ? 'quiet' : 'primary'}"
+                >
+                  Unapprove
                 </button>`
-      }
+            : drafts > 0
+              ? html`<button type="submit" name="verdict" value="comment" class="quiet">
+                    Send as notes
+                  </button>
+                  <button type="submit" name="verdict" value="changes_requested" class="primary">
+                    Request changes
+                  </button>
+                  <button type="submit" name="verdict" value="approved">Approve</button>`
+              : html`<button type="submit" name="verdict" value="changes_requested" class="quiet">
+                    Request changes
+                  </button>
+                  <button type="submit" name="verdict" value="approved" class="primary">
+                    Approve
+                  </button>`
+        }
+      </div>
     </div>
-  </div>
-</form>`
+  </form>`
 }
 
 /**
@@ -790,7 +781,7 @@ function restoreReplies(state) {
 }
 
 async function refresh() {
-  const response = await fetch(location.href, { headers: { 'x-reviewd-refresh': '1' } });
+  const response = await fetch(location.href);
   if (!response.ok) return;
 
   const next = new DOMParser().parseFromString(await response.text(), 'text/html');
@@ -885,11 +876,72 @@ function notice(show, message) {
   document.body.appendChild(pill);
 }
 
+/*
+ * Losing contact has to be visible.
+ *
+ * Everything below this point is a way of finding out that the page is no
+ * longer current. None of it used to be able to say so. The stream carried no
+ * error handler at all, and every failure in the poll was a bare return, so a
+ * daemon that had gone away and a daemon with nothing to report produced the
+ * same page: one that looked live and was not. That is the exact state the
+ * whole mechanism exists to prevent, arriving quietly instead of loudly.
+ *
+ * The poll decides, because it is the one that gets a straight answer. A
+ * dropped stream is not evidence — EventSource reconnects on its own and a
+ * blip means nothing — but two failed fetches in a row is a daemon that is not
+ * there. Nothing here tries to recover the data; it tells the reviewer to
+ * reload, which is the one move that always works.
+ */
+let missedChecks = 0;
+let offline = false;
+
+function contactLost() {
+  if (offline) return;
+  offline = true;
+
+  const pill = document.createElement('div');
+  pill.id = 'stale-notice';
+  pill.className = 'live-notice stale';
+  /* alert, not status: this is the page telling the reviewer it can no longer
+     vouch for what they are reading, which is worth interrupting for. */
+  pill.setAttribute('role', 'alert');
+  pill.textContent = 'Not updating. Lost contact with reviewd — reload to see the current revision.';
+  document.body.appendChild(pill);
+}
+
+function contactMade() {
+  missedChecks = 0;
+  if (!offline) return;
+  offline = false;
+
+  const pill = document.getElementById('stale-notice');
+  if (pill) pill.remove();
+}
+
+/* Two in a row, so one dropped packet does not cry wolf. */
+function checkFailed() {
+  missedChecks += 1;
+  if (missedChecks >= 2) contactLost();
+}
+
 const liveMain = document.getElementById('main');
 if (liveMain && liveMain.dataset.review && 'EventSource' in window) {
   const source = new EventSource('/r/' + liveMain.dataset.review + '/events');
   source.addEventListener('threads', land);
   source.addEventListener('gone', () => { source.close(); location.reload(); });
+
+  /* The stream retrying is its own business, so this does not report anything.
+     What it means is that the fast path is down and the poll is now the only
+     thing watching, so ask the poll straight away rather than waiting out its
+     interval. Throttled, because a stream that cannot connect at all fires
+     this over and over. */
+  let lastErrorCheck = 0;
+  source.addEventListener('error', () => {
+    const at = Date.now();
+    if (at - lastErrorCheck < 5000) return;
+    lastErrorCheck = at;
+    checkForChanges();
+  });
 
   // A new revision is the case a stale page handles worst: the code on screen
   // has been replaced and the approve button is about to describe a revision
@@ -960,17 +1012,25 @@ function tokenAgeMs() {
 async function checkForChanges() {
   const was = renderedState();
   if (!was || !liveMain || !liveMain.dataset.review) return;
-  if (busyWriting()) return;
 
   let now;
   try {
     const response = await fetch('/api/reviews/' + liveMain.dataset.review);
-    if (!response.ok) return;
+    if (!response.ok) { checkFailed(); return; }
     const review = await response.json();
     now = { seq: review.snapshotSeq, awaiting: review.threadsAwaitingHuman };
   } catch {
+    checkFailed();
     return;
   }
+
+  contactMade();
+
+  /* Below the fetch on purpose. Nothing may pull the ground out from under
+     someone mid-sentence, but whether the daemon is still there is worth
+     knowing while they type — and the old early return meant a page could not
+     notice it had gone stale for as long as a textarea held anything. */
+  if (busyWriting()) return;
 
   if (now.seq !== was.seq) {
     settled = 'Now showing revision ' + now.seq + '.';

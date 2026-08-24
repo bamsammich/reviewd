@@ -21,7 +21,15 @@ process being gated from clearing itself.
 
 Against a browser, reviewd refuses requests addressed to a name it does not answer
 to (closing DNS rebinding), refuses cross-site mutations, refuses to be framed,
-and makes no state change on a GET.
+and carries no reviewer decision on a GET. The attack that rule exists to stop is
+an `<img>` tag in an email approving a review, so what it has to guarantee is that
+nothing a GET does can stand in for a verdict.
+
+One GET does write. Opening a review stamps `last_activity_at`, which is how the
+sweep tells a review someone is still using from one nobody came back to. It is
+named as the single exception in `read-only-get.test.ts`, which compares every
+table before and after every GET the app serves, so a second exception fails a
+test rather than arriving unannounced.
 
 ## What reviewd does not defend
 

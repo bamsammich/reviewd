@@ -36,6 +36,12 @@ export class Bus {
 
   /** Resolves on the first event for this review, or on timeout. */
   wait(reviewId: string, timeoutMs: number, signal?: AbortSignal): Promise<ReviewEvent | null> {
+    // An already-fired signal never delivers `abort` to a listener added after
+    // the fact, so parking here would hold a timer and an emitter listener for
+    // the whole timeout — half an hour on `reviewd wait` — on behalf of a
+    // client that hung up while the caller was still querying the database.
+    if (signal?.aborted) return Promise.resolve(null)
+
     return new Promise((resolve) => {
       const done = (event: ReviewEvent | null): void => {
         clearTimeout(timer)

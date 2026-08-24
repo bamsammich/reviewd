@@ -1,4 +1,4 @@
-import type { Kysely, Transaction } from 'kysely'
+import { sql, type Kysely, type Transaction } from 'kysely'
 import type {
   Author,
   CreateThreadRequest,
@@ -257,6 +257,12 @@ export async function replyToThread(
  * when one arrives and immediacy helps there. Reviewer messages wait for a
  * deliberate submit, so the agent never edits a file under a diff still being
  * read.
+ *
+ * The sequence is derived inside the insert rather than read first. Reading the
+ * maximum and then inserting puts an await between the two, and what keeps two
+ * replies to one thread from claiming the same number there is Kysely holding a
+ * mutex over its single SQLite connection — a property of the driver rather
+ * than of this code, and not one worth resting `message_thread_seq_unique` on.
  */
 async function appendMessage(
   tx: Transaction<Database>,
@@ -265,20 +271,13 @@ async function appendMessage(
   body: string,
   t: number,
 ): Promise<string> {
-  const last = await tx
-    .selectFrom('message')
-    .select('seq')
-    .where('thread_id', '=', threadId)
-    .orderBy('seq', 'desc')
-    .executeTakeFirst()
-
   const id = newId()
   await tx
     .insertInto('message')
     .values({
       id,
       thread_id: threadId,
-      seq: (last?.seq ?? 0) + 1,
+      seq: sql<number>`(select coalesce(max(seq), 0) + 1 from message where thread_id = ${threadId})`,
       author,
       body,
       created_at: t,
@@ -400,7 +399,6 @@ export async function listThreads(
       side: row.side,
       line: row.line,
       endLine: row.end_line,
-      anchorLine: '',
       state: row.state,
       origin: row.origin,
       turn,

@@ -395,6 +395,63 @@ describe('what reaches an open review page', () => {
   })
 })
 
+describe('message numbering', () => {
+  it('gives two replies landing together their own place in the thread', async () => {
+    const review = await reviewWithFile()
+    const { threadId } = await humanThread(review.reviewId)
+
+    // Two replies in flight at once. The sequence is derived inside the insert
+    // so that message_thread_seq_unique holds on its own terms rather than on
+    // Kysely serializing transactions over one SQLite connection.
+    await Promise.all([
+      replyToThread(deps, threadId, 'first', 'agent'),
+      replyToThread(deps, threadId, 'second', 'agent'),
+    ])
+
+    const messages = await ctx.db
+      .selectFrom('message')
+      .selectAll()
+      .where('thread_id', '=', threadId)
+      .orderBy('seq')
+      .execute()
+
+    expect(messages.map((m) => m.seq)).toEqual([1, 2, 3])
+  })
+
+  it('still drafts the reviewer and submits the agent on write', async () => {
+    const review = await reviewWithFile()
+    const { threadId } = await humanThread(review.reviewId)
+    await replyToThread(deps, threadId, 'on it', 'agent')
+    await replyToThread(deps, threadId, 'thanks', 'human')
+
+    const messages = await ctx.db
+      .selectFrom('message')
+      .selectAll()
+      .where('thread_id', '=', threadId)
+      .orderBy('seq')
+      .execute()
+
+    expect(messages.map((m) => [m.author, m.submitted_at === null])).toEqual([
+      ['human', true],
+      ['agent', false],
+      ['human', true],
+    ])
+  })
+})
+
+describe('a wait nobody is listening to', () => {
+  it('ends at once when the signal has already fired', async () => {
+    const controller = new AbortController()
+    controller.abort()
+
+    // The timeout `reviewd wait` passes. A listener added to a signal that has
+    // already fired never hears `abort`, so this used to park for the full half
+    // hour — a timer and an emitter listener held for a client that hung up
+    // while the handler was still querying the database.
+    await expect(bus.wait('any-review', 1_800_000, controller.signal)).resolves.toBeNull()
+  })
+})
+
 describe('errors', () => {
   it('refuses a thread on a review with no snapshot', async () => {
     const review = await createReview(deps, {

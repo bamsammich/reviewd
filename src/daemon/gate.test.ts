@@ -129,9 +129,9 @@ describe('allow', () => {
     await reviewAt('/tmp/repo', 'fp-shared', 'second')
     await submitReview(deps, first.reviewId, 'approved')
 
-    expect((await gate(deps, { root: '/tmp/repo', fingerprint: fingerprintFor('fp-shared') })).decision).toBe(
-      'allow',
-    )
+    expect(
+      (await gate(deps, { root: '/tmp/repo', fingerprint: fingerprintFor('fp-shared') })).decision,
+    ).toBe('allow')
   })
 
   it('refuses to let one repository authorize a commit in another', async () => {

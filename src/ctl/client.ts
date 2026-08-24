@@ -121,8 +121,12 @@ export class Client {
     }
   }
 
-  reply(threadId: string, body: string, author: 'human' | 'agent' = 'agent'): Promise<unknown> {
-    return this.jsonLoose('POST', `/api/threads/${threadId}/replies`, { body, author })
+  // No author here. This client reaches the daemon over the API, and the API
+  // route is the agent, so anything it sends is signed as the agent whatever it
+  // asks for. A parameter used to say otherwise and was stripped off the wire
+  // in silence, which is worse than not offering the choice at all.
+  reply(threadId: string, body: string): Promise<unknown> {
+    return this.jsonLoose('POST', `/api/threads/${threadId}/replies`, { body })
   }
 
   setThreadState(threadId: string, state: string, note?: string): Promise<unknown> {

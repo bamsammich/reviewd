@@ -48,7 +48,6 @@ export const sourceSpec = z.object({
   /** HEAD, a branch, a sha, or omitted for a plain file set. */
   base: z.string().min(1).optional(),
   label: z.string().min(1).optional(),
-  includeUntracked: z.boolean().default(true),
 })
 export type SourceSpec = z.infer<typeof sourceSpec>
 
@@ -171,7 +170,6 @@ export const thread = z.object({
   line: z.number().int(),
   /** Last line of a range, or null when the comment is on one line. */
   endLine: z.number().int().nullable().default(null),
-  anchorLine: z.string(),
   state: threadState,
   origin: author,
   turn,

@@ -30,7 +30,11 @@ export function reviewRoutes(deps: Deps): Hono {
   const routes = new Hono()
 
   routes.post('/api/reviews', async (c) => {
-    const parsed = createReviewRequest.safeParse(await c.req.json())
+    // A body that is not JSON is the schema's problem, not the parser's: left
+    // to throw, `{oops` escapes to app.onError and comes back a 500 carrying a
+    // parser message, when what the caller sent was simply an invalid request.
+    const body: unknown = await c.req.json().catch(() => ({}))
+    const parsed = createReviewRequest.safeParse(body)
     if (!parsed.success) {
       return c.json({ error: describe(parsed.error.issues) }, 400)
     }
@@ -71,7 +75,8 @@ export function reviewRoutes(deps: Deps): Hono {
   })
 
   routes.post('/api/reviews/:id/blobs/check', async (c) => {
-    const parsed = blobCheckRequest.safeParse(await c.req.json())
+    const body: unknown = await c.req.json().catch(() => ({}))
+    const parsed = blobCheckRequest.safeParse(body)
     if (!parsed.success) {
       return c.json({ error: describe(parsed.error.issues) }, 400)
     }
@@ -82,6 +87,19 @@ export function reviewRoutes(deps: Deps): Hono {
   // Content-addressed, so the id is the whole address and the review it belongs
   // to does not enter into it.
   routes.put('/api/blobs/:id', async (c) => {
+    // The limit has to bite before the body is read. putBlob checks a
+    // Uint8Array that has already cost the memory it is objecting to, and this
+    // route carries no token, so on a public bind anything that can route to
+    // the port could spend the daemon's heap before the check ever runs.
+    //
+    // Declaring nothing, or lying, only defers the answer: putBlob still
+    // measures the bytes it was handed, and answers the same way.
+    const limit = deps.config.limits.max_blob_bytes
+    const declared = Number(c.req.header('content-length'))
+    if (Number.isFinite(declared) && declared > limit) {
+      return c.json({ error: `blob is ${declared} bytes, over the ${limit} limit` }, 413)
+    }
+
     const bytes = new Uint8Array(await c.req.arrayBuffer())
     const result = await putBlob(deps, c.req.param('id'), bytes)
     return c.json(result, result.stored ? 201 : 200)
@@ -107,7 +125,8 @@ export function reviewRoutes(deps: Deps): Hono {
   })
 
   routes.post('/api/reviews/:id/snapshots', async (c) => {
-    const parsed = snapshotManifest.safeParse(await c.req.json())
+    const body: unknown = await c.req.json().catch(() => ({}))
+    const parsed = snapshotManifest.safeParse(body)
     if (!parsed.success) {
       return c.json({ error: describe(parsed.error.issues) }, 400)
     }

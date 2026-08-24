@@ -41,13 +41,9 @@ export const EMPTY_FINGERPRINT = createHash('sha256').update('', 'utf8').digest(
 export function manifestFingerprint(files: readonly FileChangeSpec[]): string {
   const rows = files
     .map((file) =>
-      [
-        file.path,
-        file.oldPath ?? '',
-        file.changeType,
-        file.oldHash ?? '',
-        file.newHash ?? '',
-      ].join(FIELD),
+      [file.path, file.oldPath ?? '', file.changeType, file.oldHash ?? '', file.newHash ?? ''].join(
+        FIELD,
+      ),
     )
     .sort()
 

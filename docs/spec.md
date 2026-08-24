@@ -530,12 +530,12 @@ receives.
 
 | Tool | Input | Returns |
 |---|---|---|
-| `review_create` | `title`, `sources[]` (`{path, base?, label?, include_untracked?}`), `notify?` | `{review_id, url, files_changed, sources[]}` |
+| `review_create` | `title`, `sources[]` (`{path, base?, label?}`), `notify?` | `{review_id, url, files_changed, sources[]}` |
 | `review_list` | `status?`, `root_path?` | `[{review_id, title, status, url, age, threads_awaiting_agent}]` |
 | `review_get` | `review_id` | status, current seq, latest submission and verdict, thread counts by state and by turn, per-source approval state |
 | `review_snapshot` | `review_id` | `{seq, files_changed, threads_moved, threads_outdated}` |
-| `threads_list` | `review_id`, `state?`, `turn?`, `since_submission?` | submitted messages only, with file, line, and the anchored line's text |
-| `thread_create` | `review_id`, `path`, `line`, `body`, `side?` | `{thread_id}` |
+| `threads_list` | `review_id`, `state?`, `turn?` | submitted messages only, with source, file, line, state, turn, and whether the thread drifted |
+| `thread_create` | `review_id`, `path`, `line`, `body`, `end_line?`, `source_id?`, `side?` | `{thread_id}` |
 | `thread_reply` | `thread_id`, `body` | `{thread_id, turn}` |
 | `thread_resolve` | `thread_id`, `note?` | `{thread_id, state}` |
 | `review_release` | `review_id`, `force?` | `{released: true}`, or a refusal naming the unconsumed approval |

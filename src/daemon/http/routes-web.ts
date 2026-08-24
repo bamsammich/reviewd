@@ -4,7 +4,14 @@ import { verdict as verdictSchema } from '../../protocol.js'
 import type { Bus } from '../bus.js'
 import { listReviews, ReviewError, summarize, type Deps } from '../reviews.js'
 import { touchReview } from '../sweep.js'
-import { createThread, listThreads, replyToThread, setThreadState, submitReview, unapprove } from '../threads.js'
+import {
+  createThread,
+  listThreads,
+  replyToThread,
+  setThreadState,
+  submitReview,
+  unapprove,
+} from '../threads.js'
 import { loadFiles, messagePage, reviewListPage } from '../web/pages.js'
 import {
   parseFolds,
@@ -134,7 +141,11 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
         // hear about it or the reviewer goes on reading code that is gone and
         // holding a token that describes it.
         if (event.kind === 'snapshot') {
-          await stream.writeSSE({ event: 'revision', id: String(event.at), data: String(event.seq) })
+          await stream.writeSSE({
+            event: 'revision',
+            id: String(event.at),
+            data: String(event.seq),
+          })
         }
       }
     })
@@ -174,6 +185,7 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
   routes.post('/r/:id/threads/:threadId/replies', async (c) => {
     const form = await c.req.parseBody()
     requireToken(c.req.param('id'), form['token'])
+    await requireThreadIn(c.req.param('id'), c.req.param('threadId'))
 
     const body = String(form['body'] ?? '').trim()
     if (body) await replyToThread(deps, c.req.param('threadId'), body, 'human')
@@ -183,12 +195,14 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
 
   routes.post('/r/:id/threads/:threadId/resolve', async (c) => {
     requireToken(c.req.param('id'), (await c.req.parseBody())['token'])
+    await requireThreadIn(c.req.param('id'), c.req.param('threadId'))
     await setThreadState(deps, c.req.param('threadId'), 'resolved')
     return back(c, c.req.param('id'), c.req.param('threadId'))
   })
 
   routes.post('/r/:id/threads/:threadId/reopen', async (c) => {
     requireToken(c.req.param('id'), (await c.req.parseBody())['token'])
+    await requireThreadIn(c.req.param('id'), c.req.param('threadId'))
     await setThreadState(deps, c.req.param('threadId'), 'active')
     return back(c, c.req.param('id'), c.req.param('threadId'))
   })
@@ -252,17 +266,35 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
   }
 
   /**
+   * A page token only reaches the threads of its own review.
+   *
+   * The thread routes take an id straight out of the path, so checking the
+   * token against `:id` alone left any token good for every thread in every
+   * other review: a reply posted that way was written through the page door and
+   * therefore recorded as the reviewer, in a review whose holder never opened
+   * it. Authorship follows the route, which only means something if the route
+   * is about the review it names.
+   */
+  async function requireThreadIn(reviewId: string, threadId: string): Promise<void> {
+    const thread = await deps.db
+      .selectFrom('thread')
+      .select('review_id')
+      .where('id', '=', threadId)
+      .executeTakeFirst()
+
+    if (thread?.review_id !== reviewId) {
+      throw new ReviewError('That comment is not part of this review.', 403)
+    }
+  }
+
+  /**
    * A verdict additionally has to be about the revision on screen.
    *
    * Comments survive a new snapshot, because the reviewer was mid-sentence and
    * their words should not be lost to the agent pushing again. An approval must
    * not: it would clear code the reviewer never saw.
    */
-  async function requireCurrentToken(
-    deps_: Deps,
-    reviewId: string,
-    token: unknown,
-  ): Promise<void> {
+  async function requireCurrentToken(deps_: Deps, reviewId: string, token: unknown): Promise<void> {
     const { snapshotSeq } = requireToken(reviewId, token)
     const review = await summarize(deps_, reviewId)
 
@@ -315,7 +347,16 @@ function cookie(c: Context, name: string): string | undefined {
 
   for (const part of header.split(';')) {
     const [key, ...rest] = part.trim().split('=')
-    if (key === name) return decodeURIComponent(rest.join('='))
+    if (key !== name) continue
+
+    try {
+      return decodeURIComponent(rest.join('='))
+    } catch {
+      // Anything else on localhost can set a cookie scoped to localhost, and a
+      // value that is not valid percent-encoding threw out of the page render
+      // as a 500 that named no cause. A display preference is not worth that.
+      return undefined
+    }
   }
 
   return undefined

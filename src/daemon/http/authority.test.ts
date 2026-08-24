@@ -311,7 +311,11 @@ describe('an unnamed origin is tolerated only where a token is demanded', () => 
 
     const cases: [string, string, string][] = [
       ['POST', `/api/reviews/${review.reviewId}/submissions`, '{"verdict":"comment"}'],
-      ['POST', `/api/reviews/${review.reviewId}/threads`, '{"path":"src/a.ts","line":1,"body":"x"}'],
+      [
+        'POST',
+        `/api/reviews/${review.reviewId}/threads`,
+        '{"path":"src/a.ts","line":1,"body":"x"}',
+      ],
       ['POST', '/api/reviews', '{"title":"x","sources":[{"path":"/tmp/x"}]}'],
     ]
 
@@ -355,6 +359,91 @@ describe('an unnamed origin is tolerated only where a token is demanded', () => 
       const res = await app.request(path, { method: 'POST', headers: form, body: '' })
       expect(res.status, path).toBe(403)
     }
+  })
+})
+
+describe('a page token reaches no further than its own review', () => {
+  /**
+   * The token says which review the page drew, and the thread routes take an id
+   * out of the path. Checking only the token left every thread in every other
+   * review reachable: a reply posted that way came through the page door and so
+   * was recorded as the reviewer, in a review its sender never opened. Two
+   * reviews exist here for the same reason the token is scoped at all.
+   */
+  const form = { ...HOST, 'content-type': 'application/x-www-form-urlencoded' }
+
+  async function twoReviews() {
+    const mine = await reviewWithSnapshot()
+    const theirs = await reviewWithSnapshot('const b = 2\n')
+
+    const { threadId } = await createThread(deps, theirs.reviewId, {
+      sourceId: theirs.sources[0]!.id,
+      path: 'src/a.ts',
+      line: 1,
+      side: 'new',
+      body: 'their conversation',
+      author: 'agent',
+    })
+
+    return { mine, theirs, threadId }
+  }
+
+  it('refuses on every route that takes a thread id from the path', async () => {
+    // The companion to the token sweep above: a route that reads `:threadId`
+    // and forgets to ask which review holds it has to fail here rather than
+    // quietly hand the page door's authorship to whoever guessed an id.
+    const { mine, threadId } = await twoReviews()
+    const token = await tokenFor(mine.reviewId)
+
+    const paths = [
+      `/r/${mine.reviewId}/threads/${threadId}/replies`,
+      `/r/${mine.reviewId}/threads/${threadId}/resolve`,
+      `/r/${mine.reviewId}/threads/${threadId}/reopen`,
+    ]
+
+    for (const path of paths) {
+      const res = await app.request(path, {
+        method: 'POST',
+        headers: form,
+        body: new URLSearchParams({ token, body: 'sounds good to me, ship it' }).toString(),
+      })
+
+      expect(res.status, path).toBe(403)
+    }
+
+    // Nothing was said in the other review, and nothing was closed there.
+    const messages = await ctx.db.selectFrom('message').selectAll().execute()
+    expect(messages.map((m) => m.body)).toEqual(['their conversation'])
+
+    const thread = await ctx.db
+      .selectFrom('thread')
+      .selectAll()
+      .where('id', '=', threadId)
+      .executeTakeFirstOrThrow()
+    expect(thread.state).toBe('active')
+  })
+
+  it('still acts on a thread of its own', async () => {
+    const { mine } = await twoReviews()
+    const { threadId } = await createThread(deps, mine.reviewId, {
+      sourceId: mine.sources[0]!.id,
+      path: 'src/a.ts',
+      line: 1,
+      side: 'new',
+      body: 'my conversation',
+      author: 'agent',
+    })
+
+    const res = await app.request(`/r/${mine.reviewId}/threads/${threadId}/replies`, {
+      method: 'POST',
+      headers: form,
+      body: new URLSearchParams({
+        token: await tokenFor(mine.reviewId),
+        body: 'answering in my own review',
+      }).toString(),
+    })
+
+    expect(res.status).toBe(303)
   })
 })
 
@@ -491,6 +580,26 @@ describe('authorship follows the route, not the request', () => {
 
     const messages = await ctx.db.selectFrom('message').selectAll().execute()
     expect(messages[0]?.author).toBe('human')
+  })
+})
+
+describe('a cookie the reviewer did not write', () => {
+  /**
+   * Cookies are scoped to a host, not a port, so anything else served on
+   * localhost can set `reviewd_view` and the daemon will be handed it. A value
+   * that is not valid percent-encoding threw out of `decodeURIComponent` and
+   * the review page answered 500 naming no cause — one line in someone else's
+   * dev server bricking the only page this tool has.
+   */
+  it('renders the review anyway', async () => {
+    const review = await reviewWithSnapshot()
+
+    const res = await app.request(`/r/${review.reviewId}`, {
+      headers: { ...HOST, cookie: 'reviewd_view=%; reviewd_rail=%E0%A4%A; reviewd_folds=%' },
+    })
+
+    expect(res.status).toBe(200)
+    expect(await res.text()).toContain('name="token"')
   })
 })
 

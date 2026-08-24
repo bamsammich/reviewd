@@ -56,7 +56,6 @@ function thread(overrides: Partial<Thread> = {}): Thread {
     side: 'new',
     line: 1,
     endLine: null,
-    anchorLine: 'const a = 2',
     state: 'active',
     origin: 'human',
     turn: 'agent',
@@ -72,8 +71,12 @@ function thread(overrides: Partial<Thread> = {}): Thread {
 function fileTag(markup: string, path: string): string {
   // Matched by the fold key wherever it sits in the tag, rather than by the
   // exact order of attributes, which is not what any of these tests are about.
+  // `\s` rather than a literal space after the tag name for the same reason:
+  // these templates are formatted by prettier, which is free to put each
+  // attribute on its own line, and it did. Three tests failed on the newline
+  // while the page they were checking rendered correctly.
   const key = foldKey(SOURCE, path)
-  const match = markup.match(new RegExp(`<details [^>]*data-fold="${key}"[^>]*>`))
+  const match = markup.match(new RegExp(`<details\\s[^>]*data-fold="${key}"[^>]*>`))
   return match?.[0] ?? ''
 }
 
@@ -167,6 +170,87 @@ describe('blank diff halves against the empty-state message', () => {
 })
 
 /**
+ * A page that has stopped being live has to say so.
+ *
+ * Reported from a real review rather than found here: a revision landed, a
+ * reply landed, and the open page showed neither until it was reloaded by
+ * hand. The daemon was doing its part — the stream emits `revision` and
+ * `threads` the instant either happens, and heartbeats between them — so the
+ * failure was entirely in the page, and it was a silent one. The stream had no
+ * `error` listener, and every failure path in the poll below it was a bare
+ * `return`. A daemon that had gone away and a daemon with nothing to say
+ * produced the same page.
+ *
+ * These assert on the script the page ships, which is a coarse instrument. It
+ * is the one available without a browser, and it holds the property that
+ * actually broke: that a failure reaches something which can report it.
+ */
+describe('losing contact with the daemon', () => {
+  const script = (): string => reviewPage(summary(), [file('src/a.ts')], []).value
+
+  /** The poll, sliced out of the script so a match cannot come from elsewhere. */
+  const poll = (markup: string): string =>
+    markup.slice(
+      markup.indexOf('async function checkForChanges'),
+      markup.indexOf('function markCurrentFile'),
+    )
+
+  it('watches the event stream for failure', () => {
+    expect(script()).toContain("source.addEventListener('error'")
+  })
+
+  it('reports a poll that could not reach the daemon, either way it can fail', () => {
+    const body = poll(script())
+
+    // A non-OK answer and a thrown fetch are different failures and both were
+    // a bare return. Neither may be one again.
+    expect(body).toMatch(/if \(!response\.ok\) \{ checkFailed\(\); return; \}/)
+    expect(body).toMatch(/catch \{\s*checkFailed\(\);\s*return;\s*\}/)
+  })
+
+  it('asks whether the reviewer is typing only after it has asked the daemon', () => {
+    const body = poll(script())
+
+    // The other order is what let a page hold a draft and stop noticing it had
+    // gone stale for as long as the draft sat there.
+    expect(body.indexOf('fetch(')).toBeLessThan(body.indexOf('busyWriting()'))
+  })
+
+  it('ships somewhere to put the warning, and a rule to draw it', () => {
+    const markup = script()
+
+    expect(markup).toContain('stale-notice')
+    expect(markup).toMatch(/\.live-notice\.stale\s*\{/)
+  })
+})
+
+/**
+ * The one place in these templates where whitespace is content.
+ *
+ * Everything else the page emits is markup, where a newline between attributes
+ * or tags means nothing, so prettier is free to reflow it and does. Inside the
+ * code cell it is the reviewer's own indentation, and a formatter that broke
+ * `<span class="t">${code}</span>` across lines would quietly add spaces to
+ * every line of every diff. Nothing failed when prettier last reflowed this
+ * file, which is the problem: only three tests noticed, by matching a regex
+ * against an unrelated tag.
+ */
+describe('indentation in the code cell', () => {
+  const indented = (): FileView => ({
+    ...file('src/a.ts'),
+    oldText: 'fn()\n',
+    newText: 'fn()\n\tif (x) {\n        deeply()\n',
+  })
+
+  it('renders a line byte for byte, leading whitespace included', () => {
+    const markup = reviewPage(summary(), [indented()], []).value
+
+    expect(markup).toContain('<span class="t">\tif (x) {</span>')
+    expect(markup).toContain('<span class="t">        deeply()</span>')
+  })
+})
+
+/**
  * Reported from the page rather than found in a test: one comment drawn twice.
  *
  * An insertion pushes the new-side numbering ahead of the old. While both
@@ -181,11 +265,9 @@ describe('a comment near an insertion', () => {
     newText: 'a\nINSERTED\nb\nc\n',
   })
 
-  const at = (side: 'old' | 'new', line: number) =>
-    thread({ side, line, anchorLine: side === 'new' && line === 2 ? 'INSERTED' : 'b' })
+  const at = (side: 'old' | 'new', line: number) => thread({ side, line })
 
-  const count = (markup: string, id: string) =>
-    markup.split(`id="t-${id}"`).length - 1
+  const count = (markup: string, id: string) => markup.split(`id="t-${id}"`).length - 1
 
   it('draws it once', () => {
     const markup = reviewPage(summary(), [inserted()], [at('new', 2)]).value

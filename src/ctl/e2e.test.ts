@@ -43,7 +43,6 @@ beforeEach(async () => {
   repoA.write('src/app.ts', 'const a = 1\nconst b = 2\nconst c = 3\n')
   repoA.commit('initial')
 
-
   repoB = tempRepo()
   repoB.write('config.json', '{\n  "debug": false\n}\n')
   repoB.commit('initial')

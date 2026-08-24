@@ -30,10 +30,7 @@ function load(name: string, className: string): SafeHtml {
     const svg = readFileSync(path, 'utf8')
 
     return raw(
-      svg.replace(
-        '<svg ',
-        `<svg class="${className}" width="14" height="14" aria-hidden="true" `,
-      ),
+      svg.replace('<svg ', `<svg class="${className}" width="14" height="14" aria-hidden="true" `),
     )
   } catch (error) {
     // A missing icon is a blemish; a daemon that will not start is an outage.

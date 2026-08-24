@@ -108,6 +108,57 @@ describe('the push round trip', () => {
   })
 })
 
+describe('the blob size limit', () => {
+  /** A daemon that will not hold more than four bytes, so the limit is easy to cross. */
+  function stingy(): App {
+    const config = resolve(configSchema.parse({ limits: { max_blob_bytes: 4 } }), {
+      configPath: '/tmp/reviewd-test.json',
+      bindPublic: false,
+    })
+    return createApp({ config, db: ctx.db, local: true })
+  }
+
+  it('refuses on the declared length alone, before any of the body is read', async () => {
+    // The body here would have been fine — two bytes, hashing to the id it was
+    // filed under — so the only thing that can produce a 413 is the header. A
+    // daemon that decided after reading would have stored it, which is the
+    // whole failure: this route takes no token, so on a public bind a limit
+    // enforced after the fact has already cost the memory it was guarding.
+    const content = new TextEncoder().encode('ok')
+    const res = await stingy().request(`/api/blobs/${sha256(content)}`, {
+      method: 'PUT',
+      headers: { host: '127.0.0.1:7777', 'content-length': '99999999' },
+      body: content,
+    })
+
+    expect(res.status).toBe(413)
+    expect(await res.json()).toMatchObject({ error: expect.stringContaining('over the 4 limit') })
+  })
+
+  it('still refuses one that declared no length, having measured the bytes', async () => {
+    const content = new TextEncoder().encode('far too much')
+    const res = await stingy().request(`/api/blobs/${sha256(content)}`, {
+      method: 'PUT',
+      headers: { host: '127.0.0.1:7777' },
+      body: content,
+    })
+
+    expect(res.status).toBe(413)
+    expect(await res.json()).toMatchObject({ error: expect.stringContaining('over the 4 limit') })
+  })
+
+  it('lets a blob inside the limit through', async () => {
+    const content = new TextEncoder().encode('ok')
+    const res = await stingy().request(`/api/blobs/${sha256(content)}`, {
+      method: 'PUT',
+      headers: { host: '127.0.0.1:7777', 'content-length': String(content.byteLength) },
+      body: content,
+    })
+
+    expect(res.status).toBe(201)
+  })
+})
+
 describe('errors', () => {
   it('names the offending field on a malformed review', async () => {
     const res = await post('/api/reviews', { title: '', sources: [] })
@@ -126,6 +177,18 @@ describe('errors', () => {
       method: 'PUT',
       headers: { host: '127.0.0.1:7777' },
       body: new TextEncoder().encode('two'),
+    })
+
+    expect(res.status).toBe(400)
+  })
+
+  it('reports 400, not 500, when the body is not JSON at all', async () => {
+    // Unguarded, `{oops` throws out of the route and comes back a 500 quoting
+    // the JSON parser. It is an invalid request like any other.
+    const res = await app.request('/api/reviews', {
+      method: 'POST',
+      headers: JSON_POST,
+      body: '{oops',
     })
 
     expect(res.status).toBe(400)

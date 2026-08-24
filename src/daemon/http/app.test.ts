@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { configSchema, resolve } from '../config.js'
 import { tempDatabase, type TempDatabase } from '../db/testing.js'
@@ -33,6 +34,13 @@ describe('app', () => {
     const res = await app.request('/api/capabilities', { headers: LOOPBACK })
 
     expect(await res.json()).toMatchObject({ local: true, openInEditor: true, fileWatch: true })
+  })
+
+  it('reports the version the package actually says, not one typed by hand', async () => {
+    const pkg = createRequire(import.meta.url)('../../../package.json') as { version: string }
+
+    const res = await app.request('/api/capabilities', { headers: LOOPBACK })
+    expect(await res.json()).toMatchObject({ version: pkg.version })
   })
 
   it('withholds them when it does not', async () => {

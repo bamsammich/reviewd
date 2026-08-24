@@ -121,6 +121,24 @@ describe('blobs', () => {
     expect(read?.bytes.toString('utf8')).toBe('hello')
   })
 
+  it('survives two uploads of the same content racing each other', async () => {
+    // A snapshot uploads in parallel, and a check-then-insert let both callers
+    // find no row and both insert, the loser surfacing a primary key violation
+    // as a 500 on a request that had done nothing wrong.
+    const content = bytes('uploaded twice at once')
+    const id = sha256(content)
+
+    const results = await Promise.all([
+      putBlob(deps, id, content),
+      putBlob(deps, id, content),
+      putBlob(deps, id, content),
+    ])
+
+    // Exactly one wrote the row; the others are the no-ops they should be.
+    expect(results.filter((r) => r.stored)).toHaveLength(1)
+    expect(await readBlob(ctx.db, id)).toMatchObject({ size: content.byteLength })
+  })
+
   it('refuses content that does not hash to the id it was filed under', async () => {
     // A client that computed the hash wrong would otherwise poison every later
     // snapshot that dedupes against this id.

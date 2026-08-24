@@ -21,21 +21,27 @@ fail=0
 
 # A reviewd the tests control, so nothing here talks to a real daemon. It
 # answers deny, which makes "was the gate reached at all" the thing under test.
+#
+# `gate` is the only subcommand the hook calls. There used to be a `fingerprint`
+# case here too, from when the hook decided for itself that an empty tree had
+# nothing to review. That decision moved into `reviewd gate`, which is the only
+# side that can also see what the index is holding, and the stub kept answering
+# a question nobody asked while its `gate` case denied unconditionally — so the
+# one test that expects an allow on a clean tree failed against a correct hook.
 cat >"$work/reviewd" <<'STUB'
 #!/bin/bash
 case $1 in
-  fingerprint)
-    # Empty hash for a clean tree, matching the real one on the property the
-    # hook depends on: nothing to review means nothing to gate.
+  # Mirrors the real gate on the one property the hook depends on: a tree with
+  # nothing to review is allowed, and everything else denies while echoing the
+  # root back, so a test can assert which repository the gate decided this
+  # commit was for and not merely that it denied.
+  gate)
     if [ -z "$(git -C "$2" status --porcelain 2>/dev/null)" ]; then
-      printf '' | shasum -a 256 | cut -d' ' -f1
+      printf '{"decision":"allow","reason":"%s has no changes against HEAD","warnings":[]}\n' "$2"
     else
-      echo "fingerprint-of-$2"
+      printf '{"decision":"deny","reason":"stubbed for %s","reviewUrl":"http://example/r/1"}\n' "$2"
     fi
     ;;
-  # Echoes the root back, so a test can assert which repository the gate
-  # decided this commit was for and not merely that it denied.
-  gate) printf '{"decision":"deny","reason":"stubbed for %s","reviewUrl":"http://example/r/1"}\n' "$2" ;;
 esac
 STUB
 chmod +x "$work/reviewd"

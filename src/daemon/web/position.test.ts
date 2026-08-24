@@ -139,7 +139,14 @@ describe('where a rendered row is', () => {
 
 describe('where a thread is', () => {
   const thread = (overrides: Partial<Thread> = {}) =>
-    ({ sourceId: 'src-1', path: 'src/a.ts', side: 'new', line: 4, endLine: null, ...overrides }) as Thread
+    ({
+      sourceId: 'src-1',
+      path: 'src/a.ts',
+      side: 'new',
+      line: 4,
+      endLine: null,
+      ...overrides,
+    }) as Thread
 
   it('carries its range', () => {
     expect(positionOfThread(thread({ endLine: 8 }))).toEqual(at({ endLine: 8 }))

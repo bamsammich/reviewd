@@ -491,6 +491,15 @@ main.with-bar { padding-bottom: 7.5rem; }
   box-shadow: 0 2px 10px rgb(0 0 0 / .25); max-width: calc(100vw - 2rem);
 }
 
+/* Lost contact, which is the opposite case: not an update being held, but the
+   page no longer knowing whether there is one. It sits above the held-update
+   pill because both can be on screen, and it is not the accent colour, since
+   this one is not news about the review — it is news about the page. */
+.live-notice.stale {
+  bottom: calc(var(--bar-height, 4.5rem) + 3rem);
+  background: var(--warn, #8a5a00); color: #fff;
+}
+
 /* ---------- desktop ---------- */
 
 @media (min-width: 1024px) {
@@ -535,19 +544,20 @@ main.with-bar { padding-bottom: 7.5rem; }
 
 export function page(title: string, body: SafeHtml, extra: SafeHtml = raw('')): SafeHtml {
   return html`<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>${title}</title>
-<style>${raw(STYLE)}</style>
-</head>
-<body>
-<a class="skip" href="#main">Skip to content</a>
-${body}
-${extra}
-</body>
-</html>`
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        <title>${title}</title>
+        <style>
+          ${raw(STYLE)}
+        </style>
+      </head>
+      <body>
+        <a class="skip" href="#main">Skip to content</a>
+        ${body} ${extra}
+      </body>
+    </html>`
 }
 
 /**
@@ -559,9 +569,9 @@ ${extra}
  */
 export function topBar(where: string, right: SafeHtml = raw('')): SafeHtml {
   return html`<header class="top">
-  <a class="home" href="/">reviewd</a>
-  <span class="crumb" aria-hidden="true">/</span>
-  <span class="where" title="${where}">${where}</span>
-  ${right}
-</header>`
+    <a class="home" href="/">reviewd</a>
+    <span class="crumb" aria-hidden="true">/</span>
+    <span class="where" title="${where}">${where}</span>
+    ${right}
+  </header>`
 }

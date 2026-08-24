@@ -51,10 +51,7 @@ async function snapshotOf(db: Kysely<Database>): Promise<string> {
   const dump: Record<string, unknown[]> = {}
 
   for (const table of tables) {
-    const rows = await db
-      .selectFrom(table)
-      .selectAll()
-      .execute()
+    const rows = await db.selectFrom(table).selectAll().execute()
 
     // The activity stamp is the documented exception, so it is dropped rather
     // than allowed to make every read look like a write.
@@ -129,9 +126,7 @@ afterEach(async () => {
  * parameter has to be considered here instead of quietly escaping the sweep.
  */
 function fill(path: string): string | null {
-  const filled = path
-    .replaceAll(':id', reviewId)
-    .replaceAll(':threadId', 'no-such-thread')
+  const filled = path.replaceAll(':id', reviewId).replaceAll(':threadId', 'no-such-thread')
 
   return filled.includes(':') ? null : filled
 }

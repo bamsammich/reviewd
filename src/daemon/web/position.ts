@@ -50,9 +50,7 @@ export function positionOfThread(thread: Thread): Position {
 
 /** Same file and same side, whatever lines are involved. */
 export function inSameFile(one: Position, other: Position): boolean {
-  return (
-    one.sourceId === other.sourceId && one.path === other.path && one.side === other.side
-  )
+  return one.sourceId === other.sourceId && one.path === other.path && one.side === other.side
 }
 
 /** The same place: same file, same side, same starting line. */

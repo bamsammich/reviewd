@@ -94,8 +94,14 @@ export async function diffGitSource(
   const indexFile = join(dir, 'index')
 
   try {
-    // Empty on purpose. See the note in git.ts: seeding from the real index
-    // makes git trust inherited stat data and miss a same-size in-place edit.
+    // The scratch index starts empty on purpose.
+    //
+    // Seeding it from the real index is the obvious optimization and it is
+    // wrong: the copy's mtime is newer than every file, so git trusts the stat
+    // data it inherited instead of re-reading content. An in-place edit that
+    // keeps a file's size then reads as no change at all, and the fingerprint
+    // comes back describing a tree that plainly differs from the one on disk.
+    // For a value the commit gate rests on, a full re-read is the right trade.
     const env = { GIT_INDEX_FILE: indexFile }
     await git(root, ['add', '-A'], env)
 
@@ -165,9 +171,7 @@ async function includeStagedIgnores(
   // Only paths still on disk. A staged deletion has nothing to add, and
   // `git add` treats a pathspec matching no file as an error rather than as
   // nothing to do; the scratch index already recorded the removal anyway.
-  const paths = staged
-    .split('\0')
-    .filter((path) => path.length > 0 && existsSync(join(root, path)))
+  const paths = staged.split('\0').filter((path) => path.length > 0 && existsSync(join(root, path)))
 
   if (paths.length === 0) return
 

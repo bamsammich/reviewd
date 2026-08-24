@@ -29,9 +29,7 @@ describe('building the tree', () => {
   it('stops collapsing where the paths diverge', () => {
     const tree = buildTree([at('src/daemon/web/a.ts'), at('src/ctl/b.ts')])
 
-    expect(outline(tree)).toEqual([
-      { 'src/': [{ 'ctl/': ['b.ts'] }, { 'daemon/web/': ['a.ts'] }] },
-    ])
+    expect(outline(tree)).toEqual([{ 'src/': [{ 'ctl/': ['b.ts'] }, { 'daemon/web/': ['a.ts'] }] }])
   })
 
   it('does not collapse past a directory that holds a file of its own', () => {
@@ -43,12 +41,7 @@ describe('building the tree', () => {
   it('puts directories before files and sorts each by name', () => {
     const tree = buildTree([at('z.ts'), at('a.ts'), at('lib/one.ts'), at('bin/two.ts')])
 
-    expect(outline(tree)).toEqual([
-      { 'bin/': ['two.ts'] },
-      { 'lib/': ['one.ts'] },
-      'a.ts',
-      'z.ts',
-    ])
+    expect(outline(tree)).toEqual([{ 'bin/': ['two.ts'] }, { 'lib/': ['one.ts'] }, 'a.ts', 'z.ts'])
   })
 
   it('counts every file at or below a directory', () => {

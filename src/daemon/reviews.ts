@@ -265,15 +265,17 @@ export async function putBlob(
     throw new ReviewError(`blob id ${id} does not match its content (${actual})`, 400)
   }
 
-  const existing = await db.selectFrom('blob').select('id').where('id', '=', id).executeTakeFirst()
-  if (existing) return { stored: false }
-
-  await db
+  // One statement rather than a SELECT that decides whether to INSERT. A
+  // snapshot uploads in parallel, and two uploads of the same content used to
+  // both find no row and both insert, the loser surfacing a primary key
+  // violation as a 500. Whether the row was ours is the insert's own answer.
+  const result = await db
     .insertInto('blob')
     .values({ id, bytes: Buffer.from(bytes), size: bytes.byteLength })
-    .execute()
+    .onConflict((oc) => oc.column('id').doNothing())
+    .executeTakeFirst()
 
-  return { stored: true }
+  return { stored: (result?.numInsertedOrUpdatedRows ?? 0n) > 0n }
 }
 
 export async function readBlob(
@@ -351,16 +353,20 @@ export async function createSnapshot(
   const snapshotId = newId()
   const t = now()
 
-  const previous = await db
-    .selectFrom('snapshot')
-    .selectAll()
-    .where('review_id', '=', reviewId)
-    .orderBy('seq', 'desc')
-    .executeTakeFirst()
+  // The number comes from inside the transaction because snapshot_review_seq
+  // is unique: read outside it, two pushes racing on one review both see the
+  // same predecessor, both claim the next number, and the loser fails on the
+  // constraint instead of simply following.
+  const seq = await db.transaction().execute(async (tx) => {
+    const previous = await tx
+      .selectFrom('snapshot')
+      .selectAll()
+      .where('review_id', '=', reviewId)
+      .orderBy('seq', 'desc')
+      .executeTakeFirst()
 
-  const seq = (previous?.seq ?? 0) + 1
+    const seq = (previous?.seq ?? 0) + 1
 
-  await db.transaction().execute(async (tx) => {
     await tx
       .insertInto('snapshot')
       .values({
@@ -411,6 +417,8 @@ export async function createSnapshot(
       .set({ last_activity_at: t, updated_at: t, status: 'open' })
       .where('id', '=', reviewId)
       .execute()
+
+    return seq
   })
 
   // Re-anchoring runs after the transaction commits, so it reads the snapshot
