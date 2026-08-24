@@ -157,7 +157,7 @@ describe('createSnapshot', () => {
     })
 
     expect(result.seq).toBe(1)
-    expect(result.filesChanged).toBe(1)
+    expect(result.fileCount).toBe(1)
     expect(result.url).toContain(review.reviewId)
 
     const second = await createSnapshot(deps, review.reviewId, {

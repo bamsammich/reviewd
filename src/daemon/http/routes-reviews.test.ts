@@ -85,12 +85,12 @@ describe('the push round trip', () => {
     })
 
     expect(snapshot.status).toBe(201)
-    expect(await snapshot.json()).toMatchObject({ seq: 1, filesChanged: 1 })
+    expect(await snapshot.json()).toMatchObject({ seq: 1, fileCount: 1 })
 
     const fetched = await app.request(`/api/reviews/${review.reviewId}`, {
       headers: { host: '127.0.0.1:7777' },
     })
-    expect(await fetched.json()).toMatchObject({ snapshotSeq: 1, filesChanged: 1 })
+    expect(await fetched.json()).toMatchObject({ snapshotSeq: 1, fileCount: 1 })
   })
 
   it('serves stored bytes back unchanged', async () => {

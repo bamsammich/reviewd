@@ -95,7 +95,7 @@ export function createMcpServer(client = new Client(loadClientConfig().base_url)
         return ok({
           reviewId: review.reviewId,
           url: review.url,
-          filesChanged: snapshot.filesChanged,
+          fileCount: snapshot.fileCount,
           sources: review.sources.map((s) => ({ id: s.id, label: s.label, root: s.rootPath })),
         })
       } catch (error) {
@@ -152,7 +152,7 @@ export function createMcpServer(client = new Client(loadClientConfig().base_url)
           status: review.status,
           url: review.url,
           revision: review.snapshotSeq,
-          filesChanged: review.filesChanged,
+          fileCount: review.fileCount,
           threadsAwaitingAgent: review.threadsAwaitingAgent,
           threadsAwaitingHuman: review.threadsAwaitingHuman,
           sources: review.sources.map((s) => ({

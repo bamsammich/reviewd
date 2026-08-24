@@ -56,7 +56,7 @@ function reviewCard(review: ReviewSummary): SafeHtml {
       )}
     </div>
     <div class="meta">
-      ${review.filesChanged} file${review.filesChanged === 1 ? '' : 's'} &middot; rev
+      ${review.fileCount} file${review.fileCount === 1 ? '' : 's'} &middot; rev
       ${review.snapshotSeq} &middot; ${age(review.ageSeconds)} ago
       ${
         review.threadsAwaitingHuman > 0
