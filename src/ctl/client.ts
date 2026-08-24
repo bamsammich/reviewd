@@ -144,8 +144,7 @@ export class Client {
   }
 
   gate(root: string, fingerprint: string): Promise<GateResponse> {
-    const params = new URLSearchParams({ root, fingerprint })
-    return this.json('GET', `/api/gate?${params.toString()}`, gateResponse)
+    return this.json('POST', '/api/gate', gateResponse, { root, fingerprint })
   }
 
   wait(reviewId: string, timeoutMs: number, since = 0): Promise<WaitResult> {

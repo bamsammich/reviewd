@@ -42,7 +42,6 @@ async function seed() {
   await putBlob(deps, blobId, content)
 
   await createSnapshot(deps, review.reviewId, {
-    fingerprints: { [review.sources[0]!.id]: 'fp-1' },
     files: [
       {
         sourceId: review.sources[0]!.id,
@@ -104,6 +103,30 @@ async function listen(reviewId: string, query = 'since=0') {
 const agentComment = (reviewId: string, body = 'flagging this') =>
   createThread(deps, reviewId, { path: 'src/a.ts', line: 2, side: 'new', body, author: 'agent' })
 
+/** A second revision of the same review, which is what a page has to notice. */
+async function pushRevision(review: { reviewId: string; sources: { id: string }[] }) {
+  const content = new TextEncoder().encode('a\nb\nc\nd\n')
+  const blobId = sha256(content)
+  await putBlob(deps, blobId, content)
+
+  return createSnapshot(deps, review.reviewId, {
+    files: [
+      {
+        sourceId: review.sources[0]!.id,
+        path: 'src/a.ts',
+        changeType: 'modified',
+        oldPath: null,
+        oldBlobId: null,
+        newBlobId: blobId,
+        oldHash: null,
+        newHash: blobId,
+        isBinary: false,
+        truncated: false,
+      },
+    ],
+  })
+}
+
 describe('the review page event stream', () => {
   it('serves an event stream', async () => {
     const review = await seed()
@@ -144,6 +167,21 @@ describe('the review page event stream', () => {
     const stream = await listen(review.reviewId, `since=${Date.now() + 1000}`)
 
     expect(await stream.frame(120)).not.toContain('event: threads')
+    stream.close()
+  })
+
+  it('wakes the page when the agent pushes a revision', async () => {
+    // Without this the page keeps showing code that has been replaced, and its
+    // approve button describes a revision the reviewer never read.
+    const review = await seed()
+    const stream = await listen(review.reviewId, `since=${Date.now()}`)
+
+    await new Promise((r) => setTimeout(r, 20))
+    await pushRevision(review)
+
+    const frame = await stream.frame()
+    expect(frame).toContain('event: revision')
+    expect(frame).toContain('data: 2')
     stream.close()
   })
 

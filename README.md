@@ -40,7 +40,7 @@ VPN, reverse proxy, and Tailscale each get a config block in the docs.
 
 ## Install
 
-Two commands. Needs Node 26, git, and `jq`.
+Two commands. Needs Node 22 or newer, git, and `jq`.
 
 ```sh
 claude plugin marketplace add bamsammich/reviewd
@@ -111,6 +111,17 @@ container's network namespace holds one process.
 # It decides who can read and approve reviews.
 REVIEWD_PUBLISH=127.0.0.1 docker compose up -d --build
 ```
+
+Use compose rather than `docker run`. The image does not carry `--bind-public`; compose
+passes it on the line next to `ports:`, so the permission to bind widely and the decision
+about who can reach it are read together. A bare `docker run -p 7777:7777` would otherwise
+publish an unauthenticated review server on every interface, which is exactly the accident
+that flag exists to prevent.
+
+Two things worth knowing on Linux. A published port is DNAT'd ahead of `INPUT`, so `ufw` and
+`firewalld` do not filter it — a default-deny policy will not save a wide `REVIEWD_PUBLISH`.
+And `--network host` makes `host: "0.0.0.0"` bind the machine's real interfaces, so the note
+below about it widening nothing stops being true.
 
 Then point the client at it, in `~/.config/reviewd/client.json`:
 

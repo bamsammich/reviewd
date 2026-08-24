@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { Hono } from 'hono'
 import { resolve, type Config, type ResolvedConfig } from '../config.js'
 import { configSchema } from '../config.js'
-import { crossSiteGuard, hostAllowlist, readOnlyGet } from './hardening.js'
+import { crossSiteGuard, hostAllowlist } from './hardening.js'
 
 function configFor(overrides: Partial<Config> = {}): ResolvedConfig {
   const parsed = configSchema.parse(overrides)
@@ -112,31 +112,5 @@ describe('cross-site guard', () => {
     })
 
     expect(res.status).toBe(403)
-  })
-})
-
-describe('read-only GET', () => {
-  it('throws when a GET handler marks itself as mutating', async () => {
-    const app = new Hono()
-    app.use('*', readOnlyGet())
-    app.onError((error, c) => c.json({ error: error.message }, 500))
-    app.get('/oops', (c) => {
-      c.header('x-reviewd-mutated', 'true')
-      return c.json({ ok: true })
-    })
-
-    const res = await app.request('/oops', { headers: { host: '127.0.0.1:7777' } })
-
-    expect(res.status).toBe(500)
-    expect(await res.json()).toMatchObject({ error: expect.stringContaining('mutated state') })
-  })
-
-  it('leaves an honest GET alone', async () => {
-    const app = new Hono()
-    app.use('*', readOnlyGet())
-    app.get('/fine', (c) => c.json({ ok: true }))
-
-    const res = await app.request('/fine', { headers: { host: '127.0.0.1:7777' } })
-    expect(res.status).toBe(200)
   })
 })

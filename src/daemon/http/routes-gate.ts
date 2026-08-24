@@ -1,28 +1,28 @@
 import { Hono } from 'hono'
-import { releaseRequest } from '../../protocol.js'
+import { gateRequest, releaseRequest } from '../../protocol.js'
 import { gate, release } from '../gate.js'
 import { ReviewError, type Deps } from '../reviews.js'
 
 /**
  * The commit gate and release.
  *
- * The gate is a GET because the hook calls it before every commit and it
- * answers a question. Stamping consumed_at is bookkeeping about that question
- * having been asked rather than a change to what the answer is, so a retry
- * gets the same verdict.
+ * The gate reads as a question and was a GET for that reason, but answering it
+ * stamps consumed_at, and a GET that writes is reachable from an `<img>` tag.
+ * The stamp is worth keeping — it is how release tells a used approval from an
+ * abandoned one — so the method moves instead.
  */
 export function gateRoutes(deps: Deps): Hono {
   const routes = new Hono()
 
-  routes.get('/api/gate', async (c) => {
-    const root = c.req.query('root')
-    const fingerprint = c.req.query('fingerprint')
+  routes.post('/api/gate', async (c) => {
+    const body: unknown = await c.req.json().catch(() => ({}))
+    const parsed = gateRequest.safeParse(body)
 
-    if (!root || !fingerprint) {
+    if (!parsed.success) {
       return c.json({ error: 'root and fingerprint are both required' }, 400)
     }
 
-    return c.json(await gate(deps, { root, fingerprint }))
+    return c.json(await gate(deps, parsed.data))
   })
 
   routes.post('/api/reviews/:id/release', async (c) => {

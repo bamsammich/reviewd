@@ -16,6 +16,10 @@ export type ReviewEvent =
   // submission. The reviewer is a person looking at a page, and making them
   // wait for a batch that will never come is how the page went stale.
   | { kind: 'thread'; reviewId: string; threadId: string; at: number }
+  // A new revision. The page has to hear about this or it keeps showing code
+  // that has been replaced, and its tokens go on describing a revision that is
+  // no longer current.
+  | { kind: 'snapshot'; reviewId: string; seq: number; at: number }
 
 export class Bus {
   private readonly emitter = new EventEmitter()

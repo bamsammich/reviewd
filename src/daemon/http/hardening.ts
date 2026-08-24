@@ -10,6 +10,23 @@ import { isLoopbackHost, stripPort, type ResolvedConfig } from '../config.js'
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 
 /**
+ * Routes where a page token is demanded, so the origin need not be trusted.
+ *
+ * Every mutating route under `/r/` reads a token minted into the form it came
+ * from; `routes-web.ts` refuses without one. That is a stronger answer than any
+ * header, which is why these can afford to accept an origin the browser will
+ * not name.
+ *
+ * A new `/r/` route that forgets its token would inherit this leniency without
+ * earning it. `authority.test.ts` walks the mutating web routes and asserts each
+ * one refuses an untokened request, so the omission fails a test rather than
+ * quietly widening this.
+ */
+function tokenGuarded(path: string): boolean {
+  return path.startsWith('/r/')
+}
+
+/**
  * Refuses any request addressed to a name the daemon does not answer to.
  *
  * This closes DNS rebinding: a hostile name whose record points at 127.0.0.1
@@ -61,12 +78,35 @@ export function crossSiteGuard(config: ResolvedConfig): MiddlewareHandler {
     }
 
     const origin = c.req.header('origin')
+
+    // `null` is an origin the browser declines to name: an in-app webview, a
+    // sandboxed frame, a document reached through a redirect. It says nothing
+    // about whether the request is hostile — a reviewer opening the review from
+    // a notification looks exactly like a sandboxed frame from here.
+    //
+    // So it is tolerated only where something better is already being checked.
+    // The pages demand a token minted into the form, which answers the question
+    // this header was a proxy for; the API demands nothing, because the agent
+    // and the commit hook hold no token, and `release` deletes a review. On
+    // those an unnamed origin is the only signal there is, and it is refused.
+    if (origin === 'null') {
+      if (!tokenGuarded(c.req.path)) {
+        return c.json(
+          { error: `${c.req.method} from an unnamed origin refused on an API route` },
+          403,
+        )
+      }
+
+      await next()
+      return
+    }
+
     if (origin) {
       let hostname: string
       try {
         hostname = new URL(origin).hostname.toLowerCase()
       } catch {
-        return c.json({ error: 'malformed Origin' }, 403)
+        return c.json({ error: `unreadable Origin ${JSON.stringify(origin)}` }, 403)
       }
       if (!config.allowedHosts.has(hostname)) {
         return c.json({ error: `cross-origin ${c.req.method} refused` }, 403)
@@ -78,25 +118,55 @@ export function crossSiteGuard(config: ResolvedConfig): MiddlewareHandler {
 }
 
 /**
- * A GET must never change anything.
+ * Framing is the one browser attack the other two middlewares cannot see.
  *
- * Enforced as a rule rather than left to discipline, because the failure looks
- * like an image tag in an email approving a review.
+ * A page framed cross-origin renders reviewd's own document, so a click on the
+ * approve bar is genuinely same-origin and every check here passes it. Refusing
+ * to be framed at all is the only place that stops.
+ *
+ * `unsafe-inline` covers the one style block and one script block the pages
+ * emit. Both are server-built and neither carries review content, so the value
+ * of this policy is `frame-ancestors` and `default-src`; a nonce would tighten
+ * it but changes nothing about the attack above.
  */
-export function readOnlyGet(): MiddlewareHandler {
+export function securityHeaders(): MiddlewareHandler {
   return async (c, next) => {
     await next()
 
-    if (c.req.method !== 'GET' && c.req.method !== 'HEAD') return
-    if (c.res.headers.get('x-reviewd-mutated') !== 'true') return
+    c.res.headers.set('x-frame-options', 'DENY')
+    c.res.headers.set('x-content-type-options', 'nosniff')
+    c.res.headers.set('referrer-policy', 'no-referrer')
 
-    throw new Error(`reviewd bug: ${c.req.path} mutated state on a ${c.req.method}`)
+    // Nothing here may be served from a cache unless it says otherwise.
+    //
+    // A review page carries the code under review, the revision it belongs to,
+    // and a token minted for that revision. A phone that redraws a cached copy
+    // shows all three as they were, which is the exact failure the live refresh
+    // exists to prevent, arriving by a route the daemon never sees. Blobs opt
+    // back in below: they are addressed by the hash of their own bytes and can
+    // never change under an address.
+    if (!c.res.headers.has('cache-control')) {
+      c.res.headers.set('cache-control', 'no-store')
+    }
+    c.res.headers.set(
+      'content-security-policy',
+      [
+        "default-src 'none'",
+        "style-src 'unsafe-inline'",
+        "script-src 'unsafe-inline'",
+        "img-src 'self' data:",
+        "connect-src 'self'",
+        "form-action 'self'",
+        "base-uri 'none'",
+        "frame-ancestors 'none'",
+      ].join('; '),
+    )
   }
 }
 
-/** Applied in order: what may reach us, then what it may do. */
+/** Applied in order: what may reach us, then what it may do, then what it says. */
 export function hardening(config: ResolvedConfig): MiddlewareHandler[] {
-  return [hostAllowlist(config), crossSiteGuard(config), readOnlyGet()]
+  return [securityHeaders(), hostAllowlist(config), crossSiteGuard(config)]
 }
 
 export { isLoopbackHost }

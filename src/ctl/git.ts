@@ -1,5 +1,4 @@
 import { execFile } from 'node:child_process'
-import { createHash } from 'node:crypto'
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -105,8 +104,35 @@ export async function diffAgainstHead(root: string): Promise<string> {
   }
 }
 
-export async function fingerprint(root: string): Promise<string> {
-  return createHash('sha256')
-    .update(await diffAgainstHead(root), 'utf8')
-    .digest('hex')
+/**
+ * Paths where the index holds something that is neither HEAD nor the tree.
+ *
+ * The review reads the working tree; `git commit` writes the index. Keeping
+ * those apart is what lets staging leave the fingerprint alone, and it is also
+ * a hole: stage a change, restore the file, and the tree the reviewer reads is
+ * clean while the commit still carries the change. `git status` calls that
+ * `MM`, and it is the one arrangement where approving what is on disk says
+ * nothing about what is about to be committed.
+ *
+ * A tree that is wholly staged, wholly unstaged, or untouched all pass. What
+ * does not is a half-staged file — `git add -p`, or the sequence above — where
+ * the committed content matches neither what was reviewed nor what it replaced.
+ */
+export async function stagedDivergence(root: string): Promise<string[]> {
+  const status = await git(root, ['status', '--porcelain', '-z'])
+  const diverged: string[] = []
+
+  for (const entry of status.split('\0')) {
+    if (entry.length < 4) continue
+
+    const index = entry[0] as string
+    const tree = entry[1] as string
+
+    // Untracked is not staged, and a clean side means the two agree.
+    if (index === ' ' || index === '?' || tree === ' ') continue
+
+    diverged.push(entry.slice(3))
+  }
+
+  return diverged
 }

@@ -15,13 +15,15 @@ export async function pushSnapshot(
   sources: SourceInput[],
   limits: DiffLimits = DEFAULT_LIMITS,
 ): Promise<SnapshotResult> {
-  const manifest: SnapshotManifest = { fingerprints: {}, files: [] }
+  // No fingerprint travels with this. The daemon derives it from the rows
+  // below, so what an approval covers is what the review page rendered rather
+  // than a number this process asserted about it.
+  const manifest: SnapshotManifest = { files: [] }
   const blobs = new Map<string, Uint8Array>()
 
   for (const source of sources) {
     const diff = await diffSource(source, limits)
 
-    manifest.fingerprints[diff.sourceId] = diff.fingerprint
     manifest.files.push(...diff.files)
     for (const [id, bytes] of diff.blobs) blobs.set(id, bytes)
   }

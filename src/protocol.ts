@@ -101,16 +101,35 @@ export const fileChangeSpec = z.object({
   path: z.string().min(1),
   changeType,
   oldPath: z.string().nullable().default(null),
+  /**
+   * The blob the daemon holds, or null when the bytes were not uploaded.
+   *
+   * Binary and oversize content is described rather than stored, so these are
+   * null for it while the hashes below are not. Rendering follows the blob ids;
+   * the approval follows the hashes.
+   */
   oldBlobId: z.string().nullable().default(null),
   newBlobId: z.string().nullable().default(null),
+  /**
+   * sha256 of the content on each side, set whether or not the bytes were
+   * uploaded. This is what the fingerprint is built from, so a file the
+   * reviewer could not be shown still moves the approval when it changes.
+   */
+  oldHash: z.string().nullable().default(null),
+  newHash: z.string().nullable().default(null),
   isBinary: z.boolean().default(false),
   truncated: z.boolean().default(false),
 })
 export type FileChangeSpec = z.infer<typeof fileChangeSpec>
 
+/**
+ * No fingerprint on the wire.
+ *
+ * The daemon derives it from these rows, because a fingerprint the client sends
+ * is a claim about bytes rather than a fact about them: a client could upload
+ * one change set for the reviewer to read and name the hash of a different one.
+ */
 export const snapshotManifest = z.object({
-  /** sha256 over the whole normalized change set, computed client-side. */
-  fingerprints: z.record(z.string(), z.string()),
   files: z.array(fileChangeSpec),
 })
 export type SnapshotManifest = z.infer<typeof snapshotManifest>
@@ -170,7 +189,6 @@ export const createThreadRequest = z
     endLine: z.number().int().positive().optional(),
     side: side.default('new'),
     body: z.string().min(1),
-    author: author.default('agent'),
   })
   // A range that ends before it starts is a caller mistake worth naming rather
   // than quietly reordering, and one that ends where it starts is one line.
@@ -178,11 +196,18 @@ export const createThreadRequest = z
     message: 'endLine must not be before line',
     path: ['endLine'],
   })
-export type CreateThreadRequest = z.infer<typeof createThreadRequest>
+/**
+ * Authorship is not on the wire.
+ *
+ * It is decided by which route a message arrived on — the review page is the
+ * reviewer, the API is the agent — so a caller cannot label its own words as
+ * the other party's. On a tool whose job is recording what the human said,
+ * a spoofable byline defeats the purpose.
+ */
+export type CreateThreadRequest = z.infer<typeof createThreadRequest> & { author: Author }
 
 export const replyRequest = z.object({
   body: z.string().min(1),
-  author: author.default('agent'),
 })
 export type ReplyRequest = z.infer<typeof replyRequest>
 
@@ -206,6 +231,12 @@ export const gateOpenThread = z.object({
   line: z.number().int(),
   excerpt: z.string(),
 })
+
+export const gateRequest = z.object({
+  root: z.string().min(1),
+  fingerprint: z.string().min(1),
+})
+export type GateRequest = z.infer<typeof gateRequest>
 
 export const gateResponse = z.object({
   decision: z.enum(['allow', 'deny']),

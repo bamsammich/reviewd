@@ -83,5 +83,10 @@ export function scheduleSweep(
 /** Marks a review as looked at, which is what keeps the sweep off it. */
 export async function touchReview(db: Kysely<Database>, reviewId: string): Promise<void> {
   const t = now()
+
+  // Opening a review is a read that has to leave a mark, so the sweep can tell
+  // a review someone is using from one nobody came back to. It is the one write
+  // a GET is allowed to make, and `read-only-get.test.ts` names it as the only
+  // exception rather than leaving it to be discovered.
   await db.updateTable('review').set({ last_activity_at: t }).where('id', '=', reviewId).execute()
 }

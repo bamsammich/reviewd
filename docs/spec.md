@@ -35,8 +35,9 @@ holding a session on the reviewer's machine.
   outcome. Nothing here is a record of what was reviewed.
 - **A hosting product.** Nothing is exposed to the public internet by default, and no
   configuration key makes that a one-step operation.
-- **Its own authentication.** Network reachability is the access boundary. If that stops
-  being enough, the replacement is a standard mechanism rather than a bespoke one.
+- **Its own authentication.** Network reachability is the access boundary for *reading* a
+  review. If that stops being enough, the replacement is a standard mechanism rather than a
+  bespoke one. Approving is a separate question, answered in section 4.
 - **Merge conflict resolution, CI integration, branch management.**
 - **Review authorship by the agent.** The agent surfaces changes and answers questions. It
   does not judge them.
@@ -136,6 +137,43 @@ link.
 If reachability stops being a sufficient boundary, the replacement is an established
 mechanism: an identity provider in front, or OIDC in the daemon.
 
+### Reading and approving are different questions
+
+The argument above is about reading, and it holds: anything that can reach the port can
+already read the repository directly, so a password on the daemon protects nothing.
+
+It does not carry over to approving. The gate exists to constrain the agent, and the agent
+runs on this machine with code execution by construction — the very thing that makes
+credentials pointless for reading is the thing that makes the agent the attacker here. An
+approval the agent can write is a gate that clears itself.
+
+So the two surfaces are kept apart:
+
+- **The agent's API cannot approve.** `POST /api/reviews/:id/submissions` takes `comment` and
+  `changes_requested` and refuses `approved`. There is no other route that writes an approval.
+- **A verdict needs a token from the page.** The review page mints one into the submit form,
+  signed with a key held in the daemon's memory and bound to the current revision. Approving
+  without opening the review means scraping the UI.
+
+**What this does not do, and why that is the right place to stop.** An agent that reads the
+review page can take the token. No local mechanism can prevent that: it runs as you, so
+anything your browser can obtain it can obtain too.
+
+That is not a gap left open for want of a better idea. An agent that scrapes a page for a
+token is not defeating a control by accident — it is doing something specific and deliberate,
+which in practice means it was told to. That is a question of what you ask an agent to do,
+and it belongs in the instructions you give it rather than in a check the daemon makes.
+Reaching for a mechanism here would mean building authentication to enforce a rule about
+your own intent, which is the wrong tool and a permanent cost for it.
+
+So the line is drawn where a mechanism still earns its place: approval is not a documented
+call, not reachable from the tool surface the agent is handed, and not something that happens
+without a page having been rendered. Past that point it stops being the daemon's business.
+
+If you need more than that — an agent you do not control, or a reviewer who must be a
+different person — the answer is not a credential in this daemon. It is running it somewhere
+the agent cannot reach, with the reviewer's browser on that side of the boundary.
+
 ### What the daemon does defend against
 
 The daemon still refuses requests it should not serve. The attack that matters against a
@@ -147,8 +185,16 @@ on the reviewer's behalf without the reviewer knowing.
   resolves to `127.0.0.1` and a page in the browser talks to the daemon as same-origin.
 - **Cross-site rejection.** Every mutating request requires `Sec-Fetch-Site: same-origin`,
   falling back to an `Origin` check for clients that omit it.
+- **No framing.** `X-Frame-Options: DENY` and `frame-ancestors 'none'` on every response.
+  Without them the other two checks pass a framed click: the page in the frame is reviewd's
+  own, so a click on its approve bar is genuinely same-origin and nothing above can tell it
+  from the reviewer's. Sizing the frame puts the button where the attacker wants it.
 - **No mutation on GET.** Approving, commenting, and releasing are POST or DELETE, so no
-  `<img>` tag reaches them.
+  `<img>` tag reaches them. The gate's own `consumed_at` stamp is why `/api/gate` is a POST.
+  Held by a test that reads the database either side of every GET route the app registers,
+  rather than by a check in the request path: the routes stay plain, a route added later is
+  covered without anyone remembering to list it, and the one permitted write — the
+  `last_activity_at` stamp that opening a review makes — is named there as the exception.
 - **Deliberate exposure only.** Binding a non-loopback address requires `--bind-public` on
   the command line rather than a configuration key alone. Startup then prints what became
   reachable and to whom.
@@ -547,8 +593,11 @@ resumed.
 The commit hook is shell, because hooks cannot speak MCP.
 
 ```
-GET /api/gate?root=<abs_path>&fingerprint=<sha256>
+POST /api/gate    {"root": "<abs_path>", "fingerprint": "<sha256>"}
 ```
+
+A POST because answering stamps `consumed_at`, and a GET that writes is a GET an `<img>`
+tag can fire.
 
 Returns:
 
@@ -587,12 +636,35 @@ an approved review generate one, as does a second review touching the same root,
 indicates another session working in the same place.
 
 `reviewd fingerprint` computes it client-side: stage every change, tracked and untracked,
-into a throwaway index, diff that index against HEAD in one pass, and hash the result.
-Staging must not change the answer, so the command leaves the real index untouched and a
-partially staged tree keeps the arrangement it had.
+into a throwaway index, and hash the resulting change set — each file's path, rename origin,
+kind of change, and the sha256 of both sides. Staging must not change the answer, so the
+command leaves the real index untouched.
 
-The hook detects `git commit`, resolves the repository root, shells out to `reviewd gate`,
-and emits the deny payload.
+Three things follow from hashing the change set rather than the diff text:
+
+- **The daemon derives the same value from the manifest it stored**, and ignores anything the
+  client sends. A fingerprint on the wire would be a claim about bytes rather than a fact
+  about them, and a client could show the reviewer one change set while the approval covered
+  another.
+- **Content the reviewer could not be shown is still covered.** Binary and oversize files are
+  described rather than uploaded, but both sides are hashed, so replacing one after approval
+  moves the fingerprint. The gate says so in a warning, because approved and read came apart
+  for those files.
+- **Files the ignore rules hide are covered when git is carrying them.** Adding everything
+  skips `dist/`, but force-adding a path inside it puts that file in the index and a commit
+  takes it, so anything in the real index is pulled into the reading.
+
+One thing the fingerprint cannot cover, because it reads the tree while a commit writes the
+index: content staged and then changed on disk. `reviewd gate` refuses outright when the
+status of a path differs on both sides, since the committed bytes would match neither what
+was reviewed nor what they replaced. A wholly staged tree, a wholly unstaged one, and an
+untouched one all pass; staging a partial hunk does not.
+
+The hook detects the commit-producing subcommands — not only the one spelled `commit`, but
+also merge, rebase, cherry-pick, revert, am, and the low-level tree and ref plumbing — then
+resolves the repository root, shells out to `reviewd gate`, and emits the deny payload. It
+fails closed on every error it can reach, including a `jq` that is missing or shadowed, which
+it detects by asking a question with a known answer rather than by looking for the binary.
 
 ---
 
@@ -624,6 +696,23 @@ Phase 1 screens:
   since approving with threads open is a legitimate call. Approving records a fingerprint; a
   later snapshot re-arms the gate.
 - A snapshot selector showing changes since the last visit.
+- The page follows the review, and does not depend on one mechanism to do it.
+  A new revision reaches it over the same event stream the agent's replies use,
+  and it re-renders in place: same scroll position, same open replies, same
+  half-typed text, with a note saying which revision arrived.
+
+  The stream is the fast path rather than the guarantee. An in-app webview may
+  never open it, a sleeping phone drops it, and a proxy can hold it — and the
+  page has no way to tell a quiet review from a dead connection. So it also
+  asks: every fifteen seconds, and immediately on becoming visible again, which
+  is the case a phone actually hits. It compares the revision and the count of
+  threads awaiting the reviewer, never the activity stamp, since the refresh is
+  itself a read that moves the stamp and would refresh forever.
+
+  This matters more than a stale render. A tab left open shows code that has
+  been replaced, and its approve button describes a revision nobody read. The
+  page catching up is what makes an approval mean the thing on screen, so it
+  cannot rest on a connection staying up.
 
 Mobile is a requirement, since reviewing away from the machine is half the point. Single column below 768px, file tree in a drawer, reply box pinned.
 

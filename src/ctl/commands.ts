@@ -1,8 +1,10 @@
-import { WAIT_EXIT } from '../protocol.js'
+import { EMPTY_FINGERPRINT } from '../fingerprint.js'
+import { WAIT_EXIT, type GateResponse } from '../protocol.js'
 import { Client } from './client.js'
 import { loadClientConfig } from './config.js'
+import { fingerprint } from './diff.js'
 import { ensureDaemon, logPath } from './ensure.js'
-import { fingerprint, repoRoot } from './git.js'
+import { repoRoot, stagedDivergence } from './git.js'
 import { runMcpServer } from './mcp.js'
 
 /** One long-poll round. Shorter than the deadline so a proxy idle timeout cannot strand it. */
@@ -38,12 +40,55 @@ export async function checkGate(path: string, json: boolean): Promise<void> {
   const root = await requireRepo(path)
   if (!root) return
 
+  // Asked before the daemon, because the daemon cannot see it. An approval
+  // covers the working tree; a commit writes the index. Where those two hold
+  // different content, no approval means anything about what is about to land,
+  // so this is a refusal rather than a question.
+  const diverged = await stagedDivergence(root)
+  if (diverged.length > 0) {
+    const result: GateResponse = {
+      decision: 'deny',
+      reason:
+        `${diverged.length} file${diverged.length === 1 ? ' has' : 's have'} staged content ` +
+        `that differs from the working tree, so committing would carry code the review never ` +
+        `showed:\n  ${diverged.slice(0, 10).join('\n  ')}\n\n` +
+        `Stage the rest with \`git add -A\`, or unstage with \`git reset\`, then commit again.`,
+      reviewUrl: null,
+      warnings: [],
+      openThreads: [],
+    }
+
+    return report(result, json)
+  }
+
+  const value = await fingerprint(root)
+
+  // Nothing to review means nothing to gate: an --amend that only edits a
+  // message leaves the tree identical to HEAD. This lived in the hook, which
+  // meant it returned before the check above ever ran, and a tree made to look
+  // empty while the index held a change was the cheapest way past the gate.
+  if (value === EMPTY_FINGERPRINT) {
+    return report(
+      {
+        decision: 'allow',
+        reason: `${root} has no changes against HEAD, so there is nothing to review.`,
+        reviewUrl: null,
+        warnings: [],
+        openThreads: [],
+      },
+      json,
+    )
+  }
+
   const baseUrl = loadClientConfig().base_url
   await ensureDaemon(baseUrl)
 
   const client = new Client(baseUrl)
-  const result = await client.gate(root, await fingerprint(root))
+  return report(await client.gate(root, value), json)
+}
 
+/** One shape for the hook to read, whoever decided. */
+function report(result: GateResponse, json: boolean): void {
   if (json) {
     process.stdout.write(`${JSON.stringify(result)}\n`)
   } else {

@@ -10,17 +10,56 @@ set -u
 
 REVIEWD="${REVIEWD_BIN:-reviewd}"
 
+# REVIEWD_BIN decides both the fingerprint and the verdict, so a redirected one
+# is the whole gate. It stays, because a checkout that is not on PATH is a real
+# situation, but it announces itself: silence is what makes a redirect useful to
+# anything other than its documented purpose.
+if [ -n "${REVIEWD_BIN:-}" ]; then
+  printf 'reviewd gate: using REVIEWD_BIN=%s instead of the installed reviewd.\n' \
+    "$REVIEWD_BIN" >&2
+fi
+
+# deny() uses no external command, not even jq.
+#
+# It has to work in exactly the situations where the rest of the script cannot:
+# jq missing, jq shadowed, PATH broken. A denial that depends on the tools whose
+# absence it is reporting is a denial that turns into silence, and silence here
+# reads as permission. Bash's own substitution covers the three characters JSON
+# needs escaped in this string.
+deny() {
+  local reason=$1
+  reason=${reason//\\/\\\\}
+  reason=${reason//\"/\\\"}
+  reason=${reason//$'\n'/\\n}
+
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$reason"
+  exit 0
+}
+
+# jq parses the payload, so a jq that does not work leaves `cmd` empty, every
+# commit reads as "not a commit", and the gate waves it through in silence.
+#
+# Tested by use rather than by `command -v`, because the failure that matters is
+# not only a missing jq: one earlier on PATH that exits 0 and prints nothing
+# passes an existence check and still answers nothing. Asking it a question with
+# a known answer covers both.
+if [ "$(printf '{"probe":"ok"}' | jq -r '.probe' 2>/dev/null)" != "ok" ]; then
+  deny "reviewd gate: jq is missing or not working, so this commit cannot be checked.
+
+Check it with:
+  printf '{\"probe\":\"ok\"}' | jq -r .probe
+
+Install it (brew install jq) or fix what is shadowing it, then commit again.
+
+Override this one commit only if the user explicitly asks: prefix the command
+with REVIEWD_SKIP=1."
+fi
+
 payload=$(cat)
 cmd=$(printf '%s' "$payload" | jq -r '.tool_input.command // empty')
 cwd=$(printf '%s' "$payload" | jq -r '.cwd // empty')
 [ -n "$cmd" ] || exit 0
 [ -n "$cwd" ] || cwd=$PWD
-
-deny() {
-  jq -nc --arg r "$1" \
-    '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
-  exit 0
-}
 
 # Is this actually a commit?
 #
@@ -44,22 +83,54 @@ segments() {
 
 # Strips leading whitespace, environment assignments, and wrappers, leaving
 # whatever the shell would actually execute.
+#
+# The shell wrappers matter as much as sudo does. `bash -c "git commit"` runs a
+# commit, and stripping only sudo and env left the quoted command unexamined,
+# which made it the shortest way past this script. The quotes come off with the
+# wrapper so the command inside is read on its own terms.
 command_head() {
   printf '%s' "$1" | sed -E '
     s/^[[:space:]]+//
     :strip
     s/^[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+//
     t strip
-    s/^(sudo|command|time|nice|env|xargs|rtk)[[:space:]]+//
+    # Wrappers taking an argument of their own go first: stripping the bare
+    # word would leave the argument sitting where the command should be, and
+    # `10 git commit` matches nothing.
+    s/^timeout[[:space:]]+(-[^[:space:]]+[[:space:]]+)*[0-9]+[smhd]?[[:space:]]+//
+    t strip
+    s/^nice[[:space:]]+-n[[:space:]]+-?[0-9]+[[:space:]]+//
+    t strip
+    s/^(sudo|command|time|nice|env|xargs|rtk|exec|eval|nohup|stdbuf)[[:space:]]+//
+    t strip
+    s/^(ba|z|k|da)?sh[[:space:]]+-[a-z]*c[[:space:]]+//
+    t strip
+    s/^"//; s/"$//
+    s/^'\''//; s/'\''$//
     t strip
   '
 }
 
+# Anything that writes a commit, not only the one spelled `commit`.
+#
+# A gate that watched `commit` alone watched one door in a room with several.
+# `rebase --continue`, `merge`, `cherry-pick`, `revert`, and `am` all produce
+# commits from content this script never measured, and `commit-tree` with
+# `update-ref` builds one out of plumbing. They are listed rather than the
+# regex being loosened, so a reader can see exactly which doors are covered.
+COMMIT_VERBS='commit|merge|rebase|cherry-pick|revert|am|commit-tree|update-ref|apply'
+
 # Flags and their arguments may sit between git and the subcommand, which is
 # what makes `git -C path commit` a commit and `git -C path show` not.
+#
+# Quoting inside the subcommand is stripped too: `git "commit"` and `git com""mit`
+# are the same command to the shell and were two different strings to the regex.
 is_commit_head() {
-  printf '%s' "$1" |
-    grep -Eq '^git([[:space:]]+-[^[:space:]]+([[:space:]]+[^-][^[:space:]]*)?)*[[:space:]]+commit([[:space:]]|$)'
+  local head
+  head=$(printf '%s' "$1" | tr -d '"'"'"'')
+
+  printf '%s' "$head" |
+    grep -Eq "^git([[:space:]]+-[^[:space:]]+([[:space:]]+[^-][^[:space:]]*)?)*[[:space:]]+(${COMMIT_VERBS})([[:space:]]|$)"
 }
 
 is_commit() {
@@ -76,7 +147,29 @@ is_commit() {
 is_commit "$cmd" || exit 0
 
 # Escape hatch, for the user to ask for by name.
-printf '%s' "$cmd" | grep -q 'REVIEWD_SKIP=1' && exit 0
+#
+# Matched only where the shell would read it as an assignment: at the front of
+# a segment, before the command. Searching the whole string meant a commit
+# message mentioning the variable turned the gate off, and prose about this
+# very feature is a plausible thing to write in one.
+has_skip_prefix() {
+  local segment
+  local IFS=$'\n'
+
+  for segment in $(segments "$1"); do
+    printf '%s' "$segment" |
+      sed -E 's/^[[:space:]]+//' |
+      grep -Eq '^(([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*|sudo|command|env)[[:space:]]+)*REVIEWD_SKIP=1([[:space:]]|$)' &&
+      return 0
+  done
+
+  return 1
+}
+
+has_skip_prefix "$cmd" && {
+  printf 'reviewd gate: skipped by REVIEWD_SKIP=1.\n' >&2
+  exit 0
+}
 
 # Which repository is this commit actually for?
 #
@@ -143,8 +236,27 @@ Override this one commit only if the user explicitly asks: prefix the command
 with REVIEWD_SKIP=1."
 fi
 
-gitdir=$(git -C "$root" rev-parse --absolute-git-dir 2>/dev/null) || exit 0
-[ -f "$gitdir/reviewd-gate-off" ] && exit 0
+# Not knowing where the git directory is means not knowing whether the gate is
+# off for this repository, and that is a reason to stop rather than to continue.
+if ! gitdir=$(git -C "$root" rev-parse --absolute-git-dir 2>/dev/null); then
+  deny "reviewd gate: $root has no git directory this hook can read, so the commit
+cannot be checked.
+
+Override this one commit only if the user explicitly asks: prefix the command
+with REVIEWD_SKIP=1."
+fi
+
+# The off switch stays, and stops being quiet.
+#
+# Anything that can write this file can also write the working tree, so it is
+# not a boundary and treating it as one would be a lie. What it can be is
+# visible: a gate that is off says so on every commit, so a transcript shows
+# when it was turned off and by whom, rather than showing nothing at all.
+if [ -f "$gitdir/reviewd-gate-off" ]; then
+  printf 'reviewd gate: OFF for %s (%s exists). Commits are not being checked.\n' \
+    "$root" "$gitdir/reviewd-gate-off" >&2
+  exit 0
+fi
 
 # A tool that is not there is not the same as nothing to review, and both used
 # to produce an empty fingerprint and an allow. Deleting the binary during a
@@ -159,21 +271,11 @@ Override this one commit only if the user explicitly asks: prefix the command
 with REVIEWD_SKIP=1."
 fi
 
-# Nothing to review means nothing to gate: an --amend that only edits a message
-# leaves the tree identical to HEAD.
-empty_hash=$(printf '' | shasum -a 256 | cut -d' ' -f1)
-if ! fingerprint=$("$REVIEWD" fingerprint "$root" 2>/dev/null) || [ -z "$fingerprint" ]; then
-  deny "reviewd gate: could not read the working tree of $root, so this commit
-cannot be checked.
-
-Try it by hand to see why:
-  $REVIEWD fingerprint \"$root\"
-
-Override this one commit only if the user explicitly asks: prefix the command
-with REVIEWD_SKIP=1."
-fi
-[ "$fingerprint" = "$empty_hash" ] && exit 0
-
+# An empty tree used to short-circuit here, before `reviewd gate` ran. That
+# made "looks like nothing changed" the fastest way through, and staging a
+# change and restoring the file produces exactly that appearance. Deciding it
+# is `reviewd gate`'s job now, because it is the only side that also checks
+# what the index is holding.
 answer=$("$REVIEWD" gate "$root" --json 2>/dev/null)
 status=$?
 

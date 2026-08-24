@@ -72,10 +72,45 @@ export function render(
     }
   }
 
+  // A review title is whatever the agent typed, and the documented backends
+  // (Telegram, Slack) take JSON. Substituting raw meant a title carrying a
+  // quote could close the string and add fields of its own to the outgoing
+  // request, so a template that parses as JSON gets JSON-escaped values.
+  const json = looksLikeJson(template)
+  const escape = (value: string): string => (json ? jsonInner(value) : value)
+
   const body = template
-    .replaceAll('{{title}}', payload.title)
-    .replaceAll('{{url}}', payload.url)
+    .replaceAll('{{title}}', escape(payload.title))
+    .replaceAll('{{url}}', escape(payload.url))
     .replaceAll('{{threads}}', String(payload.threadsAwaitingYou))
 
-  return { body, contentType: 'text/plain' }
+  return { body, contentType: json ? 'application/json' : 'text/plain' }
+}
+
+/**
+ * Whether the operator wrote a JSON body.
+ *
+ * Decided by parsing rather than by the first character, because a plain-text
+ * template usually opens with `{{title}}` and that is a brace. Placeholders
+ * stand in as the shapes they occupy: a string for the two that are quoted, a
+ * number for the count.
+ */
+function looksLikeJson(template: string): boolean {
+  const probe = template
+    .replaceAll('{{title}}', 'x')
+    .replaceAll('{{url}}', 'x')
+    .replaceAll('{{threads}}', '0')
+
+  try {
+    JSON.parse(probe)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** A string escaped for JSON, without the quotes the template already has. */
+function jsonInner(value: string): string {
+  const quoted = JSON.stringify(value)
+  return quoted.slice(1, -1)
 }

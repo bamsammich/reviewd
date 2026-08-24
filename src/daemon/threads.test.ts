@@ -49,7 +49,6 @@ async function reviewWithFile() {
   await putBlob(deps, blobId, content)
 
   await createSnapshot(deps, review.reviewId, {
-    fingerprints: { [review.sources[0]!.id]: 'fp-1' },
     files: [
       {
         sourceId: review.sources[0]!.id,
@@ -58,6 +57,8 @@ async function reviewWithFile() {
         oldPath: null,
         oldBlobId: null,
         newBlobId: blobId,
+        oldHash: null,
+        newHash: blobId,
         isBinary: false,
         truncated: false,
       },
@@ -253,9 +254,16 @@ describe('approval', () => {
 
     const approvals = await ctx.db.selectFrom('approval').selectAll().execute()
     expect(approvals).toHaveLength(1)
+    // The stored value is the one the daemon derived from the snapshot's rows,
+    // which is the only thing the gate will accept later.
+    const snapshotSource = await ctx.db
+      .selectFrom('snapshot_source')
+      .selectAll()
+      .executeTakeFirstOrThrow()
+
     expect(approvals[0]).toMatchObject({
       root_path: '/tmp/repo',
-      fingerprint: 'fp-1',
+      fingerprint: snapshotSource.fingerprint,
       consumed_at: null,
     })
 
