@@ -31,7 +31,7 @@ breaks down fast:
   vanishing.
 - **The daemon never touches git.** The client computes and uploads, so the daemon runs
   anywhere.
-- **One SQLite file.** No database server, no container, nothing to start first.
+- **One SQLite file.** No database server, nothing to start first.
 - **MCP interface.** The agent drives reviews through tools, not shell commands.
 - **Commit gate.** A `PreToolUse` hook asks the daemon whether this diff is approved.
 
@@ -77,6 +77,75 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.bamsammich.reviewd.p
 
 That is a convenience, not a requirement. launchd expands neither `~` nor
 `$HOME`, which is what the `sed` is for.
+
+### Running the daemon in a container
+
+Reach for this when you would rather not register a long-lived service, or want one command
+to stop it and one volume to delete. The container holds everything durable: the database,
+the blobs, the web UI you read reviews in, and the approvals the gate asks about. The client,
+the gate, and the MCP server stay on the host, where they read your working tree to compute
+a diff and upload it. All three are one-shot processes rather than services.
+
+```sh
+mkdir -p contrib/docker/config
+cp contrib/docker/config.example.json contrib/docker/config/config.json
+```
+
+The copy needs no edit for a local container:
+
+```json
+{
+  "host": "0.0.0.0",
+  "port": 7777,
+  "public_url": "http://127.0.0.1:7777"
+}
+```
+
+Leave `host` as it arrives. A container's `127.0.0.1` belongs to the container, and Docker
+forwards a published port to its external address, so a daemon bound there answers the host
+with an empty reply. The entrypoint refuses that config. `0.0.0.0` widens nothing, since the
+container's network namespace holds one process.
+
+```sh
+# 127.0.0.1 is the host interface the port is published on, not a bind address.
+# It decides who can read and approve reviews.
+REVIEWD_PUBLISH=127.0.0.1 docker compose up -d --build
+```
+
+Then point the client at it, in `~/.config/reviewd/client.json`:
+
+```json
+{ "base_url": "http://127.0.0.1:7777" }
+```
+
+That is the whole local setup. One trap: stop the container with `base_url` still on
+loopback and the next command that needs a daemon starts one on the host. Name anything else
+in `base_url` and the client refuses to start one.
+
+Reviews live in a named volume rather than under `~/.local/state`, holding copies of the
+code you review:
+
+```sh
+docker compose down          # keeps the volume
+docker compose down -v       # deletes every review with it
+```
+
+To read reviews from another device, change three values together: publish the port on an
+interface it can route to, set `public_url` to that address, and set `base_url` to the same
+one.
+
+```sh
+REVIEWD_PUBLISH=192.0.2.10 docker compose up -d      # an interface, not a bind address
+```
+
+```json
+{ "host": "0.0.0.0", "port": 7777, "public_url": "http://192.0.2.10:7777" }
+```
+
+The daemon answers to a loopback name, the `public_url` hostname, or `host`, and nothing
+else. Point `base_url` outside that set and it answers 421, the gate fails closed, and
+reviewd looks down. Docker also cannot publish on a VPN address before that interface
+exists, so bring it up first.
 
 To take one repository out of the gate:
 
