@@ -12,6 +12,30 @@
   <key>Label</key>
   <string>com.bamsammich.reviewd</string>
 
+  <!--
+    Loopback needs no flag, which is why none is here.
+
+    Reading reviews from a phone means binding something a phone can reach, and
+    `serve` refuses a non-loopback host unless the command line says so. Set
+    host in config.json to the interface address, then add the bind-public flag
+    as a third string in ProgramArguments below. (An XML comment cannot hold
+    two hyphens in a row, which is why the flag is described rather than
+    written out.)
+
+    Two things bite here, both quietly.
+
+    A host other than 127.0.0.1 is usually one address rather than all of them,
+    so loopback stops answering. Every client defaults to
+    http://127.0.0.1:7777, so set base_url in client.json to the same address
+    the daemon bound. Skip it and the commit gate cannot reach the daemon,
+    which denies rather than waves commits through: the gate fails closed by
+    design, and it will look like reviewd is down rather than misconfigured.
+
+    The daemon holds no credentials, so whatever can reach the port can read
+    the code and approve the reviews. That is the whole access boundary. A
+    tailnet address is a decision about who may approve a commit; 0.0.0.0 on a
+    laptop that joins other networks is a different decision.
+  -->
   <key>ProgramArguments</key>
   <array>
     <string>/opt/homebrew/bin/reviewd</string>
