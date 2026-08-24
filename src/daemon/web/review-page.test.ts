@@ -327,6 +327,36 @@ describe('parsing the box out of a URL', () => {
   })
 })
 
+// A CSS assertion is a weak test, so it encodes the invariant rather than the
+// values: whatever the numbers become, a pinned rail has to have somewhere for
+// a tall tree to go. Without this the entries past the fold were unreachable —
+// the page scrolled and the rail stayed put.
+describe('a rail taller than the window', () => {
+  const railRule = (): string => {
+    const markup = reviewPage(summary(), [file('src/a.ts')], []).value
+    const rule = markup.match(/main\.review \.rail \{([^}]*)\}/)
+
+    expect(rule, 'no rule for main.review .rail').not.toBeNull()
+    return rule![1]!
+  }
+
+  it('bounds a sticky rail and gives it its own scroll', () => {
+    const rule = railRule()
+
+    expect(rule).toContain('sticky')
+    expect(rule).toContain('max-height')
+    expect(rule).toContain('overflow-y: auto')
+  })
+
+  it('measures the submit bar rather than guessing its height', () => {
+    const markup = reviewPage(summary(), [file('src/a.ts')], []).value
+
+    expect(markup).toMatch(/setProperty\(\s*'--bar-height'/)
+    // The guess stays as a fallback for the frame before the script runs.
+    expect(railRule()).toContain('var(--bar-height, 4.5rem)')
+  })
+})
+
 describe('the file tree in the rail', () => {
   const spread = (): FileView[] => [
     { ...file('src/daemon/web/layout.ts'), changeType: 'modified' },
@@ -346,6 +376,31 @@ describe('the file tree in the rail', () => {
     const markup = reviewPage(summary(), spread(), []).value
 
     expect(markup).toContain('>src/daemon/web</span>')
+  })
+
+  // The bug this covers: the rail sorted itself (directories first, each group
+  // by segment) while the diff sorted by whole path. Both were internally
+  // consistent, and every unit test was right about its own half, so clicking
+  // the fifth entry in the rail landed on some other file's block. Assert the
+  // two sequences against each other rather than against a fixed order.
+  it('lists files in the order the diff shows them', () => {
+    const many = [
+      'src/daemon/web/tree.ts',
+      'src/daemon/http/serve.ts',
+      'src/index.ts',
+      'README.md',
+      'docs/spec.md',
+      'src/ctl/main.ts',
+    ].map((path) => file(path))
+    const markup = reviewPage(summary(), many, []).value
+
+    const rail = [...markup.matchAll(/data-tree-file="([^"]+)"/g)].map((m) => m[1])
+    const diff = [...markup.matchAll(/<details class="file" id="file-([^"]+)"/g)].map(
+      (m) => m[1],
+    )
+
+    expect(rail).toHaveLength(many.length)
+    expect(rail).toEqual(diff)
   })
 
   it('links each file to its block in the diff', () => {

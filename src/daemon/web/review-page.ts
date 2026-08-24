@@ -9,7 +9,7 @@ import { page, topBar } from './layout.js'
 import type { FileView } from './pages.js'
 import { basenameOf, displayPath } from './paths.js'
 import { mintPageToken } from './tokens.js'
-import { buildTree, type TreeDirectory, type TreeFile, type TreeNode } from './tree.js'
+import { buildTree, filesOf, type TreeDirectory, type TreeFile, type TreeNode } from './tree.js'
 import {
   covers,
   inSameFile,
@@ -182,13 +182,22 @@ ${submitBar(review, drafts, awaitingYou)}`
 interface SourceGroup {
   source: SourceSummary
   files: FileView[]
+  tree: TreeNode[]
 }
 
+/**
+ * Splits the revision by source, and puts each source's files in the order its
+ * tree draws them.
+ *
+ * The tree is built once here rather than again in the rail, because the rail
+ * and the diff have to agree and the cheapest way to guarantee that is for
+ * both to read the same walk.
+ */
 function groupBySource(sources: SourceSummary[], files: FileView[]): SourceGroup[] {
-  return sources.map((source) => ({
-    source,
-    files: files.filter((file) => file.sourceId === source.id),
-  }))
+  return sources.map((source) => {
+    const tree = buildTree(files.filter((file) => file.sourceId === source.id))
+    return { source, tree, files: filesOf(tree) }
+  })
 }
 
 /**
@@ -239,7 +248,7 @@ function sourceBranch(group: SourceGroup, threads: Thread[]): SafeHtml {
       >${displayPath(group.source.rootPath)}</span
     >
   </a>
-  ${treeList(buildTree(group.files), threads)}
+  ${treeList(group.tree, threads)}
 </div>`
 }
 
