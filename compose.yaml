@@ -24,6 +24,12 @@ services:
     init: true
     restart: unless-stopped
 
+    # The two halves of the exposure decision, kept next to each other: the
+    # daemon is told it may bind beyond loopback, and the line below says who
+    # can reach it. The image does not carry the flag, so `docker run` without
+    # this file refuses to bind rather than publishing on every interface.
+    command: ['serve', '--bind-public']
+
     ports:
       - '${REVIEWD_PUBLISH:-127.0.0.1}:7777:7777'
 

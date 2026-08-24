@@ -13,6 +13,7 @@ import {
   parseViewMode,
   reviewPage,
 } from '../web/review-page.js'
+import { readPageToken } from '../web/tokens.js'
 
 /** Long enough to stay quiet, short enough that a dead tab is noticed. */
 const HEARTBEAT_MS = 25_000
@@ -128,6 +129,13 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
         if (event.kind === 'thread') {
           await stream.writeSSE({ event: 'threads', id: String(event.at), data: '' })
         }
+
+        // A new revision replaces what the page is showing, so the page has to
+        // hear about it or the reviewer goes on reading code that is gone and
+        // holding a token that describes it.
+        if (event.kind === 'snapshot') {
+          await stream.writeSSE({ event: 'revision', id: String(event.at), data: String(event.seq) })
+        }
       }
     })
   })
@@ -135,6 +143,8 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
   routes.post('/r/:id/threads', async (c) => {
     const reviewId = c.req.param('id')
     const form = await c.req.parseBody()
+
+    requireToken(reviewId, form['token'])
 
     const line = Number(form['line'])
     const side = form['side'] === 'old' ? 'old' : 'new'
@@ -162,18 +172,23 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
   })
 
   routes.post('/r/:id/threads/:threadId/replies', async (c) => {
-    const body = String((await c.req.parseBody())['body'] ?? '').trim()
+    const form = await c.req.parseBody()
+    requireToken(c.req.param('id'), form['token'])
+
+    const body = String(form['body'] ?? '').trim()
     if (body) await replyToThread(deps, c.req.param('threadId'), body, 'human')
 
     return back(c, c.req.param('id'), c.req.param('threadId'))
   })
 
   routes.post('/r/:id/threads/:threadId/resolve', async (c) => {
+    requireToken(c.req.param('id'), (await c.req.parseBody())['token'])
     await setThreadState(deps, c.req.param('threadId'), 'resolved')
     return back(c, c.req.param('id'), c.req.param('threadId'))
   })
 
   routes.post('/r/:id/threads/:threadId/reopen', async (c) => {
+    requireToken(c.req.param('id'), (await c.req.parseBody())['token'])
     await setThreadState(deps, c.req.param('threadId'), 'active')
     return back(c, c.req.param('id'), c.req.param('threadId'))
   })
@@ -181,16 +196,84 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
   // One submission sends every draft at once, which is what makes a waiting
   // agent wake when the reviewer is finished rather than mid-sentence.
   routes.post('/r/:id/submit', async (c) => {
-    const parsed = verdictSchema.safeParse((await c.req.parseBody())['verdict'])
-    if (parsed.success) await submitReview(deps, c.req.param('id'), parsed.data)
+    const reviewId = c.req.param('id')
+    const form = await c.req.parseBody()
 
-    return back(c, c.req.param('id'))
+    await requireCurrentToken(deps, reviewId, form['token'])
+
+    const parsed = verdictSchema.safeParse(form['verdict'])
+    if (parsed.success) await submitReview(deps, reviewId, parsed.data)
+
+    return back(c, reviewId)
   })
 
   routes.post('/r/:id/unapprove', async (c) => {
-    await unapprove(deps, c.req.param('id'))
-    return back(c, c.req.param('id'))
+    const reviewId = c.req.param('id')
+
+    await requireCurrentToken(deps, reviewId, (await c.req.parseBody())['token'])
+    await unapprove(deps, reviewId)
+
+    return back(c, reviewId)
   })
+
+  /**
+   * A verdict is only a verdict if it came from the page.
+   *
+   * The token is minted into the submit form and nowhere else, so a POST that
+   * arrives without one was written by something that never rendered the
+   * review. That is the agent, and approving its own work is the one thing it
+   * must not be able to do.
+   *
+   * Binding to the current revision means a token from a page showing older
+   * code cannot approve what replaced it, which is the rule the approval
+   * already follows.
+   */
+  /**
+   * Every mutating form proves it came from a page the daemon drew.
+   *
+   * This is what the cross-site check used to be for, done in a way that does
+   * not depend on the browser volunteering a usable `Origin`. An in-app webview
+   * sends `Origin: null`, which is a page with an opaque origin rather than a
+   * hostile one, and treating the two the same locked a reviewer out of their
+   * own review.
+   */
+  function requireToken(reviewId: string, token: unknown): { snapshotSeq: number } {
+    const read = readPageToken(typeof token === 'string' ? token : undefined, reviewId, Date.now())
+
+    if (!read) {
+      throw new ReviewError(
+        'That request did not come from this review page, or the page has been open long ' +
+          'enough for its session to lapse. Reload the review and try again.',
+        403,
+      )
+    }
+
+    return read
+  }
+
+  /**
+   * A verdict additionally has to be about the revision on screen.
+   *
+   * Comments survive a new snapshot, because the reviewer was mid-sentence and
+   * their words should not be lost to the agent pushing again. An approval must
+   * not: it would clear code the reviewer never saw.
+   */
+  async function requireCurrentToken(
+    deps_: Deps,
+    reviewId: string,
+    token: unknown,
+  ): Promise<void> {
+    const { snapshotSeq } = requireToken(reviewId, token)
+    const review = await summarize(deps_, reviewId)
+
+    if (snapshotSeq !== review.snapshotSeq) {
+      throw new ReviewError(
+        `This page is showing revision ${snapshotSeq} and the review is now at ` +
+          `${review.snapshotSeq}. Reload it and decide on what is there now.`,
+        403,
+      )
+    }
+  }
 
   routes.onError((error, c) => {
     if (error instanceof ReviewError) {

@@ -485,7 +485,7 @@ main.with-bar { padding-bottom: 7.5rem; }
    cannot refresh itself: the reviewer is mid-sentence. */
 .live-notice {
   position: fixed; left: 50%; transform: translateX(-50%);
-  bottom: calc(var(--bar-height, 4.5rem) + .75rem); z-index: 20;
+  bottom: calc(var(--bar-height, 4.5rem) + .75rem); z-index: 40;
   background: var(--accent); color: var(--accent-ink);
   font-size: .8rem; padding: .45rem .8rem; border-radius: 999px;
   box-shadow: 0 2px 10px rgb(0 0 0 / .25); max-width: calc(100vw - 2rem);

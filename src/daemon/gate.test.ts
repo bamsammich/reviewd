@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { configSchema, resolve } from './config.js'
 import { tempDatabase, type TempDatabase } from './db/testing.js'
 import { gate, release, sweepOrphanBlobs } from './gate.js'
+import { manifestFingerprint } from '../fingerprint.js'
 import { createReview, createSnapshot, putBlob, sha256, type Deps } from './reviews.js'
 import { createThread, submitReview } from './threads.js'
 
@@ -21,7 +22,15 @@ afterEach(async () => {
   await ctx.close()
 })
 
-async function reviewAt(root: string, fingerprint: string, title = 'a review') {
+/**
+ * A review whose fingerprint follows from its content, as a real one does.
+ *
+ * `marker` stands in for the bytes under review: two reviews sharing one get
+ * the same fingerprint, and two that differ get different ones. The daemon
+ * derives the value, so a test cannot hand it a name and must go through the
+ * content, which is the property being tested.
+ */
+async function reviewAt(root: string, marker: string, title = 'a review') {
   const review = await createReview(deps, {
     title,
     sources: [{ path: root, base: 'HEAD', includeUntracked: true }],
@@ -29,12 +38,11 @@ async function reviewAt(root: string, fingerprint: string, title = 'a review') {
     notify: false,
   })
 
-  const content = new TextEncoder().encode('const a = 1\nconst b = 2\nconst c = 3\n')
+  const content = new TextEncoder().encode(`const a = 1\n// ${marker}\n`)
   const blobId = sha256(content)
   await putBlob(deps, blobId, content)
 
   await createSnapshot(deps, review.reviewId, {
-    fingerprints: { [review.sources[0]!.id]: fingerprint },
     files: [
       {
         sourceId: review.sources[0]!.id,
@@ -43,6 +51,8 @@ async function reviewAt(root: string, fingerprint: string, title = 'a review') {
         oldPath: null,
         oldBlobId: null,
         newBlobId: blobId,
+        oldHash: null,
+        newHash: blobId,
         isBinary: false,
         truncated: false,
       },
@@ -52,12 +62,32 @@ async function reviewAt(root: string, fingerprint: string, title = 'a review') {
   return review
 }
 
+/** The fingerprint the daemon derived for a marker, which is what the gate wants. */
+function fingerprintFor(marker: string): string {
+  const blobId = sha256(new TextEncoder().encode(`const a = 1\n// ${marker}\n`))
+
+  return manifestFingerprint([
+    {
+      sourceId: '',
+      path: 'src/a.ts',
+      changeType: 'modified',
+      oldPath: null,
+      oldBlobId: null,
+      newBlobId: blobId,
+      oldHash: null,
+      newHash: blobId,
+      isBinary: false,
+      truncated: false,
+    },
+  ])
+}
+
 describe('allow', () => {
   it('needs only a matching root and fingerprint', async () => {
     const review = await reviewAt('/tmp/repo', 'fp-1')
     await submitReview(deps, review.reviewId, 'approved')
 
-    const result = await gate(deps, { root: '/tmp/repo', fingerprint: 'fp-1' })
+    const result = await gate(deps, { root: '/tmp/repo', fingerprint: fingerprintFor('fp-1') })
 
     expect(result.decision).toBe('allow')
     expect(result.reviewUrl).toContain(review.reviewId)
@@ -74,7 +104,7 @@ describe('allow', () => {
     })
     await submitReview(deps, review.reviewId, 'approved')
 
-    const result = await gate(deps, { root: '/tmp/repo', fingerprint: 'fp-1' })
+    const result = await gate(deps, { root: '/tmp/repo', fingerprint: fingerprintFor('fp-1') })
 
     expect(result.decision).toBe('allow')
     expect(result.warnings).toContain('1 thread still open on this review')
@@ -86,7 +116,7 @@ describe('allow', () => {
     await reviewAt('/tmp/repo', 'fp-other', 'another session')
     await submitReview(deps, mine.reviewId, 'approved')
 
-    const result = await gate(deps, { root: '/tmp/repo', fingerprint: 'fp-1' })
+    const result = await gate(deps, { root: '/tmp/repo', fingerprint: fingerprintFor('fp-1') })
 
     expect(result.decision).toBe('allow')
     expect(result.warnings.some((w) => w.includes('also covers'))).toBe(true)
@@ -99,7 +129,7 @@ describe('allow', () => {
     await reviewAt('/tmp/repo', 'fp-shared', 'second')
     await submitReview(deps, first.reviewId, 'approved')
 
-    expect((await gate(deps, { root: '/tmp/repo', fingerprint: 'fp-shared' })).decision).toBe(
+    expect((await gate(deps, { root: '/tmp/repo', fingerprint: fingerprintFor('fp-shared') })).decision).toBe(
       'allow',
     )
   })
@@ -108,7 +138,7 @@ describe('allow', () => {
     const review = await reviewAt('/tmp/repo-a', 'fp-1')
     await submitReview(deps, review.reviewId, 'approved')
 
-    const result = await gate(deps, { root: '/tmp/repo-b', fingerprint: 'fp-1' })
+    const result = await gate(deps, { root: '/tmp/repo-b', fingerprint: fingerprintFor('fp-1') })
     expect(result.decision).toBe('deny')
   })
 })
@@ -122,7 +152,7 @@ describe('consumed_at', () => {
       (await ctx.db.selectFrom('approval').selectAll().executeTakeFirstOrThrow()).consumed_at,
     ).toBeNull()
 
-    await gate(deps, { root: '/tmp/repo', fingerprint: 'fp-1' })
+    await gate(deps, { root: '/tmp/repo', fingerprint: fingerprintFor('fp-1') })
 
     expect(
       (await ctx.db.selectFrom('approval').selectAll().executeTakeFirstOrThrow()).consumed_at,
@@ -134,8 +164,8 @@ describe('consumed_at', () => {
     const review = await reviewAt('/tmp/repo', 'fp-1')
     await submitReview(deps, review.reviewId, 'approved')
 
-    await gate(deps, { root: '/tmp/repo', fingerprint: 'fp-1' })
-    const retry = await gate(deps, { root: '/tmp/repo', fingerprint: 'fp-1' })
+    await gate(deps, { root: '/tmp/repo', fingerprint: fingerprintFor('fp-1') })
+    const retry = await gate(deps, { root: '/tmp/repo', fingerprint: fingerprintFor('fp-1') })
 
     expect(retry.decision).toBe('allow')
   })
@@ -153,7 +183,7 @@ describe('deny reasons', () => {
   it('says the review is open but unapproved', async () => {
     await reviewAt('/tmp/repo', 'fp-1')
 
-    const result = await gate(deps, { root: '/tmp/repo', fingerprint: 'fp-1' })
+    const result = await gate(deps, { root: '/tmp/repo', fingerprint: fingerprintFor('fp-1') })
 
     expect(result.decision).toBe('deny')
     expect(result.reason).toMatch(/has not been approved/)
@@ -187,7 +217,7 @@ describe('release', () => {
   it('releases once the gate has stamped the approval', async () => {
     const review = await reviewAt('/tmp/repo', 'fp-1')
     await submitReview(deps, review.reviewId, 'approved')
-    await gate(deps, { root: '/tmp/repo', fingerprint: 'fp-1' })
+    await gate(deps, { root: '/tmp/repo', fingerprint: fingerprintFor('fp-1') })
 
     expect(await release(deps, review.reviewId, false)).toEqual({ released: true })
     expect(await ctx.db.selectFrom('review').selectAll().execute()).toHaveLength(0)

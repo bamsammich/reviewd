@@ -8,6 +8,7 @@ import type {
   SnapshotResult,
   SourceSummary,
 } from '../protocol.js'
+import { fingerprintsBySource } from '../fingerprint.js'
 import type { Bus } from './bus.js'
 import type { ResolvedConfig } from './config.js'
 import { newId, now } from './db/ids.js'
@@ -24,7 +25,7 @@ import type { Database } from './db/types.js'
 export class ReviewError extends Error {
   constructor(
     message: string,
-    readonly status: 400 | 404 | 409 | 413,
+    readonly status: 400 | 403 | 404 | 409 | 413,
   ) {
     super(message)
     this.name = 'ReviewError'
@@ -326,17 +327,14 @@ export async function createSnapshot(
     }
   }
 
-  for (const sourceId of Object.keys(manifest.fingerprints)) {
-    if (!sourceIds.has(sourceId)) {
-      throw new ReviewError(`fingerprint names source ${sourceId}, not in this review`, 400)
-    }
-  }
-
-  for (const source of sources) {
-    if (manifest.fingerprints[source.id] === undefined) {
-      throw new ReviewError(`no fingerprint for source ${source.label}`, 400)
-    }
-  }
+  // Derived here, never accepted. A fingerprint on the wire is a claim about
+  // bytes rather than a fact about them, and the gate rests on it: a client
+  // that sent one could show the reviewer one change set and have the approval
+  // cover another.
+  const fingerprints = fingerprintsBySource(
+    manifest.files,
+    sources.map((source) => source.id),
+  )
 
   // Referenced content must already be here. Accepting a manifest that points
   // at bytes nobody uploaded would leave a review that renders as empty files.
@@ -369,7 +367,7 @@ export async function createSnapshot(
         id: snapshotId,
         review_id: reviewId,
         seq,
-        fingerprint: wholeReviewFingerprint(manifest.fingerprints),
+        fingerprint: wholeReviewFingerprint(fingerprints),
         created_at: t,
       })
       .execute()
@@ -380,7 +378,7 @@ export async function createSnapshot(
         sources.map((source) => ({
           snapshot_id: snapshotId,
           source_id: source.id,
-          fingerprint: manifest.fingerprints[source.id] as string,
+          fingerprint: fingerprints[source.id] as string,
         })),
       )
       .execute()
@@ -419,6 +417,11 @@ export async function createSnapshot(
   // it is anchoring against rather than a half-written one.
   const { reanchor } = await import('./reanchor.js')
   const { moved, outdated } = await reanchor(db, reviewId, snapshotId)
+
+  // An open review page refreshes on this, which is what keeps a reviewer's
+  // tab showing the revision they are about to approve rather than the one
+  // that was current when they opened it.
+  deps.bus?.publish({ kind: 'snapshot', reviewId, seq, at: t })
 
   return {
     seq,

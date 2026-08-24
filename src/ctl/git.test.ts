@@ -1,7 +1,8 @@
 import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { canonical, diffAgainstHead, fingerprint, gitDir, repoRoot } from './git.js'
+import { fingerprint } from './diff.js'
+import { canonical, diffAgainstHead, gitDir, repoRoot } from './git.js'
 import { tempRepo, type TempRepo } from './testing.js'
 
 let repo: TempRepo

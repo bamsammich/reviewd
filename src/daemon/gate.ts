@@ -14,6 +14,16 @@ import { reviewUrl, ReviewError, type Deps } from './reviews.js'
  * the same state.
  */
 
+/**
+ * How long an approval stays good.
+ *
+ * Long enough to cover a review read at breakfast and committed after lunch,
+ * short enough that an approval is not a permanent key to a tree. A commit past
+ * this gets the ordinary "take a new snapshot" denial, which is a reload of the
+ * page rather than an obstacle.
+ */
+const APPROVAL_TTL_MS = 12 * 60 * 60 * 1000
+
 export interface GateQuery {
   root: string
   fingerprint: string
@@ -27,6 +37,10 @@ export async function gate(deps: Deps, query: GateQuery): Promise<GateResponse> 
     .selectAll()
     .where('root_path', '=', query.root)
     .where('fingerprint', '=', query.fingerprint)
+    // An approval is a decision someone made about code they had just read, and
+    // it stops meaning that as the day goes on. Without a limit it is a token
+    // that works forever for anyone who can reconstruct the tree it covered.
+    .where('approved_at', '>', now() - APPROVAL_TTL_MS)
     .executeTakeFirst()
 
   if (approval) {
@@ -158,6 +172,38 @@ async function warningsFor(
   if (openThreadCount > 0) {
     warnings.push(
       `${openThreadCount} thread${openThreadCount === 1 ? '' : 's'} still open on this review`,
+    )
+  }
+
+  // Binary and oversize content is described rather than rendered, so the
+  // reviewer approved a row saying "binary" and not the bytes behind it. The
+  // fingerprint covers them, so this is not a hole; it is worth saying out loud
+  // because "approved" and "read" came apart for those files.
+  // Scoped to the revision being approved. Counting every revision the review
+  // ever held reported fourteen unread files where there was one, which is the
+  // kind of number that teaches a reviewer to stop reading the warning.
+  const latest = await db
+    .selectFrom('snapshot')
+    .select('id')
+    .where('review_id', '=', reviewId)
+    .orderBy('seq', 'desc')
+    .executeTakeFirst()
+
+  const unread = latest
+    ? await db
+        .selectFrom('file_change')
+        .select(({ fn }) => fn.countAll<number>().as('n'))
+        .where('snapshot_id', '=', latest.id)
+        .where((eb) =>
+          eb.or([eb('file_change.is_binary', '=', 1), eb('file_change.truncated', '=', 1)]),
+        )
+        .executeTakeFirst()
+    : undefined
+
+  if (unread && unread.n > 0) {
+    warnings.push(
+      `${unread.n} file${unread.n === 1 ? '' : 's'} could not be shown in the diff ` +
+        `(binary or too large) and were approved unread`,
     )
   }
 

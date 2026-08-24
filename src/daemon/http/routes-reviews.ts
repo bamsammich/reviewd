@@ -96,6 +96,13 @@ export function reviewRoutes(deps: Deps): Hono {
     return c.body(new Uint8Array(blob.bytes), 200, {
       'content-type': 'application/octet-stream',
       'content-length': String(blob.size),
+      // The one thing here that is safe to cache, and worth caching: the id is
+      // the sha256 of these bytes, so this address can never answer with
+      // anything else. Everything else the daemon serves is no-store.
+      'cache-control': 'public, max-age=31536000, immutable',
+      // Never sniffed into something the browser would run. Content-Disposition
+      // says so twice, since this is a file from the repository under review.
+      'content-disposition': 'attachment',
     })
   })
 
