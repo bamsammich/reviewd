@@ -8,7 +8,7 @@ import { buildRows, toHunks, toSplitRows, type Half, type SplitRow } from './hun
 import { page, topBar } from './layout.js'
 import type { FileView } from './pages.js'
 import { basenameOf, displayPath } from './paths.js'
-import { buildTree, type TreeDirectory, type TreeFile, type TreeNode } from './tree.js'
+import { buildTree, filesOf, type TreeDirectory, type TreeFile, type TreeNode } from './tree.js'
 import {
   covers,
   inSameFile,
@@ -168,13 +168,22 @@ ${submitBar(review, drafts, awaitingYou)}`
 interface SourceGroup {
   source: SourceSummary
   files: FileView[]
+  tree: TreeNode[]
 }
 
+/**
+ * Splits the revision by source, and puts each source's files in the order its
+ * tree draws them.
+ *
+ * The tree is built once here rather than again in the rail, because the rail
+ * and the diff have to agree and the cheapest way to guarantee that is for
+ * both to read the same walk.
+ */
 function groupBySource(sources: SourceSummary[], files: FileView[]): SourceGroup[] {
-  return sources.map((source) => ({
-    source,
-    files: files.filter((file) => file.sourceId === source.id),
-  }))
+  return sources.map((source) => {
+    const tree = buildTree(files.filter((file) => file.sourceId === source.id))
+    return { source, tree, files: filesOf(tree) }
+  })
 }
 
 /**
@@ -225,7 +234,7 @@ function sourceBranch(group: SourceGroup, threads: Thread[]): SafeHtml {
       >${displayPath(group.source.rootPath)}</span
     >
   </a>
-  ${treeList(buildTree(group.files), threads)}
+  ${treeList(group.tree, threads)}
 </div>`
 }
 
@@ -775,6 +784,7 @@ async function refresh() {
 
   restoreReplies(replies);
   window.scrollTo(0, offset);
+  measureBar();
   notice(false);
 }
 
@@ -817,6 +827,24 @@ if (liveMain && liveMain.dataset.review && 'EventSource' in window) {
   source.addEventListener('threads', land);
   source.addEventListener('gone', () => { source.close(); location.reload(); });
 }
+
+/* ---- how tall the submit bar actually is ------------------------------ */
+
+/* The rail's height is whatever the two bars leave behind, and the submit bar
+   is not a fixed height: it wraps to a second row on a narrow window. The CSS
+   carries a guess as a fallback, which is wrong exactly when the bar wraps, so
+   measure the real thing and let the stylesheet read it. */
+function measureBar() {
+  const bar = document.querySelector('form.bar');
+  if (!bar) return;
+  document.documentElement.style.setProperty(
+    '--bar-height',
+    bar.getBoundingClientRect().height + 'px',
+  );
+}
+
+addEventListener('resize', measureBar, { passive: true });
+measureBar();
 
 /* ---- marking the file being read -------------------------------------- */
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { FileView } from './pages.js'
-import { buildTree, type TreeDirectory, type TreeNode } from './tree.js'
+import { buildTree, filesOf, type TreeDirectory, type TreeNode } from './tree.js'
 
 const at = (path: string): FileView => ({ path }) as FileView
 
@@ -69,5 +69,42 @@ describe('building the tree', () => {
 
   it('has nothing to show for no files', () => {
     expect(buildTree([])).toEqual([])
+  })
+})
+
+describe('reading the files back out', () => {
+  it('walks the tree in the order it draws', () => {
+    const tree = buildTree([at('z.ts'), at('a.ts'), at('lib/one.ts'), at('bin/two.ts')])
+
+    expect(filesOf(tree).map((file) => file.path)).toEqual([
+      'bin/two.ts',
+      'lib/one.ts',
+      'a.ts',
+      'z.ts',
+    ])
+  })
+
+  // The order a diff sorted by path would have used, which is the order the
+  // rail disagreed with.
+  it('descends before it moves on', () => {
+    const tree = buildTree([at('src/index.ts'), at('src/web/page.ts'), at('README.md')])
+
+    expect(filesOf(tree).map((file) => file.path)).toEqual([
+      'src/web/page.ts',
+      'src/index.ts',
+      'README.md',
+    ])
+  })
+
+  it('gives back every file it was given', () => {
+    const paths = ['a/b/c.ts', 'a/d.ts', 'e.ts', 'a/b/f.ts']
+
+    expect(filesOf(buildTree(paths.map(at))).map((file) => file.path).sort()).toEqual(
+      [...paths].sort(),
+    )
+  })
+
+  it('has nothing to walk in an empty tree', () => {
+    expect(filesOf([])).toEqual([])
   })
 })

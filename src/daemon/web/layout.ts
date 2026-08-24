@@ -518,7 +518,18 @@ main.with-bar { padding-bottom: 7.5rem; }
     max-width: 100rem; margin: 0 auto;
   }
   main.review.rail-closed { grid-template-columns: minmax(0, 1fr); }
-  main.review .rail { position: sticky; top: calc(var(--top-bar) + .5rem); }
+  /* Sticky and unbounded means a tree taller than the viewport has entries
+     nobody can reach: the page scrolls, the rail does not move with it, and
+     the bottom of the tree is simply gone. Bounding it to what is left between
+     the two bars gives the rail its own scroll. */
+  main.review .rail {
+    position: sticky;
+    top: calc(var(--top-bar) + .5rem);
+    max-height: calc(100vh - var(--top-bar) - var(--bar-height, 4.5rem) - 1.5rem);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-right: .25rem;
+  }
   main.review .files { min-width: 0; }
   main.with-bar { padding-bottom: 5rem; }
 

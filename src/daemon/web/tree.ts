@@ -80,6 +80,26 @@ function flatten(node: Mutable): TreeNode[] {
   return [...directories, ...files]
 }
 
+/**
+ * The files of a tree, in the order the tree draws them.
+ *
+ * The rail groups directories above files and sorts each group by segment; the
+ * diff arrives sorted by whole path. Two orders that agree on a handful of
+ * files and diverge badly on forty, so clicking the fifth entry in the rail
+ * lands on some other file's block. The tree is the one a reader navigates by,
+ * so the diff follows it.
+ */
+export function filesOf(nodes: readonly TreeNode[]): FileView[] {
+  const files: FileView[] = []
+
+  for (const node of nodes) {
+    if (node.kind === 'file') files.push(node.file)
+    else files.push(...filesOf(node.children))
+  }
+
+  return files
+}
+
 function collapse(name: string, node: Mutable): TreeDirectory {
   let path = name
   let at = node
