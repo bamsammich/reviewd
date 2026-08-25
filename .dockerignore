@@ -6,7 +6,9 @@ coverage/
 .github/
 .claude/
 docs/
+.claude-plugin/
 plugin/
+scripts/
 contrib/docker/config/
 *.db
 *.db-wal

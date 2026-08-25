@@ -1,9 +1,9 @@
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import SQLite from 'better-sqlite3'
 import { Kysely, SqliteDialect } from 'kysely'
 import { Migrator } from 'kysely/migration'
 import { CodeMigrationProvider } from './migrations.js'
+import { openSqlite } from './sqlite.js'
 import type { Database } from './types.js'
 
 export type { Database } from './types.js'
@@ -17,22 +17,15 @@ export interface OpenOptions {
 /**
  * Opens the database and brings it to the current schema.
  *
- * One daemon process holds the only writer, so WAL plus a busy timeout covers
- * the contention that exists: long-poll readers held open while a submission
- * writes.
+ * The connection and its pragmas live in `./sqlite.js`, which is also where the
+ * reason the driver is `node:sqlite` rather than better-sqlite3 is written down.
  */
 export async function openDatabase({ path }: OpenOptions): Promise<Kysely<Database>> {
   if (path !== ':memory:') {
     mkdirSync(dirname(path), { recursive: true })
   }
 
-  const sqlite = new SQLite(path)
-  sqlite.pragma('journal_mode = WAL')
-  sqlite.pragma('busy_timeout = 5000')
-  sqlite.pragma('foreign_keys = ON')
-  sqlite.pragma('synchronous = NORMAL')
-
-  const db = new Kysely<Database>({ dialect: new SqliteDialect({ database: sqlite }) })
+  const db = new Kysely<Database>({ dialect: new SqliteDialect({ database: openSqlite(path) }) })
   await migrateToLatest(db)
   return db
 }

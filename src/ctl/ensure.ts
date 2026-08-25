@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { openSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { Client } from './client.js'
 
 /**
@@ -75,13 +76,21 @@ export async function ensureDaemon(
  * daemon that dies with the commit hook that started it is no daemon. Output
  * goes to the same log a service unit would write, so there is one place to
  * look either way.
+ *
+ * It starts the CLI sitting next to this file rather than a `reviewd` found on
+ * PATH. Installed as a plugin there is nothing on PATH to find: the package is
+ * unpacked into the plugin cache and the gate and the MCP server are given its
+ * path. Resolving the sibling also means the daemon that comes up is the same
+ * build as the client that asked for it, which a PATH lookup cannot promise
+ * once a checkout and an installed copy both exist.
  */
 function spawnDetached(): void {
   const log = logPath()
   mkdirSync(dirname(log), { recursive: true })
   const handle = openSync(log, 'a')
 
-  const child = spawn('reviewd', ['serve'], {
+  const cli = fileURLToPath(new URL('../cli.js', import.meta.url))
+  const child = spawn(process.execPath, [cli, 'serve'], {
     detached: true,
     stdio: ['ignore', handle, handle],
   })

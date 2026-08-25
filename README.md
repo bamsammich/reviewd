@@ -40,32 +40,37 @@ VPN, reverse proxy, and Tailscale each get a config block in the docs.
 
 ## Install
 
-Two commands. Needs Node 22 or newer, git, and `jq`.
+Needs Node 24 or newer, git, and `jq`.
 
 ```sh
-claude plugin marketplace add bamsammich/reviewd
-claude plugin install reviewd@bamsammich
+npm install -g reviewd && reviewd init
 ```
 
-That installs the commit gate hook, the MCP server, and the skill that drives a
-review.
+The first command puts `reviewd` on your `PATH`. The second registers the plugin
+with Claude Code, which is what installs the commit gate hook, the MCP server,
+and the skill that drives a review. Restart Claude Code afterwards to load it.
 
-The plugin needs `reviewd` on `PATH`. It is not on npm yet, so until it is, that
-means a checkout:
+Check it with `reviewd doctor`, which reports where the daemon answers and
+whether the plugin matches the binary.
+
+### Upgrading
 
 ```sh
-npm install && npm link
+npm install -g reviewd@latest
 ```
 
-Then check it:
+That is the whole upgrade. The plugin is a separate artifact that Claude Code
+holds a copy of, so it would otherwise need a second command: the MCP server
+notices the mismatch on its next start and reinstalls, and the new copy loads
+the session after. `reviewd init` does the same thing on demand, and `reviewd
+doctor` says whether the two are lined up. Nothing here asks you to run
+`claude plugin` yourself.
 
-```sh
-reviewd doctor
-```
+### Running the daemon
 
 There is no service to install. The daemon starts on first use: whichever of the
-commit gate, the MCP server, or a `reviewd` command needs it first brings it up, and it
-stays up for the rest. It logs to `~/.local/state/reviewd/reviewd.log`.
+commit gate, the MCP server, or a `reviewd` command needs it first brings it up,
+and it stays up for the rest. It logs to `~/.local/state/reviewd/reviewd.log`.
 
 To start it at login rather than on first use, `contrib/` has a launchd agent:
 
@@ -182,17 +187,20 @@ pieces underneath it are ordinary:
 Load the plugin from a checkout without installing it:
 
 ```sh
+npm install && npm link
 claude --plugin-dir ./plugin
 ```
 
-A local copy takes precedence over an installed one of the same name for that
-session, so this works without uninstalling first. `/reload-plugins` picks up
-edits.
+`npm link` is what puts the checkout's `reviewd` on `PATH`, which the hook and
+the MCP declaration both call. A local plugin takes precedence over an installed
+one of the same name for that session, so this works without uninstalling first.
+`/reload-plugins` picks up edits.
 
 ```sh
-npm test                          # the daemon and client suites
+npm test                              # the daemon and client suites
 ./plugin/hooks/reviewd-gate.test.sh   # the commit gate, which is shell
 claude plugin validate ./plugin
+npm run icons                         # after upgrading @phosphor-icons/core
 ```
 
 ## Status
