@@ -1,7 +1,9 @@
 import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { canonical, diffAgainstHead, fingerprint, gitDir, repoRoot } from './git.js'
+import { EMPTY_FINGERPRINT } from '../fingerprint.js'
+import { fingerprint } from './diff.js'
+import { canonical, gitDir, repoRoot, stagedDivergence } from './git.js'
 import { tempRepo, type TempRepo } from './testing.js'
 
 let repo: TempRepo
@@ -53,9 +55,10 @@ describe('fingerprint', () => {
     expect(await fingerprint(repo.root)).toBe(await fingerprint(repo.root))
   })
 
-  it('is empty-diff stable on a clean tree', async () => {
-    const clean = await diffAgainstHead(repo.root)
-    expect(clean).toBe('')
+  it('is the empty hash on a clean tree', async () => {
+    // The gate reads this exact value to mean "nothing to review", which is
+    // what lets an --amend that only edits a message through.
+    expect(await fingerprint(repo.root)).toBe(EMPTY_FINGERPRINT)
   })
 
   it('changes when content changes', async () => {
@@ -116,9 +119,9 @@ describe('fingerprint', () => {
     try {
       fresh.write('first.ts', 'const first = 1\n')
 
-      const diff = await diffAgainstHead(fresh.root)
-      expect(diff).toContain('first.ts')
-      expect(await fingerprint(fresh.root)).toHaveLength(64)
+      const first = await fingerprint(fresh.root)
+      expect(first).toHaveLength(64)
+      expect(first).not.toBe(EMPTY_FINGERPRINT)
     } finally {
       fresh.cleanup()
     }
@@ -145,7 +148,6 @@ describe('fingerprint', () => {
 
     expect(dirty).not.toBe(clean)
     expect(await fingerprint(repo.root)).toBe(dirty)
-    expect(await diffAgainstHead(repo.root)).toContain('const a = 9')
   })
 
   it('sees a deletion', async () => {
@@ -153,6 +155,47 @@ describe('fingerprint', () => {
     repo.run('rm', '-q', 'src/a.ts')
 
     expect(await fingerprint(repo.root)).not.toBe(before)
-    expect(await diffAgainstHead(repo.root)).toContain('deleted file')
+  })
+})
+
+describe('stagedDivergence', () => {
+  it('says nothing about a staged rename', async () => {
+    // `git status --porcelain -z` spends a second NUL-separated chunk on the
+    // path a rename came from, and it carries no status bytes. Reading it as
+    // an entry of its own turned `git mv src/a.ts src/b.ts` into a divergence
+    // on "c/a.ts", so every commit carrying a rename was denied over a file
+    // that does not exist, and no approval could clear it.
+    repo.run('mv', 'src/a.ts', 'src/b.ts')
+
+    expect(await stagedDivergence(repo.root)).toEqual([])
+  })
+
+  it('catches a rename whose new path was edited afterwards', async () => {
+    // `RM`: the index holds the move, the tree holds the move plus content the
+    // reviewer never saw.
+    repo.run('mv', 'src/a.ts', 'src/b.ts')
+    repo.write('src/b.ts', 'const a = 999 // not reviewed\n')
+
+    expect(await stagedDivergence(repo.root)).toEqual(['src/b.ts'])
+  })
+
+  it('reads the entry after a rename as an entry rather than as a path', async () => {
+    repo.write('src/z.ts', 'const z = 1\n')
+    repo.commit('add z')
+
+    repo.run('mv', 'src/a.ts', 'src/b.ts')
+    repo.write('src/z.ts', 'const z = 2\n')
+    repo.run('add', 'src/z.ts')
+    repo.write('src/z.ts', 'const z = 3\n')
+
+    expect(await stagedDivergence(repo.root)).toEqual(['src/z.ts'])
+  })
+
+  it('still catches a file staged and then edited again', async () => {
+    repo.write('src/a.ts', 'const a = 2\n')
+    repo.run('add', 'src/a.ts')
+    repo.write('src/a.ts', 'const a = 3\n')
+
+    expect(await stagedDivergence(repo.root)).toEqual(['src/a.ts'])
   })
 })

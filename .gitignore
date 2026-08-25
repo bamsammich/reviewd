@@ -3,6 +3,10 @@ dist/
 *.tsbuildinfo
 coverage/
 .DS_Store
+
+# Agent session state and worktrees. Local-only until now, which held while
+# this repository had one contributor and stops holding the moment it has two.
+.claude/
 *.db
 *.db-wal
 *.db-shm

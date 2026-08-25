@@ -16,6 +16,10 @@ export type ReviewEvent =
   // submission. The reviewer is a person looking at a page, and making them
   // wait for a batch that will never come is how the page went stale.
   | { kind: 'thread'; reviewId: string; threadId: string; at: number }
+  // A new revision. The page has to hear about this or it keeps showing code
+  // that has been replaced, and its tokens go on describing a revision that is
+  // no longer current.
+  | { kind: 'snapshot'; reviewId: string; seq: number; at: number }
 
 export class Bus {
   private readonly emitter = new EventEmitter()
@@ -32,6 +36,12 @@ export class Bus {
 
   /** Resolves on the first event for this review, or on timeout. */
   wait(reviewId: string, timeoutMs: number, signal?: AbortSignal): Promise<ReviewEvent | null> {
+    // An already-fired signal never delivers `abort` to a listener added after
+    // the fact, so parking here would hold a timer and an emitter listener for
+    // the whole timeout — half an hour on `reviewd wait` — on behalf of a
+    // client that hung up while the caller was still querying the database.
+    if (signal?.aborted) return Promise.resolve(null)
+
     return new Promise((resolve) => {
       const done = (event: ReviewEvent | null): void => {
         clearTimeout(timer)

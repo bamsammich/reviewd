@@ -8,6 +8,7 @@ import { buildRows, toHunks, toSplitRows, type Half, type SplitRow } from './hun
 import { page, topBar } from './layout.js'
 import type { FileView } from './pages.js'
 import { basenameOf, displayPath } from './paths.js'
+import { mintPageToken } from './tokens.js'
 import { buildTree, filesOf, type TreeDirectory, type TreeFile, type TreeNode } from './tree.js'
 import {
   covers,
@@ -130,31 +131,43 @@ export function reviewPage(
   const palette = new Palette()
   const page_: Page = { review, threads, open, folded, palette }
 
-  const body = html`
-${topBar(review.title, html`<span class="rev">rev ${review.snapshotSeq}</span>`)}
-<main
-  id="main"
-  class="review with-bar view-${view} rail-${rail}"
-  data-review="${review.reviewId}"
->
-  <div class="rail">
-    <h1 class="page-title">${review.title}</h1>
-    ${scopeList(grouped, threads)}
-    ${coaching(threads.length, drafts, awaitingYou)}
-  </div>
+  const body = html` ${topBar(review.title, html`<span class="rev">rev ${review.snapshotSeq}</span>`)}
+    <main
+      id="main"
+      class="review with-bar view-${view} rail-${rail}"
+      data-review="${review.reviewId}"
+    >
+      <!--
+    The token the script copies into the comment box it builds, and the state
+    the poll compares against. Both live inside main so that a refresh, which
+    replaces main's contents, brings new ones rather than leaving the page
+    holding a token and a revision number from before it caught up.
+  -->
+      <input
+        type="hidden"
+        id="page-token"
+        value="${mintPageToken(review.reviewId, review.snapshotSeq, Date.now())}"
+        data-revision="${review.snapshotSeq}"
+        data-awaiting="${awaitingYou}"
+        data-submitted="${review.lastSubmissionAt}"
+      />
+      <div class="rail">
+        <h1 class="page-title">${review.title}</h1>
+        ${scopeList(grouped, threads)} ${coaching(threads.length, drafts, awaitingYou)}
+      </div>
 
-  <div class="files">
-    ${
-      files.length === 0
-        ? html`<p class="emptystate">This revision changed nothing.</p>`
-        : raw('')
-    }
-    ${viewToggle(review, view, rail)}
-    ${grouped.map((group) => sourceGroup(page_, group, grouped.length > 1))}
-    ${outdatedBlock(page_, outdated)}
-  </div>
-</main>
-${submitBar(review, drafts, awaitingYou)}`
+      <div class="files">
+        ${
+          files.length === 0
+            ? html`<p class="emptystate">This revision changed nothing.</p>`
+            : raw('')
+        }
+        ${viewToggle(review, view, rail)}
+        ${grouped.map((group) => sourceGroup(page_, group, grouped.length > 1))}
+        ${outdatedBlock(page_, outdated)}
+      </div>
+    </main>
+    ${submitBar(review, drafts, awaitingYou)}`
 
   const highlighting = palette.css()
 
@@ -212,12 +225,12 @@ function scopeList(groups: SourceGroup[], threads: Thread[]): SafeHtml {
   const files = groups.reduce((total, group) => total + group.files.length, 0)
 
   return html`<nav class="scope" aria-labelledby="scope-heading">
-  <h2 id="scope-heading">
-    ${files} file${files === 1 ? '' : 's'} in
-    ${groups.length === 1 ? '1 place' : `${groups.length} places`}
-  </h2>
-  ${groups.map((group) => sourceBranch(group, threads))}
-</nav>`
+    <h2 id="scope-heading">
+      ${files} file${files === 1 ? '' : 's'} in
+      ${groups.length === 1 ? '1 place' : `${groups.length} places`}
+    </h2>
+    ${groups.map((group) => sourceBranch(group, threads))}
+  </nav>`
 }
 
 function sourceBranch(group: SourceGroup, threads: Thread[]): SafeHtml {
@@ -225,42 +238,43 @@ function sourceBranch(group: SourceGroup, threads: Thread[]): SafeHtml {
   const tracked = group.source.vcs === 'git'
 
   return html`<div class="branch">
-  <a class="root ${group.source.approved ? 'ok' : ''}" href="#src-${group.source.id}">
-    ${tracked ? GIT_ICON : FOLDER_ICON}
-    <span class="visually-hidden">${tracked ? 'git repository' : 'directory'}</span>
-    <span class="name">${name}</span>
-    ${group.source.approved ? html`<span class="badge approved">approved</span>` : raw('')}
-    <span class="path" title="${group.source.rootPath}"
-      >${displayPath(group.source.rootPath)}</span
-    >
-  </a>
-  ${treeList(group.tree, threads)}
-</div>`
+    <a class="root ${group.source.approved ? 'ok' : ''}" href="#src-${group.source.id}">
+      ${tracked ? GIT_ICON : FOLDER_ICON}
+      <span class="visually-hidden">${tracked ? 'git repository' : 'directory'}</span>
+      <span class="name">${name}</span>
+      ${group.source.approved ? html`<span class="badge approved">approved</span>` : raw('')}
+      <span class="path" title="${group.source.rootPath}"
+        >${displayPath(group.source.rootPath)}</span
+      >
+    </a>
+    ${treeList(group.tree, threads)}
+  </div>`
 }
 
 function treeList(nodes: TreeNode[], threads: Thread[]): SafeHtml {
   if (nodes.length === 0) return raw('')
 
   return html`<ul class="tree">
-  ${nodes.map(
-    (node) => html`<li>
-      ${node.kind === 'directory' ? treeDirectory(node, threads) : treeFile(node, threads)}
-    </li>`,
-  )}
-</ul>`
+    ${nodes.map(
+      (node) =>
+        html`<li>
+          ${node.kind === 'directory' ? treeDirectory(node, threads) : treeFile(node, threads)}
+        </li>`,
+    )}
+  </ul>`
 }
 
 function treeDirectory(node: TreeDirectory, threads: Thread[]): SafeHtml {
   return html`<details class="dir" open>
-  <summary>
-    <span class="name">${node.name}</span>
-    <span class="count" aria-hidden="true">${node.fileCount}</span>
-    <span class="visually-hidden">
-      ${node.fileCount} file${node.fileCount === 1 ? '' : 's'}
-    </span>
-  </summary>
-  ${treeList(node.children, threads)}
-</details>`
+    <summary>
+      <span class="name">${node.name}</span>
+      <span class="count" aria-hidden="true">${node.fileCount}</span>
+      <span class="visually-hidden">
+        ${node.fileCount} file${node.fileCount === 1 ? '' : 's'}
+      </span>
+    </summary>
+    ${treeList(node.children, threads)}
+  </details>`
 }
 
 /** First letter of the change, because colour alone is not a label. */
@@ -276,24 +290,19 @@ function treeFile(node: TreeFile, threads: Thread[]): SafeHtml {
   const { file } = node
   const key = foldKey(file.sourceId, file.path)
   const comments = threads.filter(
-    (thread) =>
-      thread.state !== 'outdated' && foldKey(thread.sourceId, thread.path) === key,
+    (thread) => thread.state !== 'outdated' && foldKey(thread.sourceId, thread.path) === key,
   ).length
 
   const mark = CHANGE_MARK[file.changeType] ?? '?'
 
   return html`<a class="leaf" href="#file-${key}" data-tree-file="${key}">
-  <span class="mark ${file.changeType}" aria-hidden="true">${mark}</span>
-  <span class="name">${node.name}</span>
-  ${
-    comments > 0
-      ? html`<span class="count" aria-hidden="true">${comments}</span>`
-      : raw('')
-  }
-  <span class="visually-hidden">
-    ${file.changeType}${comments > 0 ? `, ${comments} comment${comments === 1 ? '' : 's'}` : ''}
-  </span>
-</a>`
+    <span class="mark ${file.changeType}" aria-hidden="true">${mark}</span>
+    <span class="name">${node.name}</span>
+    ${comments > 0 ? html`<span class="count" aria-hidden="true">${comments}</span>` : raw('')}
+    <span class="visually-hidden">
+      ${file.changeType}${comments > 0 ? `, ${comments} comment${comments === 1 ? '' : 's'}` : ''}
+    </span>
+  </a>`
 }
 
 /**
@@ -331,22 +340,22 @@ function coaching(threadCount: number, drafts: number, awaitingYou: number): Saf
 
 function sourceGroup(page: Page, group: SourceGroup, showHeading: boolean): SafeHtml {
   return html`<section class="sourcegroup" id="src-${group.source.id}">
-  ${
-    showHeading
-      ? html`<h2>
-          <span>${group.source.label || basenameOf(group.source.rootPath)}</span>
-          <span class="path" title="${group.source.rootPath}"
-            >${displayPath(group.source.rootPath, undefined, 52)}</span
-          >
-        </h2>`
-      : raw('')
-  }
-  ${
-    group.files.length === 0
-      ? html`<p class="note">Nothing changed in this one.</p>`
-      : group.files.map((file) => fileBlock(page, file))
-  }
-</section>`
+    ${
+      showHeading
+        ? html`<h2>
+            <span>${group.source.label || basenameOf(group.source.rootPath)}</span>
+            <span class="path" title="${group.source.rootPath}"
+              >${displayPath(group.source.rootPath, undefined, 52)}</span
+            >
+          </h2>`
+        : raw('')
+    }
+    ${
+      group.files.length === 0
+        ? html`<p class="note">Nothing changed in this one.</p>`
+        : group.files.map((file) => fileBlock(page, file))
+    }
+  </section>`
 }
 
 function fileBlock(page: Page, file: FileView): SafeHtml {
@@ -362,35 +371,40 @@ function fileBlock(page: Page, file: FileView): SafeHtml {
   const holdsBox = page.open !== undefined && foldKey(page.open.sourceId, page.open.path) === key
   const expanded = holdsBox || !page.folded.has(key)
 
-  return html`<details class="file" id="file-${key}" data-fold="${key}" ${expanded ? raw('open') : raw('')}>
-  <summary>
-    <h3>${file.path}</h3>
-    <span class="badge">${file.changeType}</span>
+  return html`<details
+    class="file"
+    id="file-${key}"
+    data-fold="${key}"
+    ${expanded ? raw('open') : raw('')}
+  >
+    <summary>
+      <h3>${file.path}</h3>
+      <span class="badge">${file.changeType}</span>
+      ${
+        mine.length > 0
+          ? html`<span class="badge you"
+              >${mine.length} comment${mine.length === 1 ? '' : 's'}</span
+            >`
+          : raw('')
+      }
+    </summary>
     ${
-      mine.length > 0
-        ? html`<span class="badge you"
-            >${mine.length} comment${mine.length === 1 ? '' : 's'}</span
-          >`
-        : raw('')
+      file.isBinary
+        ? html`<p class="note">Binary file, not shown.</p>`
+        : file.truncated
+          ? html`<p class="note">File too large to display.</p>`
+          : hunks.length === 0
+            ? html`<p class="note">No textual change.</p>`
+            : html`<div class="diff">
+                ${hunks.map(
+                  (hunk) => html`
+                    <div class="hunkhead">${hunk.header}</div>
+                    ${toSplitRows(hunk.rows).map((row) => splitRow(page, file, row, mine))}
+                  `,
+                )}
+              </div>`
     }
-  </summary>
-  ${
-    file.isBinary
-      ? html`<p class="note">Binary file, not shown.</p>`
-      : file.truncated
-        ? html`<p class="note">File too large to display.</p>`
-        : hunks.length === 0
-          ? html`<p class="note">No textual change.</p>`
-          : html`<div class="diff">
-              ${hunks.map(
-                (hunk) => html`
-                  <div class="hunkhead">${hunk.header}</div>
-                  ${toSplitRows(hunk.rows).map((row) => splitRow(page, file, row, mine))}
-                `,
-              )}
-            </div>`
-  }
-</details>`
+  </details>`
 }
 
 /**
@@ -411,11 +425,10 @@ function splitRow(page: Page, file: FileView, row: SplitRow, mine: Thread[]): Sa
   const boxHere = [row.left, row.right].find((half) => isOpenOn(page.open, file, half))
 
   return html`<div class="row" data-unified="${row.unified}">
-  ${half(page, file, row.left, 'left')}
-  ${half(page, file, row.right, 'right')}
-</div>
-${attached.map((thread) => threadBlock(page, thread, false))}
-${boxHere && page.open ? newThreadBlock(page, file, page.open) : raw('')}`
+      ${half(page, file, row.left, 'left')} ${half(page, file, row.right, 'right')}
+    </div>
+    ${attached.map((thread) => threadBlock(page, thread, false))}
+    ${boxHere && page.open ? newThreadBlock(page, file, page.open) : raw('')}`
 }
 
 /** The threads that hang from this row: same place, and still live. */
@@ -487,12 +500,12 @@ function half(page: Page, file: FileView, side: Half, which: 'left' | 'right'): 
   // reader user nothing about what activating it would do.
   const covered = coveredBy(page, here) ? ' covered' : ''
 
-  return html`<div class="side ${which} ${side.kind}${covered}"${drag}>
-  <span class="n">${side.line ?? ''}</span>
-  <span class="act">${action}</span>
-  <span class="sign" aria-hidden="true">${sign}</span>
-  <span class="t">${code}</span>
-</div>`
+  return html`<div class="side ${which} ${side.kind}${covered}" ${drag}>
+    <span class="n">${side.line ?? ''}</span>
+    <span class="act">${action}</span>
+    <span class="sign" aria-hidden="true">${sign}</span>
+    <span class="t">${code}</span>
+  </div>`
 }
 
 /**
@@ -543,18 +556,18 @@ function threadBlock(page: Page, thread: Thread, showLocation: boolean): SafeHtm
           : raw('')
       }
       ${thread.messages.map(
-        (message) => html`<div class="msg">
-          <span class="who">${message.author === 'human' ? 'you' : 'agent'}</span>
-          ${message.submittedAt === null ? html`<span class="badge draft">not sent</span>` : raw('')}
-          <div class="body">${message.body}</div>
-        </div>`,
+        (message) =>
+          html`<div class="msg">
+            <span class="who">${message.author === 'human' ? 'you' : 'agent'}</span>
+            ${message.submittedAt === null ? html`<span class="badge draft">not sent</span>` : raw('')}
+            <div class="body">${message.body}</div>
+          </div>`,
       )}
       <details class="reply">
         <summary>Reply</summary>
         <form method="post" action="/r/${page.review.reviewId}/threads/${thread.id}/replies">
-          <label class="visually-hidden" for="reply-${thread.id}">
-            Reply to this comment
-          </label>
+          ${tokenField(page)}
+          <label class="visually-hidden" for="reply-${thread.id}"> Reply to this comment </label>
           <textarea id="reply-${thread.id}" name="body" rows="2" required></textarea>
           <div class="actions">
             <button type="submit" class="primary">Save reply</button>
@@ -568,13 +581,25 @@ function threadBlock(page: Page, thread: Thread, showLocation: boolean): SafeHtm
             thread.state === 'active' ? 'resolve' : 'reopen'
           }"
         >
+          ${tokenField(page)}
           <button type="submit" class="quiet">
             ${thread.state === 'active' ? 'Resolve' : 'Reopen'}
           </button>
         </form>
       </div>
     </div>
-</div>`
+  </div>`
+}
+
+/**
+ * The hidden field that says this form came from a page the daemon drew.
+ *
+ * Every mutating form carries one. The daemon refuses a request without it,
+ * which is what lets the cross-site check stop having to trust `Origin`.
+ */
+function tokenField(page: Page): SafeHtml {
+  const token = mintPageToken(page.review.reviewId, page.review.snapshotSeq, Date.now())
+  return html`<input type="hidden" name="token" value="${token}" />`
 }
 
 /** The form itself, which is a position plus somewhere to type. */
@@ -585,15 +610,12 @@ function newThreadBlock(page: Page, file: FileView, at: Position): SafeHtml {
   return html`<div class="threadrow">
     <div class="thread" id="box">
       <form method="post" action="/r/${page.review.reviewId}/threads">
-        <input type="hidden" name="sourceId" value="${at.sourceId}">
-        <input type="hidden" name="path" value="${at.path}">
-        <input type="hidden" name="side" value="${at.side}">
-        <input type="hidden" name="line" value="${at.line}">
-        ${
-          at.endLine
-            ? html`<input type="hidden" name="endLine" value="${at.endLine}">`
-            : raw('')
-        }
+        ${tokenField(page)}
+        <input type="hidden" name="sourceId" value="${at.sourceId}" />
+        <input type="hidden" name="path" value="${at.path}" />
+        <input type="hidden" name="side" value="${at.side}" />
+        <input type="hidden" name="line" value="${at.line}" />
+        ${at.endLine ? html`<input type="hidden" name="endLine" value="${at.endLine}" />` : raw('')}
         <label for="${id}">Comment on ${file.path} ${where}</label>
         <textarea id="${id}" name="body" rows="3" autofocus required></textarea>
         <div class="actions">
@@ -602,21 +624,19 @@ function newThreadBlock(page: Page, file: FileView, at: Position): SafeHtml {
         </div>
       </form>
     </div>
-</div>`
+  </div>`
 }
 
 function outdatedBlock(page: Page, outdated: Thread[]): SafeHtml {
   if (outdated.length === 0) return raw('')
 
   return html`<details class="file">
-  <summary>
-    <h3>${outdated.length} outdated comment${outdated.length === 1 ? '' : 's'}</h3>
-    <span class="badge">code is gone</span>
-  </summary>
-  <div class="diff">
-    ${outdated.map((thread) => threadBlock(page, thread, true))}
-  </div>
-</details>`
+    <summary>
+      <h3>${outdated.length} outdated comment${outdated.length === 1 ? '' : 's'}</h3>
+      <span class="badge">code is gone</span>
+    </summary>
+    <div class="diff">${outdated.map((thread) => threadBlock(page, thread, true))}</div>
+  </details>`
 }
 
 /**
@@ -631,16 +651,16 @@ function viewToggle(review: ReviewSummary, view: ViewMode, rail: RailState): Saf
   const flip: RailState = rail === 'open' ? 'closed' : 'open'
 
   return html`<div class="viewtoggle">
-  <a
-    class="btn quiet"
-    href="/r/${review.reviewId}?rail=${flip}"
-    aria-expanded="${rail === 'open' ? 'true' : 'false'}"
-    >${rail === 'open' ? 'Hide files' : 'Show files'}</a
-  >
-  <a class="btn quiet viewmode" href="/r/${review.reviewId}?view=${other}">
-    ${other === 'split' ? 'Side by side' : 'Unified'}
-  </a>
-</div>`
+    <a
+      class="btn quiet"
+      href="/r/${review.reviewId}?rail=${flip}"
+      aria-expanded="${rail === 'open' ? 'true' : 'false'}"
+      >${rail === 'open' ? 'Hide files' : 'Show files'}</a
+    >
+    <a class="btn quiet viewmode" href="/r/${review.reviewId}?view=${other}">
+      ${other === 'split' ? 'Side by side' : 'Unified'}
+    </a>
+  </div>`
 }
 
 /**
@@ -667,50 +687,55 @@ function submitBar(review: ReviewSummary, drafts: number, awaitingYou: number): 
           Sending them takes the approval back.`
       : html`<strong>Approved.</strong> Waiting for the agent to commit.`
     : drafts > 0
-      ? html`<strong>${drafts} comment${drafts === 1 ? '' : 's'} not sent.</strong>
-          Choose how to send them.`
+      ? html`<strong>${drafts} comment${drafts === 1 ? '' : 's'} not sent.</strong> Choose how to
+          send them.`
       : awaitingYou > 0
         ? html`<strong>${awaitingYou} waiting on you.</strong> Reply above, or decide now.`
         : html`Approving lets the agent commit.`
 
+  // A verdict carries the same token every other form does, and the route
+  // additionally refuses one minted against an older revision.
+  const token = mintPageToken(review.reviewId, review.snapshotSeq, Date.now())
+
   return html`<form class="bar" method="post" action="/r/${review.reviewId}/submit">
-  <div class="row">
-    <p class="state" aria-live="polite">${state}</p>
-    <div class="verdicts">
-      ${
-        approved
-          ? html`${
-              drafts > 0
-                ? html`<button type="submit" name="verdict" value="comment" class="quiet">
-                    Send as notes
-                  </button>`
-                : raw('')
-            }
-            <button
-              type="submit"
-              formaction="/r/${review.reviewId}/unapprove"
-              class="${drafts > 0 ? 'quiet' : 'primary'}"
-            >
-              Unapprove
-            </button>`
-          : drafts > 0
-            ? html`<button type="submit" name="verdict" value="comment" class="quiet">
-                  Send as notes
-                </button>
-                <button type="submit" name="verdict" value="changes_requested" class="primary">
-                  Request changes
-                </button>
-                <button type="submit" name="verdict" value="approved">Approve</button>`
-            : html`<button type="submit" name="verdict" value="changes_requested" class="quiet">
-                  Request changes
-                </button>
-                <button type="submit" name="verdict" value="approved" class="primary">
-                  Approve
+    <input type="hidden" name="token" value="${token}" />
+    <div class="row">
+      <p class="state" aria-live="polite">${state}</p>
+      <div class="verdicts">
+        ${
+          approved
+            ? html`${
+                drafts > 0
+                  ? html`<button type="submit" name="verdict" value="comment" class="quiet">
+                        Send as notes
+                      </button>`
+                  : raw('')
+              }
+                <button
+                  type="submit"
+                  formaction="/r/${review.reviewId}/unapprove"
+                  class="${drafts > 0 ? 'quiet' : 'primary'}"
+                >
+                  Unapprove
                 </button>`
-      }
+            : drafts > 0
+              ? html`<button type="submit" name="verdict" value="comment" class="quiet">
+                    Send as notes
+                  </button>
+                  <button type="submit" name="verdict" value="changes_requested" class="primary">
+                    Request changes
+                  </button>
+                  <button type="submit" name="verdict" value="approved">Approve</button>`
+              : html`<button type="submit" name="verdict" value="changes_requested" class="quiet">
+                    Request changes
+                  </button>
+                  <button type="submit" name="verdict" value="approved" class="primary">
+                    Approve
+                  </button>`
+        }
+      </div>
     </div>
-  </div>
-</form>`
+  </form>`
 }
 
 /**
@@ -766,14 +791,16 @@ function restoreReplies(state) {
 }
 
 async function refresh() {
-  const response = await fetch(location.href, { headers: { 'x-reviewd-refresh': '1' } });
+  const response = await fetch(location.href);
   if (!response.ok) return;
 
   const next = new DOMParser().parseFromString(await response.text(), 'text/html');
   const main = document.getElementById('main');
   const bar = document.querySelector('form.bar');
+  const head = document.querySelector('header.top');
   const nextMain = next.getElementById('main');
   const nextBar = next.querySelector('form.bar');
+  const nextHead = next.querySelector('header.top');
   if (!main || !nextMain) return;
 
   const replies = openReplies();
@@ -781,12 +808,56 @@ async function refresh() {
 
   main.innerHTML = nextMain.innerHTML;
   if (bar && nextBar) bar.outerHTML = nextBar.outerHTML;
+  // The revision label lives in the header, outside main, so replacing only
+  // main left it showing a revision the page was no longer displaying.
+  if (head && nextHead) head.outerHTML = nextHead.outerHTML;
 
   restoreReplies(replies);
   window.scrollTo(0, offset);
   measureBar();
-  notice(false);
+
+  /* The status lives in the header, which the line above just replaced with a
+     freshly rendered one that does not have it. Put it back if it still
+     applies, or it vanishes on the first refresh and the page goes back to
+     looking live while it is not. */
+  if (offline) showStale(blockedBefore());
+
+  // A reviewer has to be able to see that the ground moved. Clearing the pill
+  // as soon as the content lands makes it a flash behind the action bar, which
+  // is the same as not saying anything.
+  if (settled) {
+    notice(true, settled);
+    settled = null;
+    clearTimeout(settleTimer);
+    settleTimer = setTimeout(() => notice(false), 6000);
+  } else {
+    notice(false);
+  }
 }
+
+/*
+ * What to say once the new content is actually on screen.
+ *
+ * Set before a refresh that the reviewer needs to notice, read after it lands.
+ */
+let settled = null;
+let settleTimer = 0;
+
+/*
+ * The bar's real height, which nothing was measuring.
+ *
+ * The notice is positioned above it from a custom property that was never set,
+ * so it fell back to a guess that is wrong whenever the bar wraps to two rows,
+ * which on a phone is most of the time.
+ */
+function measureBar() {
+  const bar = document.querySelector('form.bar');
+  const height = bar ? bar.getBoundingClientRect().height : 72;
+  document.documentElement.style.setProperty('--bar-height', Math.round(height) + 'px');
+}
+
+measureBar();
+window.addEventListener('resize', measureBar);
 
 let waiting = false;
 
@@ -808,7 +879,7 @@ function land() {
   refresh();
 }
 
-function notice(show) {
+function notice(show, message) {
   let pill = document.getElementById('live-notice');
   if (!show) { if (pill) pill.remove(); return; }
   if (pill) return;
@@ -817,15 +888,379 @@ function notice(show) {
   pill.id = 'live-notice';
   pill.className = 'live-notice';
   pill.setAttribute('role', 'status');
-  pill.textContent = 'New reply. Updating when you stop typing.';
+  pill.textContent = message || 'New reply. Updating when you stop typing.';
   document.body.appendChild(pill);
 }
 
+/*
+ * Losing contact has to be visible.
+ *
+ * Everything below this point is a way of finding out that the page is no
+ * longer current. None of it used to be able to say so. The stream carried no
+ * error handler at all, and every failure in the poll was a bare return, so a
+ * daemon that had gone away and a daemon with nothing to report produced the
+ * same page: one that looked live and was not. That is the exact state the
+ * whole mechanism exists to prevent, arriving quietly instead of loudly.
+ *
+ * The poll decides, because it is the one that gets a straight answer. A
+ * dropped stream is not evidence: EventSource reconnects on its own and a blip
+ * means nothing. Two failed fetches in a row is something to act on.
+ *
+ * What to do about it depends on which of two situations it is, and the page
+ * can tell them apart by trying. Either the daemon is gone, in which case
+ * nothing helps and saying so is the whole job. Or the daemon is fine and this
+ * browser will not make background requests to it, in which case one thing
+ * still works and the page should use it.
+ *
+ * That second case is real and not exotic. Claude Code's built-in browser
+ * loads a review over a Tailscale name, runs its inline script and stylesheet,
+ * and posts its forms, while refusing every fetch, XHR, image and stylesheet
+ * request the page makes to that same origin. Measured, all four: blocked.
+ * Only top-level navigation gets through.
+ *
+ * Which means the page there knows nothing. It cannot stream, cannot poll, and
+ * has no way to learn that a revision landed. This first shipped as a timer
+ * that reloaded every thirty seconds on that reasoning, and the reasoning was
+ * wrong twice over. A page that moves under someone reading code is worse than
+ * a page that waits, and reloading blind is not knowing something, it is
+ * guessing on a schedule and hiding the guess.
+ *
+ * So the page says what it knows, which is that it cannot tell, and hands the
+ * reviewer the one control that works. Nothing reloads unless they ask.
+ */
+
+/* Survives a reload, so a page coming back in a browser that blocks requests
+   says so at once rather than waiting to fail twice again. */
+const BLOCKED_KEY = 'reviewd_background_blocked';
+
+let missedChecks = 0;
+let offline = false;
+
+function blockedBefore() {
+  try {
+    return sessionStorage.getItem(BLOCKED_KEY) === '1';
+  } catch {
+    /* Storage can be denied on its own terms. Falling back to live mode costs
+       a browser that blocks requests its updates, and costs nothing else. */
+    return false;
+  }
+}
+
+function rememberBlocked(yes) {
+  try {
+    if (yes) sessionStorage.setItem(BLOCKED_KEY, '1');
+    else sessionStorage.removeItem(BLOCKED_KEY);
+  } catch {
+    /* Nothing to do. See above. */
+  }
+}
+
+function contactLost() {
+  if (offline) return;
+  offline = true;
+
+  /* The page loaded, so the daemon answered a navigation seconds ago. A
+     browser blocking background requests is the likelier reading of a failed
+     poll than a daemon that died in between, and it is the one the reviewer
+     can act on. */
+  const blocked = blockedBefore();
+  rememberBlocked(true);
+  showStale(blocked);
+}
+
+/*
+ * No backticks anywhere below this line: it all lives inside a template
+ * literal, and one of them ends the string and turns the rest of the page
+ * script into a syntax error.
+ */
+
+/*
+ * Says how the page is keeping up, in the bar, next to the revision number.
+ *
+ * This was a pill floating over the diff, and floating was the mistake. A pill
+ * suits something momentary; this state lasts for as long as the reviewer
+ * stays in a browser that will not make background requests, which is the
+ * whole session. A permanent overlay is a permanent hole in the code being
+ * read, and moving it around only changes which lines it hides.
+ *
+ * It is also quiet on purpose. The page is not broken, it is keeping up a
+ * slower way, and that is worth one small line rather than an interruption
+ * after every reload.
+ */
+/*
+ * This same review at 127.0.0.1, or nothing if we are already on a loopback
+ * name.
+ *
+ * Same port and same path, because the daemon that served this page is the one
+ * being addressed; only the name it is reached by changes. Built here rather
+ * than sent by the daemon, which knows what it bound to and cannot know which
+ * names a given browser will make requests to.
+ */
+function loopbackHere() {
+  /* IPv6 arrives bracketed from location.hostname in some browsers and bare in
+     others, so both spellings of ::1 reach the comparison below. */
+  const host = location.hostname.toLowerCase().replace(/^[[]|]$/g, '');
+
+  /* The names that already get the privilege, so the notice never offers to
+     take the reviewer somewhere they are. Claude Code's desktop documentation
+     names this set: localhost, any *.localhost subdomain, 127.0.0.1, and ::1.
+     The subdomain form is easy to miss and is why this is a suffix test rather
+     than three equality checks. */
+  const loopbackName =
+    host === '127.0.0.1' || host === '::1' || host === 'localhost' || host.endsWith('.localhost');
+
+  if (loopbackName) return null;
+
+  const port = location.port ? ':' + location.port : '';
+  return 'http://127.0.0.1' + port + location.pathname + location.search;
+}
+
+function showStale(knownBlocked) {
+  if (document.getElementById('keeping-up')) return;
+
+  const bar = document.querySelector('header.top');
+  if (!bar) return;
+
+  const note = document.createElement('span');
+  note.id = 'keeping-up';
+  note.className = 'keeping-up';
+  /* status, not alert. This reads once when it appears and never interrupts
+     again, which is right for something that describes the page rather than
+     the review. */
+  note.setAttribute('role', 'status');
+
+  const what = document.createElement('span');
+  what.className = 'what';
+  /* What is true, not what the page intends to do about it. It cannot tell
+     whether anything has changed, so it does not imply that it can. */
+  what.textContent = 'Not live';
+  note.appendChild(what);
+
+  const sameReviewOnLoopback = loopbackHere();
+
+  /* The full sentence lives here rather than on screen, so the bar stays a bar
+     and the explanation is one hover or one screen reader away. */
+  note.title = sameReviewOnLoopback
+    ? 'This browser only makes background requests to localhost, so this page cannot see new revisions or comments. Open the same review on localhost and it updates by itself.'
+    : knownBlocked
+      ? 'This browser blocks background requests to reviewd, so this page cannot see new revisions or comments. Refresh to catch up.'
+      : 'Lost contact with reviewd, so this page cannot see new revisions or comments. Refresh to catch up.';
+
+  /*
+   * The link that actually fixes it, when there is one.
+   *
+   * Measured in Claude Code's built-in browser: it permits background requests
+   * to a loopback host and refuses them to every other name. Not to a loopback
+   * address, to the name. The control was a server on 127.0.0.1:7788 reached
+   * as localtest.me, a public name resolving to 127.0.0.1: allowed by address,
+   * blocked by name. So editing hosts does not help and changing the address
+   * bar does.
+   *
+   * Which browser this is, and whether it sits on the same machine as the
+   * daemon, are both things the page cannot ask. It does not have to. The
+   * offer only appears once background requests have already failed, and a
+   * browser that makes them normally never sees it. The situation selects its
+   * own audience, so the page can suggest instead of detect.
+   */
+  if (sameReviewOnLoopback) {
+    const local = document.createElement('a');
+    local.className = 'refresh';
+    local.href = sameReviewOnLoopback;
+    local.textContent = 'Open on localhost';
+    note.appendChild(local);
+  }
+
+  /* A real control rather than a countdown.
+     The reviewer is reading code. Moving the page under them on a timer, to
+     fetch something the page has no evidence exists, takes a decision that is
+     theirs and gives back a lost scroll position. This says the page is behind
+     and lets them choose the moment. */
+  const refresh = document.createElement('button');
+  refresh.type = 'button';
+  refresh.className = 'refresh';
+  refresh.textContent = 'Refresh';
+  refresh.addEventListener('click', () => location.reload());
+  note.appendChild(refresh);
+
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'dismiss';
+  close.setAttribute('aria-label', 'Hide this notice');
+  close.textContent = '×';
+  close.addEventListener('click', () => note.remove());
+  note.appendChild(close);
+
+  bar.appendChild(note);
+}
+
+function contactMade() {
+  missedChecks = 0;
+  rememberBlocked(false);
+  if (!offline) return;
+  offline = false;
+
+  const note = document.getElementById('keeping-up');
+  if (note) note.remove();
+}
+
+/* Two in a row, so one dropped packet does not cry wolf. A browser already
+   known to block requests does not get the benefit of the doubt twice. */
+function checkFailed() {
+  missedChecks += 1;
+  if (missedChecks >= 2 || blockedBefore()) contactLost();
+}
+
 const liveMain = document.getElementById('main');
+
+/* Reachable from a console on purpose. Diagnosing a page that had stopped
+   updating meant opening a second EventSource from the console to guess at the
+   state of the first, because this one was scoped inside the block below and
+   nothing outside could see it. */
+let liveStream = null;
+
 if (liveMain && liveMain.dataset.review && 'EventSource' in window) {
   const source = new EventSource('/r/' + liveMain.dataset.review + '/events');
+  liveStream = source;
+  window.reviewdLive = {
+    stream: source,
+    state: () => ['connecting', 'open', 'closed'][source.readyState],
+    blocked: blockedBefore,
+    check: checkForChanges,
+  };
   source.addEventListener('threads', land);
   source.addEventListener('gone', () => { source.close(); location.reload(); });
+
+  /* The stream retrying is its own business, so this does not report anything.
+     What it means is that the fast path is down and the poll is now the only
+     thing watching, so ask the poll straight away rather than waiting out its
+     interval. Throttled, because a stream that cannot connect at all fires
+     this over and over. */
+  let lastErrorCheck = 0;
+  source.addEventListener('error', () => {
+    const at = Date.now();
+    if (at - lastErrorCheck < 5000) return;
+    lastErrorCheck = at;
+    checkForChanges();
+  });
+
+  // A new revision is the case a stale page handles worst: the code on screen
+  // has been replaced and the approve button is about to describe a revision
+  // the reviewer never read. Refreshing turns that into the page catching up,
+  // which is the only version of "the page still works" worth having.
+  source.addEventListener('revision', (event) => {
+    settled = 'Now showing revision ' + (event.data || '') + '.';
+    notice(true, 'The agent pushed revision ' + (event.data || '') + '. Updating this page.');
+    land();
+  });
+
+  // A phone that slept, or a network that dropped, misses events entirely.
+  // EventSource reconnects on its own; the first connect is the page load, and
+  // every one after it is a gap worth closing with a refresh.
+  let connected = false;
+  source.addEventListener('open', () => {
+    if (connected) land();
+    connected = true;
+  });
+}
+
+/*
+ * Asking, as well as being told.
+ *
+ * The event stream is the fast path and it is not a reliable one: an in-app
+ * webview may never open it, a phone that sleeps drops it, and a proxy can hold
+ * it. When that happens silently the page sits on code that has been replaced,
+ * which is the failure this whole mechanism exists to prevent, so it cannot
+ * rest on a connection staying up.
+ *
+ * Polling is the floor. One small request every fifteen seconds, and an
+ * immediate one whenever the reviewer comes back to the tab, which is the case
+ * a phone actually hits. The activity stamp is deliberately not compared: the
+ * refresh is itself a GET on this page and stamps it, so keying on it would
+ * make the page refresh forever.
+ */
+function renderedState() {
+  const carrier = document.getElementById('page-token');
+  if (!carrier) return null;
+  return {
+    seq: Number(carrier.dataset.revision),
+    awaiting: Number(carrier.dataset.awaiting),
+    submitted: Number(carrier.dataset.submitted),
+  };
+}
+
+/*
+ * How old the token on this page is.
+ *
+ * Renewing a token on its own would be the wrong fix for a page whose content
+ * has moved on: it would let an approval succeed while the reviewer is still
+ * reading the revision it replaced, which is the thing the pin exists to catch.
+ *
+ * A page nobody has changed under is the opposite case. The content is still
+ * accurate and only the token has aged, so refusing there is friction with
+ * nothing behind it. Refreshing well before the daemon's limit renews the token
+ * the only honest way, by fetching the page it belongs to.
+ */
+const TOKEN_RENEW_MS = 6 * 60 * 60 * 1000;
+
+function tokenAgeMs() {
+  const carrier = document.getElementById('page-token');
+  if (!carrier) return 0;
+
+  const issued = Number(String(carrier.value).split('.')[0]);
+  return Number.isFinite(issued) ? Date.now() - issued : 0;
+}
+
+async function checkForChanges() {
+  const was = renderedState();
+  if (!was || !liveMain || !liveMain.dataset.review) return;
+
+  let now;
+  try {
+    const response = await fetch('/api/reviews/' + liveMain.dataset.review);
+    if (!response.ok) { checkFailed(); return; }
+    const review = await response.json();
+    now = {
+      seq: review.snapshotSeq,
+      awaiting: review.threadsAwaitingHuman,
+      submitted: review.lastSubmissionAt,
+    };
+  } catch {
+    checkFailed();
+    return;
+  }
+
+  contactMade();
+
+  if (now.seq !== was.seq) {
+    settled = 'Now showing revision ' + now.seq + '.';
+    notice(true, 'The agent pushed revision ' + now.seq + '. Updating this page.');
+    land();
+    return;
+  }
+
+  /* A submission made in another browser. The turn counts cannot see this:
+     the reviewer's own note makes it the agent's turn, so it moves the agent
+     count and not the human one, and a second note on a thread already the
+     agent's moves neither. A review open on a laptop and a phone showed the
+     laptop's notes on the phone only when an agent happened to write. */
+  if (now.submitted !== was.submitted || now.awaiting !== was.awaiting) {
+    land();
+    return;
+  }
+
+  if (tokenAgeMs() > TOKEN_RENEW_MS) land();
+}
+
+if (liveMain && liveMain.dataset.review) {
+  setInterval(() => {
+    if (!document.hidden) checkForChanges();
+  }, 15000);
+
+  // Coming back to the tab is the moment a stale page is most likely and most
+  // visible, so that check does not wait for the next tick.
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) checkForChanges();
+  });
 }
 
 /* ---- how tall the submit bar actually is ------------------------------ */
@@ -1009,6 +1444,13 @@ document.addEventListener('click', (event) => {
     return;
   }
 
+  // Without a token the built form would be refused, so let the link navigate
+  // to the box the server renders, which carries one. Degrading to the slower
+  // path beats opening a comment box that cannot save.
+  const carrier = document.getElementById('page-token');
+  const token = carrier ? carrier.value : '';
+  if (!token) return;
+
   event.preventDefault();
 
   const url = new URL(link.href);
@@ -1025,6 +1467,7 @@ document.addEventListener('click', (event) => {
   form.className = 'thread';
 
   for (const [name, value] of [
+    ['token', token],
     ['sourceId', sourceId],
     ['path', path],
     ['side', side],

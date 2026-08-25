@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { z } from 'zod'
 import {
   createThreadRequest,
   replyRequest,
@@ -13,9 +14,20 @@ import {
   replyToThread,
   setThreadState,
   submitReview,
-  unapprove,
   type ThreadFilter,
 } from '../threads.js'
+
+/**
+ * Local rather than in protocol.ts because nothing off this route speaks it.
+ * The state itself is protocol and comes from there; the note is a line the
+ * reviewer typed on the way past, and no other client needs a name for the
+ * pair. It is a schema at all because a hand-written cast validates nothing —
+ * it only tells the compiler to stop asking.
+ */
+const threadStateRequest = z.object({
+  state: threadState,
+  note: z.string().optional(),
+})
 
 /**
  * Thread, message, and submission routes.
@@ -27,11 +39,22 @@ import {
 export function threadRoutes(deps: Deps): Hono {
   const routes = new Hono()
 
+  // Authorship comes from which door the message arrived through, never from
+  // the message. This is the agent's door, so everything through it is the
+  // agent's, and a body claiming otherwise cannot make the page render "you"
+  // over words the reviewer never wrote.
   routes.post('/api/reviews/:id/threads', async (c) => {
-    const parsed = createThreadRequest.safeParse(await c.req.json())
+    // A body that is not JSON is the schema's problem, not the parser's: left
+    // to throw, `{oops` escapes to app.onError and comes back a 500 carrying a
+    // parser message, when what the caller sent was simply an invalid request.
+    const body: unknown = await c.req.json().catch(() => ({}))
+    const parsed = createThreadRequest.safeParse(body)
     if (!parsed.success) return c.json({ error: describe(parsed.error.issues) }, 400)
 
-    return c.json(await createThread(deps, c.req.param('id'), parsed.data), 201)
+    return c.json(
+      await createThread(deps, c.req.param('id'), { ...parsed.data, author: 'agent' }),
+      201,
+    )
   })
 
   routes.get('/api/reviews/:id/threads', async (c) => {
@@ -48,36 +71,48 @@ export function threadRoutes(deps: Deps): Hono {
   })
 
   routes.post('/api/threads/:id/replies', async (c) => {
-    const parsed = replyRequest.safeParse(await c.req.json())
+    const body: unknown = await c.req.json().catch(() => ({}))
+    const parsed = replyRequest.safeParse(body)
     if (!parsed.success) return c.json({ error: describe(parsed.error.issues) }, 400)
 
-    return c.json(
-      await replyToThread(deps, c.req.param('id'), parsed.data.body, parsed.data.author),
-    )
+    return c.json(await replyToThread(deps, c.req.param('id'), parsed.data.body, 'agent'))
   })
 
   routes.put('/api/threads/:id/state', async (c) => {
-    const body = (await c.req.json()) as { state?: unknown; note?: unknown }
-    const parsed = threadState.safeParse(body.state)
-    if (!parsed.success)
-      return c.json({ error: 'state must be active, resolved, or outdated' }, 400)
+    const body: unknown = await c.req.json().catch(() => ({}))
+    const parsed = threadStateRequest.safeParse(body)
+    if (!parsed.success) return c.json({ error: describe(parsed.error.issues) }, 400)
 
-    const note = typeof body.note === 'string' ? body.note : undefined
-    return c.json(await setThreadState(deps, c.req.param('id'), parsed.data, note))
+    return c.json(
+      await setThreadState(deps, c.req.param('id'), parsed.data.state, parsed.data.note),
+    )
   })
 
   // One submission sends every draft at once, so a wait fires once here rather
   // than once per comment.
+  //
+  // A verdict is the reviewer's, and this API is what the agent holds, so the
+  // two verdicts that only report ("I wrote notes", "I want changes") are
+  // allowed here and approval is not. Approving happens through the review page
+  // and its token, which the agent has no copy of. Without this split the gate
+  // is decorative: the process being gated could clear itself with one call.
   routes.post('/api/reviews/:id/submissions', async (c) => {
-    const parsed = submitRequest.safeParse(await c.req.json())
+    const body: unknown = await c.req.json().catch(() => ({}))
+    const parsed = submitRequest.safeParse(body)
     if (!parsed.success) return c.json({ error: describe(parsed.error.issues) }, 400)
+
+    if (parsed.data.verdict === 'approved') {
+      return c.json(
+        {
+          error:
+            'Approval comes from the review page, not from the API. Open the review and approve there.',
+        },
+        403,
+      )
+    }
 
     return c.json(await submitReview(deps, c.req.param('id'), parsed.data.verdict), 201)
   })
-
-  routes.delete('/api/reviews/:id/approval', async (c) =>
-    c.json(await unapprove(deps, c.req.param('id'))),
-  )
 
   routes.onError((error, c) => {
     if (error instanceof ReviewError) return c.json({ error: error.message }, error.status)

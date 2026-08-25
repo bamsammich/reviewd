@@ -19,6 +19,7 @@ function summary(overrides: Partial<ReviewSummary> = {}): ReviewSummary {
     fileCount: 1,
     threadsAwaitingAgent: 0,
     threadsAwaitingHuman: 0,
+    lastSubmissionAt: 0,
     sources: [
       {
         id: SOURCE,
@@ -56,7 +57,6 @@ function thread(overrides: Partial<Thread> = {}): Thread {
     side: 'new',
     line: 1,
     endLine: null,
-    anchorLine: 'const a = 2',
     state: 'active',
     origin: 'human',
     turn: 'agent',
@@ -72,8 +72,12 @@ function thread(overrides: Partial<Thread> = {}): Thread {
 function fileTag(markup: string, path: string): string {
   // Matched by the fold key wherever it sits in the tag, rather than by the
   // exact order of attributes, which is not what any of these tests are about.
+  // `\s` rather than a literal space after the tag name for the same reason:
+  // these templates are formatted by prettier, which is free to put each
+  // attribute on its own line, and it did. Three tests failed on the newline
+  // while the page they were checking rendered correctly.
   const key = foldKey(SOURCE, path)
-  const match = markup.match(new RegExp(`<details [^>]*data-fold="${key}"[^>]*>`))
+  const match = markup.match(new RegExp(`<details\\s[^>]*data-fold="${key}"[^>]*>`))
   return match?.[0] ?? ''
 }
 
@@ -167,6 +171,255 @@ describe('blank diff halves against the empty-state message', () => {
 })
 
 /**
+ * A page that has stopped being live has to say so.
+ *
+ * Reported from a real review rather than found here: a revision landed, a
+ * reply landed, and the open page showed neither until it was reloaded by
+ * hand. The daemon was doing its part — the stream emits `revision` and
+ * `threads` the instant either happens, and heartbeats between them — so the
+ * failure was entirely in the page, and it was a silent one. The stream had no
+ * `error` listener, and every failure path in the poll below it was a bare
+ * `return`. A daemon that had gone away and a daemon with nothing to say
+ * produced the same page.
+ *
+ * These assert on the script the page ships, which is a coarse instrument. It
+ * is the one available without a browser, and it holds the property that
+ * actually broke: that a failure reaches something which can report it.
+ */
+describe('losing contact with the daemon', () => {
+  const script = (): string => reviewPage(summary(), [file('src/a.ts')], []).value
+
+  /** The poll, sliced out of the script so a match cannot come from elsewhere. */
+  const poll = (markup: string): string =>
+    markup.slice(
+      markup.indexOf('async function checkForChanges'),
+      markup.indexOf('function markCurrentFile'),
+    )
+
+  it('watches the event stream for failure', () => {
+    expect(script()).toContain("source.addEventListener('error'")
+  })
+
+  it('reports a poll that could not reach the daemon, either way it can fail', () => {
+    const body = poll(script())
+
+    // A non-OK answer and a thrown fetch are different failures and both were
+    // a bare return. Neither may be one again.
+    expect(body).toMatch(/if \(!response\.ok\) \{ checkFailed\(\); return; \}/)
+    expect(body).toMatch(/catch \{\s*checkFailed\(\);\s*return;\s*\}/)
+  })
+
+  it('does not consult the draft state at all, and leaves that to land()', () => {
+    const body = poll(script())
+
+    // This used to return early while a textarea held anything, so a page
+    // could not notice it had gone stale for as long as a draft sat there.
+    // land() already defers correctly and retries every two seconds, so the
+    // poll now has no opinion about typing and every path goes through it.
+    expect(body).not.toContain('busyWriting()')
+    expect(body).toContain('land()')
+  })
+
+  it('ships somewhere to say so, and a rule to draw it', () => {
+    const markup = script()
+
+    expect(markup).toContain('keeping-up')
+    expect(markup).toMatch(/header\.top \.keeping-up\s*\{/)
+  })
+
+  /**
+   * The status goes in the bar, never over the diff.
+   *
+   * It started as a pill floating above the action bar and that was wrong for
+   * a reason the first screenshot made obvious: in a browser that blocks
+   * background requests this state never ends, and a permanent overlay is a
+   * permanent hole in the code being read. Moving it left only changed which
+   * lines it covered.
+   */
+  it('puts the status in the header rather than on top of the code', () => {
+    const markup = script()
+
+    expect(markup).toContain('bar.appendChild(note)')
+    expect(markup).not.toMatch(/document\.body\.appendChild\(note\)/)
+    // The transient "updating when you stop typing" pill is a different thing
+    // and stays an overlay, because it lasts a moment.
+    expect(markup).toContain('document.body.appendChild(pill)')
+  })
+
+  it('survives the refresh that replaces the header it lives in', () => {
+    const markup = script()
+    const fn = markup.slice(markup.indexOf('async function refresh'), markup.indexOf('let settled'))
+
+    // refresh() swaps header.top wholesale for a freshly rendered one, which
+    // does not carry the status. Without this it vanishes on the first refresh
+    // and the page goes back to looking live while it is not.
+    expect(fn).toMatch(/if \(offline\) showStale\(blockedBefore\(\)\)/)
+  })
+
+  it('lets the reviewer hide the notice', () => {
+    const markup = script()
+
+    expect(markup).toContain("close.className = 'dismiss'")
+    expect(markup).toMatch(/close\.addEventListener\('click', \(\) => note\.remove\(\)\)/)
+  })
+})
+
+/**
+ * A browser that refuses to make background requests.
+ *
+ * Claude Code's built-in browser loads a review over a Tailscale name, runs
+ * its inline script, and posts its forms, while blocking every fetch, XHR,
+ * image and stylesheet the page asks for from that same origin. All four
+ * measured, all four blocked, while curl against the identical URL answers
+ * 200 and the response headers are byte-identical to the loopback ones.
+ *
+ * So the page is not broken there, it has one channel left. Top-level
+ * navigation still works, which makes a reload the way those browsers keep up.
+ */
+describe('a browser that blocks background requests', () => {
+  const script = (): string => reviewPage(summary(), [file('src/a.ts')], []).value
+
+  it('offers a refresh the reviewer drives', () => {
+    const markup = script()
+
+    expect(markup).toContain("refresh.textContent = 'Refresh'")
+    expect(markup).toContain('location.reload()')
+  })
+
+  /**
+   * Nothing reloads on a timer.
+   *
+   * This first shipped reloading every thirty seconds whenever background
+   * requests were blocked, on the reasoning that a reload was the one channel
+   * left. Both halves were wrong. The page has no evidence anything changed,
+   * so a timed reload is a guess on a schedule; and a page that moves under
+   * someone reading code takes a decision that belongs to them and costs them
+   * their place. It says it is behind and lets them pick the moment.
+   */
+  it('never moves the page on its own', () => {
+    const markup = script()
+
+    expect(markup).not.toContain('scheduleReload')
+    expect(markup).not.toContain('reloadTimer')
+    // The only reload is the one wired to the button.
+    expect(markup.match(/location\.reload\(\)/g)?.length).toBe(2)
+  })
+
+  /**
+   * The one link that fixes it, offered without having to detect anything.
+   *
+   * Claude Code's built-in browser permits background requests to a loopback
+   * host and refuses them to every other name. The control was a server on
+   * 127.0.0.1:7788 reached as localtest.me, a public name that resolves to
+   * 127.0.0.1: allowed by address, blocked by name. So the address bar is the
+   * fix and an /etc/hosts entry is not.
+   *
+   * The page cannot ask which browser it is in or whether the daemon is on
+   * this machine. It does not need to: the offer appears only after background
+   * requests have already failed, which is a situation that selects its own
+   * audience.
+   */
+  it('offers the same review on loopback, where those requests are permitted', () => {
+    const markup = script()
+
+    expect(markup).toContain("local.textContent = 'Open on localhost'")
+    expect(markup).toContain('function loopbackHere')
+  })
+
+  it('keeps the port and path, changing only the name', () => {
+    const markup = script()
+    const fn = markup.slice(
+      markup.indexOf('function loopbackHere'),
+      markup.indexOf('function showStale'),
+    )
+
+    expect(fn).toContain('location.pathname')
+    expect(fn).toContain('location.port')
+  })
+
+  it('offers nothing when the page is already on a loopback name', () => {
+    const markup = script()
+    const fn = markup.slice(
+      markup.indexOf('function loopbackHere'),
+      markup.indexOf('function showStale'),
+    )
+
+    // Otherwise the notice offers to take the reviewer where they already are.
+    // The privileged set is the one Claude Code's desktop documentation names:
+    // localhost, any *.localhost subdomain, 127.0.0.1, and ::1. The subdomain
+    // form is the one easily missed.
+    expect(fn).toContain("host === '127.0.0.1'")
+    expect(fn).toContain("host === '::1'")
+    expect(fn).toContain("host === 'localhost'")
+    expect(fn).toContain("host.endsWith('.localhost')")
+    expect(fn).toContain('return null')
+  })
+
+  it('says what is true rather than what it intends to do', () => {
+    const markup = script()
+
+    // It cannot tell whether anything changed, so it must not imply it can.
+    expect(markup).toContain("what.textContent = 'Not live'")
+    expect(markup).not.toContain('Refreshing every')
+  })
+
+  it('remembers across a reload that this browser blocks requests', () => {
+    const markup = script()
+
+    // Without this the page comes back, starts the two-failure count over, and
+    // reloads again on a whim rather than because it learned anything.
+    expect(markup).toContain('reviewd_background_blocked')
+    expect(markup).toContain('sessionStorage')
+  })
+
+  it('survives storage being denied rather than failing the page', () => {
+    const markup = script()
+    const fn = markup.slice(
+      markup.indexOf('function blockedBefore'),
+      markup.indexOf('function rememberBlocked'),
+    )
+
+    expect(fn).toContain('catch')
+  })
+})
+
+describe('the live stream is reachable for diagnosis', () => {
+  it('hangs the stream off the page rather than sealing it in a block', () => {
+    const markup = reviewPage(summary(), [file('src/a.ts')], []).value
+
+    // Diagnosing a page that had stopped updating meant opening a second
+    // EventSource from the console to guess at the state of the first.
+    expect(markup).toContain('window.reviewdLive')
+  })
+})
+
+/**
+ * The one place in these templates where whitespace is content.
+ *
+ * Everything else the page emits is markup, where a newline between attributes
+ * or tags means nothing, so prettier is free to reflow it and does. Inside the
+ * code cell it is the reviewer's own indentation, and a formatter that broke
+ * `<span class="t">${code}</span>` across lines would quietly add spaces to
+ * every line of every diff. Nothing failed when prettier last reflowed this
+ * file, which is the problem: only three tests noticed, by matching a regex
+ * against an unrelated tag.
+ */
+describe('indentation in the code cell', () => {
+  const indented = (): FileView => ({
+    ...file('src/a.ts'),
+    oldText: 'fn()\n',
+    newText: 'fn()\n\tif (x) {\n        deeply()\n',
+  })
+
+  it('renders a line byte for byte, leading whitespace included', () => {
+    const markup = reviewPage(summary(), [indented()], []).value
+
+    expect(markup).toContain('<span class="t">\tif (x) {</span>')
+    expect(markup).toContain('<span class="t">        deeply()</span>')
+  })
+})
+
+/**
  * Reported from the page rather than found in a test: one comment drawn twice.
  *
  * An insertion pushes the new-side numbering ahead of the old. While both
@@ -181,11 +434,9 @@ describe('a comment near an insertion', () => {
     newText: 'a\nINSERTED\nb\nc\n',
   })
 
-  const at = (side: 'old' | 'new', line: number) =>
-    thread({ side, line, anchorLine: side === 'new' && line === 2 ? 'INSERTED' : 'b' })
+  const at = (side: 'old' | 'new', line: number) => thread({ side, line })
 
-  const count = (markup: string, id: string) =>
-    markup.split(`id="t-${id}"`).length - 1
+  const count = (markup: string, id: string) => markup.split(`id="t-${id}"`).length - 1
 
   it('draws it once', () => {
     const markup = reviewPage(summary(), [inserted()], [at('new', 2)]).value
@@ -395,9 +646,10 @@ describe('the file tree in the rail', () => {
     const markup = reviewPage(summary(), many, []).value
 
     const rail = [...markup.matchAll(/data-tree-file="([^"]+)"/g)].map((m) => m[1])
-    const diff = [...markup.matchAll(/<details class="file" id="file-([^"]+)"/g)].map(
-      (m) => m[1],
-    )
+    // Attributes are matched wherever they sit in the tag rather than in one
+    // exact order on one line. Prettier is free to put each on its own line
+    // and does, which broke this while the page it checks rendered correctly.
+    const diff = [...markup.matchAll(/<details\s[^>]*id="file-([^"]+)"/g)].map((m) => m[1])
 
     expect(rail).toHaveLength(many.length)
     expect(rail).toEqual(diff)

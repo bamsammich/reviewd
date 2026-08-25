@@ -49,7 +49,6 @@ async function reviewWithFile() {
   await putBlob(deps, blobId, content)
 
   await createSnapshot(deps, review.reviewId, {
-    fingerprints: { [review.sources[0]!.id]: 'fp-1' },
     files: [
       {
         sourceId: review.sources[0]!.id,
@@ -58,6 +57,8 @@ async function reviewWithFile() {
         oldPath: null,
         oldBlobId: null,
         newBlobId: blobId,
+        oldHash: null,
+        newHash: blobId,
         isBinary: false,
         truncated: false,
       },
@@ -253,9 +254,16 @@ describe('approval', () => {
 
     const approvals = await ctx.db.selectFrom('approval').selectAll().execute()
     expect(approvals).toHaveLength(1)
+    // The stored value is the one the daemon derived from the snapshot's rows,
+    // which is the only thing the gate will accept later.
+    const snapshotSource = await ctx.db
+      .selectFrom('snapshot_source')
+      .selectAll()
+      .executeTakeFirstOrThrow()
+
     expect(approvals[0]).toMatchObject({
       root_path: '/tmp/repo',
-      fingerprint: 'fp-1',
+      fingerprint: snapshotSource.fingerprint,
       consumed_at: null,
     })
 
@@ -384,6 +392,63 @@ describe('what reaches an open review page', () => {
     await settle()
 
     expect(seen).toEqual([])
+  })
+})
+
+describe('message numbering', () => {
+  it('gives two replies landing together their own place in the thread', async () => {
+    const review = await reviewWithFile()
+    const { threadId } = await humanThread(review.reviewId)
+
+    // Two replies in flight at once. The sequence is derived inside the insert
+    // so that message_thread_seq_unique holds on its own terms rather than on
+    // Kysely serializing transactions over one SQLite connection.
+    await Promise.all([
+      replyToThread(deps, threadId, 'first', 'agent'),
+      replyToThread(deps, threadId, 'second', 'agent'),
+    ])
+
+    const messages = await ctx.db
+      .selectFrom('message')
+      .selectAll()
+      .where('thread_id', '=', threadId)
+      .orderBy('seq')
+      .execute()
+
+    expect(messages.map((m) => m.seq)).toEqual([1, 2, 3])
+  })
+
+  it('still drafts the reviewer and submits the agent on write', async () => {
+    const review = await reviewWithFile()
+    const { threadId } = await humanThread(review.reviewId)
+    await replyToThread(deps, threadId, 'on it', 'agent')
+    await replyToThread(deps, threadId, 'thanks', 'human')
+
+    const messages = await ctx.db
+      .selectFrom('message')
+      .selectAll()
+      .where('thread_id', '=', threadId)
+      .orderBy('seq')
+      .execute()
+
+    expect(messages.map((m) => [m.author, m.submitted_at === null])).toEqual([
+      ['human', true],
+      ['agent', false],
+      ['human', true],
+    ])
+  })
+})
+
+describe('a wait nobody is listening to', () => {
+  it('ends at once when the signal has already fired', async () => {
+    const controller = new AbortController()
+    controller.abort()
+
+    // The timeout `reviewd wait` passes. A listener added to a signal that has
+    // already fired never hears `abort`, so this used to park for the full half
+    // hour — a timer and an emitter listener held for a client that hung up
+    // while the handler was still querying the database.
+    await expect(bus.wait('any-review', 1_800_000, controller.signal)).resolves.toBeNull()
   })
 })
 

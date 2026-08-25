@@ -63,16 +63,17 @@ export function waitRoutes(deps: Deps & { bus: Bus }): Hono {
  * The next event a waiting agent should actually wake for.
  *
  * The bus carries one channel per review, and the review page listens on the
- * same one for the agent's own comments. Those must not surface here: waking
- * an agent because it wrote something itself would end a wait with no verdict
- * to report, which reads to the caller as approval it never got.
+ * same one for the agent's own comments and for the revisions it pushes. Those
+ * must not surface here: waking an agent because it did something itself would
+ * end a wait with no verdict to report, which reads to the caller as approval
+ * it never got.
  */
 async function nextVerdict(
   bus: Bus,
   reviewId: string,
   timeout: number,
   signal: AbortSignal,
-): Promise<Exclude<ReviewEvent, { kind: 'thread' }> | null> {
+): Promise<Exclude<ReviewEvent, { kind: 'thread' } | { kind: 'snapshot' }> | null> {
   const deadline = Date.now() + timeout
 
   for (;;) {
@@ -81,7 +82,7 @@ async function nextVerdict(
 
     const event = await bus.wait(reviewId, remaining, signal)
     if (!event) return null
-    if (event.kind !== 'thread') return event
+    if (event.kind !== 'thread' && event.kind !== 'snapshot') return event
   }
 }
 

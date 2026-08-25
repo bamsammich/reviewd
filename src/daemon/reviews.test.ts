@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { manifestFingerprint } from '../fingerprint.js'
+import type { FileChangeSpec } from '../protocol.js'
 import { configSchema, resolve, type ResolvedConfig } from './config.js'
 import { tempDatabase, type TempDatabase } from './db/testing.js'
 import {
@@ -41,6 +43,22 @@ async function upload(text: string): Promise<string> {
   const id = sha256(content)
   await putBlob(deps, id, content)
   return id
+}
+
+/** One added file, spelled the same way every time the fingerprint is at issue. */
+function fileOf(sourceId: string, path: string, blobId: string): FileChangeSpec {
+  return {
+    sourceId,
+    path,
+    changeType: 'added',
+    oldPath: null,
+    oldBlobId: null,
+    newBlobId: blobId,
+    oldHash: null,
+    newHash: blobId,
+    isBinary: false,
+    truncated: false,
+  }
 }
 
 /** Two roots, because multi-root is the case that shapes the schema. */
@@ -101,6 +119,24 @@ describe('blobs', () => {
 
     const read = await readBlob(ctx.db, id)
     expect(read?.bytes.toString('utf8')).toBe('hello')
+  })
+
+  it('survives two uploads of the same content racing each other', async () => {
+    // A snapshot uploads in parallel, and a check-then-insert let both callers
+    // find no row and both insert, the loser surfacing a primary key violation
+    // as a 500 on a request that had done nothing wrong.
+    const content = bytes('uploaded twice at once')
+    const id = sha256(content)
+
+    const results = await Promise.all([
+      putBlob(deps, id, content),
+      putBlob(deps, id, content),
+      putBlob(deps, id, content),
+    ])
+
+    // Exactly one wrote the row; the others are the no-ops they should be.
+    expect(results.filter((r) => r.stored)).toHaveLength(1)
+    expect(await readBlob(ctx.db, id)).toMatchObject({ size: content.byteLength })
   })
 
   it('refuses content that does not hash to the id it was filed under', async () => {
@@ -173,28 +209,55 @@ describe('createSnapshot', () => {
   it('keeps a fingerprint per source, because the gate asks about one root', async () => {
     const review = await twoRootReview()
 
+    const dotfiles = bytes('dotfiles content')
+    const claude = bytes('claude content')
+    await putBlob(deps, sha256(dotfiles), dotfiles)
+    await putBlob(deps, sha256(claude), claude)
+
     await createSnapshot(deps, review.reviewId, {
-      fingerprints: {
-        [review.sources[0]!.id]: 'fp-dotfiles',
-        [review.sources[1]!.id]: 'fp-claude',
-      },
-      files: [],
+      files: [
+        fileOf(review.sources[0]!.id, 'a.ts', sha256(dotfiles)),
+        fileOf(review.sources[1]!.id, 'b.ts', sha256(claude)),
+      ],
     })
 
     const rows = await ctx.db.selectFrom('snapshot_source').selectAll().execute()
     expect(rows).toHaveLength(2)
-    expect(rows.map((r) => r.fingerprint).sort()).toEqual(['fp-claude', 'fp-dotfiles'])
+
+    // Each root's value follows from that root's files alone, so approving one
+    // says nothing about the other.
+    const bySource = new Map(rows.map((r) => [r.source_id, r.fingerprint]))
+    expect(bySource.get(review.sources[0]!.id)).toBe(
+      manifestFingerprint([fileOf(review.sources[0]!.id, 'a.ts', sha256(dotfiles))]),
+    )
+    expect(bySource.get(review.sources[0]!.id)).not.toBe(bySource.get(review.sources[1]!.id))
   })
 
-  it('refuses a manifest missing a fingerprint for one of its roots', async () => {
+  it('derives the fingerprint from content, ignoring anything the client sent', async () => {
+    // The reason this matters: a client that could name the fingerprint could
+    // show the reviewer one change set and have the approval cover another.
     const review = await twoRootReview()
 
-    await expect(
-      createSnapshot(deps, review.reviewId, {
-        fingerprints: { [review.sources[0]!.id]: 'only-one' },
-        files: [],
-      }),
-    ).rejects.toThrow(/no fingerprint for source/)
+    const content = bytes('what the reviewer will read')
+    await putBlob(deps, sha256(content), content)
+
+    const files = [
+      fileOf(review.sources[0]!.id, 'a.ts', sha256(content)),
+      fileOf(review.sources[1]!.id, 'b.ts', sha256(content)),
+    ]
+
+    await createSnapshot(deps, review.reviewId, {
+      // A fingerprint field is not on the manifest schema any more; sending one
+      // anyway must not reach the stored value.
+      ...({ fingerprints: { [review.sources[0]!.id]: 'attacker-chosen' } } as object),
+      files,
+    })
+
+    const rows = await ctx.db.selectFrom('snapshot_source').selectAll().execute()
+    expect(rows.map((r) => r.fingerprint)).not.toContain('attacker-chosen')
+    expect(rows.find((r) => r.source_id === review.sources[0]!.id)?.fingerprint).toBe(
+      manifestFingerprint([fileOf(review.sources[0]!.id, 'a.ts', sha256(content))]),
+    )
   })
 
   it('refuses a manifest referencing bytes nobody uploaded', async () => {

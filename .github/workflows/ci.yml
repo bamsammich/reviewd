@@ -17,4 +17,14 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run typecheck
+      - run: npm run lint
+      # The repository ships a prettier config, so an outside contributor's
+      # editor formats on save. Without this the config was advisory and a third
+      # of the tree disagreed with it, which turns every first PR into a diff
+      # full of churn nobody asked for.
+      - run: npm run format:check
       - run: npm test
+      # The commit gate is a shell script with its own tests and no other way to
+      # find out it broke. jq is what the hook itself refuses to run without.
+      - run: sudo apt-get install -y jq
+      - run: bash plugin/hooks/reviewd-gate.test.sh

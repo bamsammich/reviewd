@@ -485,10 +485,51 @@ main.with-bar { padding-bottom: 7.5rem; }
    cannot refresh itself: the reviewer is mid-sentence. */
 .live-notice {
   position: fixed; left: 50%; transform: translateX(-50%);
-  bottom: calc(var(--bar-height, 4.5rem) + .75rem); z-index: 20;
+  bottom: calc(var(--bar-height, 4.5rem) + .75rem); z-index: 40;
   background: var(--accent); color: var(--accent-ink);
   font-size: .8rem; padding: .45rem .8rem; border-radius: 999px;
   box-shadow: 0 2px 10px rgb(0 0 0 / .25); max-width: calc(100vw - 2rem);
+}
+
+/* How the page is keeping up, when the answer is not "live".
+
+   In the bar rather than floating over the diff. It was a pill like the one
+   above, and that was wrong for a different reason than it looked: the pill is
+   for something momentary, and this state lasts as long as the reviewer stays
+   in a browser that blocks background requests. A permanent overlay is a
+   permanent hole in the code you are reading, and moving it around the screen
+   only changes which lines it covers. So it stops being an overlay. */
+header.top .keeping-up {
+  flex: 0 0 auto; display: inline-flex; align-items: center; gap: .35rem;
+  font-size: .75rem; color: var(--warn-ink, #b98900);
+  border: 1px solid currentColor; border-radius: 999px;
+  padding: .1rem .2rem .1rem .5rem; max-width: 45vw;
+}
+header.top .keeping-up .what {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+header.top .keeping-up .refresh,
+header.top .keeping-up .dismiss {
+  flex: none; background: none; border: 0; color: inherit; cursor: pointer;
+  line-height: 1; padding: .15rem .35rem; border-radius: 999px;
+}
+header.top .keeping-up .refresh {
+  font-size: .75rem; font-weight: 600; text-decoration: underline;
+  color: inherit; white-space: nowrap;
+}
+header.top .keeping-up .dismiss { font-size: .9rem; }
+header.top .keeping-up .refresh:hover,
+header.top .keeping-up .dismiss:hover {
+  background: color-mix(in srgb, currentColor 15%, transparent);
+}
+header.top .keeping-up .refresh:focus-visible,
+header.top .keeping-up .dismiss:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; }
+
+/* Narrow screens have no room for the sentence, so it keeps the dot and the
+   dismiss and drops the words rather than pushing the title off the bar. */
+@media (max-width: 30rem) {
+  header.top .keeping-up .what { display: none; }
+  header.top .keeping-up { padding-left: .35rem; }
 }
 
 /* ---------- desktop ---------- */
@@ -546,19 +587,20 @@ main.with-bar { padding-bottom: 7.5rem; }
 
 export function page(title: string, body: SafeHtml, extra: SafeHtml = raw('')): SafeHtml {
   return html`<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>${title}</title>
-<style>${raw(STYLE)}</style>
-</head>
-<body>
-<a class="skip" href="#main">Skip to content</a>
-${body}
-${extra}
-</body>
-</html>`
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        <title>${title}</title>
+        <style>
+          ${raw(STYLE)}
+        </style>
+      </head>
+      <body>
+        <a class="skip" href="#main">Skip to content</a>
+        ${body} ${extra}
+      </body>
+    </html>`
 }
 
 /**
@@ -570,9 +612,9 @@ ${extra}
  */
 export function topBar(where: string, right: SafeHtml = raw('')): SafeHtml {
   return html`<header class="top">
-  <a class="home" href="/">reviewd</a>
-  <span class="crumb" aria-hidden="true">/</span>
-  <span class="where" title="${where}">${where}</span>
-  ${right}
-</header>`
+    <a class="home" href="/">reviewd</a>
+    <span class="crumb" aria-hidden="true">/</span>
+    <span class="where" title="${where}">${where}</span>
+    ${right}
+  </header>`
 }

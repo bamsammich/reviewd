@@ -1,9 +1,10 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative, sep } from 'node:path'
 import { promisify } from 'node:util'
+import { manifestFingerprint } from '../fingerprint.js'
 import type { ChangeType, FileChangeSpec } from '../protocol.js'
 import { canonical, git, repoRoot } from './git.js'
 
@@ -93,12 +94,19 @@ export async function diffGitSource(
   const indexFile = join(dir, 'index')
 
   try {
-    // Empty on purpose. See the note in git.ts: seeding from the real index
-    // makes git trust inherited stat data and miss a same-size in-place edit.
+    // The scratch index starts empty on purpose.
+    //
+    // Seeding it from the real index is the obvious optimization and it is
+    // wrong: the copy's mtime is newer than every file, so git trusts the stat
+    // data it inherited instead of re-reading content. An in-place edit that
+    // keeps a file's size then reads as no change at all, and the fingerprint
+    // comes back describing a tree that plainly differs from the one on disk.
+    // For a value the commit gate rests on, a full re-read is the right trade.
     const env = { GIT_INDEX_FILE: indexFile }
     await git(root, ['add', '-A'], env)
 
     const target = await resolveBase(root, base)
+    await includeStagedIgnores(root, target, env)
     const raw = await git(root, ['diff', '--cached', '--raw', '-z', '-M', target], env)
     const changes = parseRawDiff(raw)
 
@@ -115,17 +123,59 @@ export async function diffGitSource(
       files.push(await toFileChange(root, source.id, change, env, blobs, limits))
     }
 
-    const textDiff = await git(root, ['diff', '--cached', target], env)
-
     return {
       sourceId: source.id,
-      fingerprint: createHash('sha256').update(textDiff, 'utf8').digest('hex'),
+      fingerprint: manifestFingerprint(files),
       files,
       blobs,
     }
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+}
+
+/**
+ * The gate's reading of a working tree.
+ *
+ * This has to be the same function the snapshot used, or the gate compares two
+ * hashes of two different things and an approval never matches. So it runs the
+ * same diff and the same `manifestFingerprint` rather than hashing diff text,
+ * which is what let the two drift apart before.
+ */
+export async function fingerprint(root: string): Promise<string> {
+  const { files } = await diffSource({ id: '', rootPath: root })
+  return manifestFingerprint(files)
+}
+
+/**
+ * Pulls force-staged ignored files into the reading.
+ *
+ * `git add -A` honours `.gitignore`, which is right for a review: nobody wants
+ * `dist/` in a diff. But `git add -f dist/payload.js` puts an ignored file in
+ * the real index, and `git commit` will carry it. Reading only the ignore rules
+ * meant such a file appeared in no review and moved no fingerprint, so an
+ * approval taken over the visible tree cleared it too.
+ *
+ * Every repository with a `dist/` or a `.env` already supplies the cover, so
+ * this is not an exotic case. Anything the real index is carrying is something
+ * the reviewer has to see.
+ */
+async function includeStagedIgnores(
+  root: string,
+  target: string,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  // Deliberately without env: this reads the repository's real index.
+  const staged = await git(root, ['diff', '--cached', '--name-only', '-z', target])
+
+  // Only paths still on disk. A staged deletion has nothing to add, and
+  // `git add` treats a pathspec matching no file as an error rather than as
+  // nothing to do; the scratch index already recorded the removal anyway.
+  const paths = staged.split('\0').filter((path) => path.length > 0 && existsSync(join(root, path)))
+
+  if (paths.length === 0) return
+
+  await git(root, ['add', '-A', '-f', '--', ...paths], env)
 }
 
 async function resolveBase(root: string, base: string): Promise<string> {
@@ -202,6 +252,12 @@ async function toFileChange(
   const oldBlobId = keep && oldBytes ? remember(blobs, oldBytes) : null
   const newBlobId = keep && newBytes ? remember(blobs, newBytes) : null
 
+  // Hashed either way. Skipping this for content nobody uploads would leave a
+  // 3 MB generated file or a prebuilt binary outside the approval entirely, so
+  // swapping it after approval would not move the fingerprint.
+  const oldHash = oldBytes ? sha256(oldBytes) : null
+  const newHash = newBytes ? sha256(newBytes) : null
+
   return {
     sourceId,
     path: change.path,
@@ -209,6 +265,8 @@ async function toFileChange(
     oldPath: change.oldPath ?? null,
     oldBlobId,
     newBlobId,
+    oldHash,
+    newHash,
     isBinary: binary,
     truncated: oversize,
   }
@@ -254,7 +312,6 @@ export async function diffFileSet(
 ): Promise<SourceDiff> {
   const files: FileChangeSpec[] = []
   const blobs = new Map<string, Uint8Array>()
-  const parts: string[] = []
 
   for (const path of walk(source.rootPath, limits.maxFilesPerSnapshot)) {
     const bytes = new Uint8Array(readFileSync(join(source.rootPath, path)))
@@ -271,16 +328,16 @@ export async function diffFileSet(
       oldPath: null,
       oldBlobId: null,
       newBlobId,
+      oldHash: null,
+      newHash: sha256(bytes),
       isBinary: binary,
       truncated: oversize,
     })
-
-    parts.push(`${path}:${sha256(bytes)}`)
   }
 
   return {
     sourceId: source.id,
-    fingerprint: createHash('sha256').update(parts.sort().join('\n'), 'utf8').digest('hex'),
+    fingerprint: manifestFingerprint(files),
     files,
     blobs,
   }

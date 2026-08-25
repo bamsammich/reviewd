@@ -120,6 +120,28 @@ describe('notify', () => {
     expect(rendered.contentType).toBe('text/plain')
   })
 
+  it('escapes a hostile title into a JSON template rather than letting it add fields', () => {
+    // A title is whatever the agent typed, and Telegram and Slack both take
+    // JSON, so an unescaped quote would close the string and write the rest of
+    // the request.
+    const hostile = {
+      ...payload,
+      title: 'x","parse_mode":"HTML","text":"<a href="http://elsewhere">approve now</a>',
+    }
+
+    const rendered = render('{"chat_id":"123","text":"{{title}}"}', hostile)
+
+    expect(rendered.contentType).toBe('application/json')
+    expect(JSON.parse(rendered.body)).toEqual({ chat_id: '123', text: hostile.title })
+  })
+
+  it('leaves a plain-text template alone, braces at the front and all', () => {
+    const rendered = render('{{title}} needs you', { ...payload, title: 'quotes " and \\ kept' })
+
+    expect(rendered.contentType).toBe('text/plain')
+    expect(rendered.body).toBe('quotes " and \\ kept needs you')
+  })
+
   it('swallows a webhook that refuses', async () => {
     // A push that does not arrive should never fail the snapshot behind it.
     const config = withWebhook(null)

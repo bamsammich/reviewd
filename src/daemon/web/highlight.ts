@@ -234,9 +234,7 @@ export function renderLine(tokens: Token[], palette: Palette): SafeHtml {
 
   for (const token of tokens) {
     const name = palette.classFor(token)
-    out += name
-      ? `<span class="${name}">${escapeHtml(token.text)}</span>`
-      : escapeHtml(token.text)
+    out += name ? `<span class="${name}">${escapeHtml(token.text)}</span>` : escapeHtml(token.text)
   }
 
   return raw(out)

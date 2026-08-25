@@ -59,4 +59,13 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD ["node", "-e", "fetch('http://127.0.0.1:7777/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
 
 ENTRYPOINT ["reviewd-entrypoint"]
-CMD ["serve", "--bind-public"]
+
+# `--bind-public` stays out of the image on purpose.
+#
+# The daemon asks for that flag so that opening itself to a network is a
+# decision someone makes on the day rather than a config key edited months
+# earlier. Baking it in satisfies the check for every container that ever runs,
+# including a bare `docker run -p 7777:7777`, which Docker publishes on every
+# interface. compose.yaml passes it next to the `ports:` line it belongs with,
+# where the two halves of the decision are read together.
+CMD ["serve"]

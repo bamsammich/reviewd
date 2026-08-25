@@ -43,7 +43,6 @@ async function seed() {
   await putBlob(deps, blobId, content)
 
   await createSnapshot(deps, review.reviewId, {
-    fingerprints: { [review.sources[0]!.id]: 'fp-1' },
     files: [
       {
         sourceId: review.sources[0]!.id,
@@ -66,6 +65,36 @@ function waitFor(reviewId: string, query = 'timeout_ms=2000&since=0'): Promise<R
 }
 
 describe('wait', () => {
+  it('is not woken by a revision the agent pushed itself', async () => {
+    // Ending a wait with no verdict reads to the caller as approval it never
+    // got, and a revision is the waiting agent's own doing.
+    const review = await seed()
+    const pending = waitFor(review.reviewId, 'timeout_ms=400&since=0')
+
+    await new Promise((r) => setTimeout(r, 20))
+
+    const content = new TextEncoder().encode('a\nb\nc\nd\n')
+    await putBlob(deps, sha256(content), content)
+    await createSnapshot(deps, review.reviewId, {
+      files: [
+        {
+          sourceId: review.sources[0]!.id,
+          path: 'src/a.ts',
+          changeType: 'modified',
+          oldPath: null,
+          oldBlobId: null,
+          newBlobId: sha256(content),
+          oldHash: null,
+          newHash: sha256(content),
+          isBinary: false,
+          truncated: false,
+        },
+      ],
+    })
+
+    expect((await (await pending).json()).wokeOn).toBe('timeout')
+  })
+
   it('wakes on a submission that lands while it is parked', async () => {
     const review = await seed()
     await createThread(deps, review.reviewId, {

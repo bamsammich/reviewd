@@ -3,7 +3,7 @@ import { configSchema, resolve } from '../daemon/config.js'
 import { tempDatabase, type TempDatabase } from '../daemon/db/testing.js'
 import { createApp, type App } from '../daemon/http/app.js'
 import { Client } from './client.js'
-import { fingerprint } from './git.js'
+import { fingerprint } from './diff.js'
 import { pushSnapshot } from './push.js'
 import { tempRepo, type TempRepo } from './testing.js'
 
@@ -54,6 +54,54 @@ afterEach(async () => {
   await ctx.close()
 })
 
+/**
+ * The reviewer acts through the pages, because that is the only place a verdict
+ * can come from.
+ *
+ * The API these tests used before is the agent's, and it cannot approve. Going
+ * through the form means the token, the redirect, and the same route a phone
+ * would hit are all in the path of every test below.
+ */
+async function form(path: string, fields: Record<string, string>): Promise<Response> {
+  return app.request(path, {
+    method: 'POST',
+    headers: {
+      host: '127.0.0.1:7777',
+      'content-type': 'application/x-www-form-urlencoded',
+      'sec-fetch-site': 'same-origin',
+    },
+    body: new URLSearchParams(fields).toString(),
+  })
+}
+
+/** Reads the review page the way a reviewer's browser would, token and all. */
+async function pageToken(reviewId: string): Promise<string> {
+  const page = await app.request(`/r/${reviewId}`, { headers: { host: '127.0.0.1:7777' } })
+  const html = await page.text()
+  const match = /name="token" value="([^"]+)"/.exec(html)
+
+  if (!match) throw new Error('no page token on the review page')
+  return match[1] as string
+}
+
+async function reviewerSubmits(reviewId: string, verdict: string): Promise<Response> {
+  return form(`/r/${reviewId}/submit`, { verdict, token: await pageToken(reviewId) })
+}
+
+async function reviewerComments(
+  reviewId: string,
+  fields: { sourceId: string; path: string; line: number; body: string },
+): Promise<Response> {
+  return form(`/r/${reviewId}/threads`, {
+    token: await pageToken(reviewId),
+    sourceId: fields.sourceId,
+    path: fields.path,
+    line: String(fields.line),
+    side: 'new',
+    body: fields.body,
+  })
+}
+
 describe('one review across two repositories', () => {
   it('runs create, push, comment, submit, approve, and gate', async () => {
     repoA.write('src/app.ts', 'const a = 1\nconst b = 99\nconst c = 3\n')
@@ -82,13 +130,11 @@ describe('one review across two repositories', () => {
     expect(snapshot.fileCount).toBe(2)
 
     // The reviewer comments on one root and the agent asks about the other.
-    await client.createThread(review.reviewId, {
+    await reviewerComments(review.reviewId, {
       sourceId: review.sources[0]!.id,
       path: 'src/app.ts',
       line: 2,
-      side: 'new',
       body: 'why 99?',
-      author: 'human',
     })
 
     await client.createThread(review.reviewId, {
@@ -97,7 +143,6 @@ describe('one review across two repositories', () => {
       line: 2,
       side: 'new',
       body: 'I turned debug on to match the ticket, worth a check',
-      author: 'agent',
     })
 
     // The reviewer's comment is a draft, so only the agent's own is visible.
@@ -107,7 +152,7 @@ describe('one review across two repositories', () => {
     const gateBefore = await client.gate(repoA.root, await fingerprint(repoA.root))
     expect(gateBefore.decision).toBe('deny')
 
-    await client.submit(review.reviewId, 'changes_requested')
+    await reviewerSubmits(review.reviewId, 'changes_requested')
 
     const owed = await client.listThreads(review.reviewId, { turn: 'agent' })
     expect(owed).toHaveLength(1)
@@ -116,7 +161,7 @@ describe('one review across two repositories', () => {
     await client.reply(owed[0]!.id, 'the ticket asked for 99')
     expect(await client.listThreads(review.reviewId, { turn: 'agent' })).toHaveLength(0)
 
-    await client.submit(review.reviewId, 'approved')
+    await reviewerSubmits(review.reviewId, 'approved')
 
     // Each root is gated on its own fingerprint.
     for (const repo of [repoA, repoB]) {
@@ -138,7 +183,7 @@ describe('one review across two repositories', () => {
     await pushSnapshot(client, review.reviewId, [
       { id: review.sources[0]!.id, rootPath: repoA.root, baseRef: 'HEAD' },
     ])
-    await client.submit(review.reviewId, 'approved')
+    await reviewerSubmits(review.reviewId, 'approved')
 
     expect((await client.gate(repoA.root, await fingerprint(repoA.root))).decision).toBe('allow')
 
@@ -174,7 +219,7 @@ describe('one review across two repositories', () => {
       { id: second.sources[0]!.id, rootPath: repoB.root, baseRef: 'HEAD' },
     ])
 
-    await client.submit(first.reviewId, 'approved')
+    await reviewerSubmits(first.reviewId, 'approved')
 
     // Approving one session's review must not clear the other's commit, which
     // is the bug a port-addressed review server has.
@@ -222,18 +267,17 @@ describe('one review across two repositories', () => {
     ])
 
     for (const line of [1, 2, 3]) {
-      await client.createThread(review.reviewId, {
+      await reviewerComments(review.reviewId, {
+        sourceId: review.sources[0]!.id,
         path: 'src/app.ts',
         line,
-        side: 'new',
         body: `comment on line ${line}`,
-        author: 'human',
       })
     }
 
     const waiting = client.wait(review.reviewId, 3000, Date.now())
     await new Promise((r) => setTimeout(r, 20))
-    await client.submit(review.reviewId, 'changes_requested')
+    await reviewerSubmits(review.reviewId, 'changes_requested')
 
     const woke = await waiting
     expect(woke.wokeOn).toBe('submission')

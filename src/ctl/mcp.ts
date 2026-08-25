@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
@@ -35,7 +36,10 @@ function fail(error: unknown): ToolResult {
 }
 
 export function createMcpServer(client = new Client(loadClientConfig().base_url)): McpServer {
-  const server = new McpServer({ name: 'reviewd', version: '0.0.0' })
+  // Read rather than hardcoded, because a version string maintained by hand is
+  // a version string that is wrong. Every MCP client is told this at handshake.
+  const pkg = createRequire(import.meta.url)('../../package.json') as { version?: string }
+  const server = new McpServer({ name: 'reviewd', version: pkg.version ?? 'unknown' })
 
   server.registerTool(
     'review_create',
@@ -73,7 +77,6 @@ export function createMcpServer(client = new Client(loadClientConfig().base_url)
             // Canonical, so the path stored here is the one the commit hook
             // will compute when it asks the gate about this repository.
             path: canonical(s.path),
-            includeUntracked: true,
             ...(s.base === undefined ? {} : { base: s.base }),
             ...(s.label === undefined ? {} : { label: s.label }),
           })),
@@ -290,7 +293,7 @@ export function createMcpServer(client = new Client(loadClientConfig().base_url)
     },
     async ({ threadId, body }) => {
       try {
-        return ok(await client.reply(threadId, body, 'agent'))
+        return ok(await client.reply(threadId, body))
       } catch (error) {
         return fail(error)
       }

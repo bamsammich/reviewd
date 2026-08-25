@@ -1,13 +1,7 @@
 #!/usr/bin/env node
 import { createRequire } from 'node:module'
 import { parseArgs } from 'node:util'
-import {
-  checkGate,
-  doctor,
-  printFingerprint,
-  runMcp,
-  waitForSubmission,
-} from './ctl/commands.js'
+import { checkGate, doctor, printFingerprint, runMcp, waitForSubmission } from './ctl/commands.js'
 import { runServe } from './daemon/serve.js'
 
 /**
@@ -85,8 +79,22 @@ async function main(): Promise<void> {
       })
     case 'mcp':
       return await runMcp()
-    case 'wait':
-      return await waitForSubmission(values.review, Number(values.timeout ?? 3600))
+    case 'wait': {
+      // `--timeout 30s` is Number('30s'), which is NaN, and `Date.now() < NaN`
+      // is false: the wait loop never runs, `timeout` goes to stdout, and the
+      // command is gone in milliseconds. The documented workflow backgrounds
+      // this and reads the verdict off the first line, so a typo arrives as
+      // "the reviewer sat on it for an hour". Refuse it out loud instead.
+      const timeout = Number(values.timeout ?? 3600)
+      if (!Number.isFinite(timeout) || timeout <= 0) {
+        process.stderr.write(
+          `reviewd: --timeout wants a positive number of seconds, not "${values.timeout}"\n`,
+        )
+        process.exitCode = 1
+        return
+      }
+      return await waitForSubmission(values.review, timeout)
+    }
     case 'fingerprint':
       return await printFingerprint(target ?? process.cwd(), values.json ?? false)
     case 'gate':

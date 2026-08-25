@@ -1,8 +1,6 @@
 import { execFile } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { realpathSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { promisify } from 'node:util'
 
 const run = promisify(execFile)
@@ -58,55 +56,47 @@ export async function gitDir(root: string): Promise<string> {
   return (await git(root, ['rev-parse', '--absolute-git-dir'])).trim()
 }
 
-async function hasCommits(root: string): Promise<boolean> {
-  try {
-    await git(root, ['rev-parse', '--verify', '--quiet', 'HEAD'])
-    return true
-  } catch {
-    return false
-  }
-}
-
 /**
- * The content of every change against HEAD, tracked or not, staged or not.
+ * Paths where the index holds something that is neither HEAD nor the tree.
  *
- * Staging must not change the answer. A fingerprint that moved when `git add`
- * ran would invalidate an approval at the moment of the commit it had just
- * cleared, so everything is staged into a throwaway index and diffed in one
- * pass. The real index is never written, which leaves a half-staged tree
- * exactly as it was arranged.
+ * The review reads the working tree; `git commit` writes the index. Keeping
+ * those apart is what lets staging leave the fingerprint alone, and it is also
+ * a hole: stage a change, restore the file, and the tree the reviewer reads is
+ * clean while the commit still carries the change. `git status` calls that
+ * `MM`, and it is the one arrangement where approving what is on disk says
+ * nothing about what is about to be committed.
+ *
+ * A tree that is wholly staged, wholly unstaged, or untouched all pass. What
+ * does not is a half-staged file — `git add -p`, or the sequence above — where
+ * the committed content matches neither what was reviewed nor what it replaced.
  */
-export async function diffAgainstHead(root: string): Promise<string> {
-  const dir = mkdtempSync(join(tmpdir(), 'reviewd-index-'))
-  const indexFile = join(dir, 'index')
+export async function stagedDivergence(root: string): Promise<string[]> {
+  const status = await git(root, ['status', '--porcelain', '-z'])
+  const entries = status.split('\0')
+  const diverged: string[] = []
 
-  try {
-    // The scratch index starts empty on purpose.
-    //
-    // Seeding it from the real index is the obvious optimization and it is
-    // wrong: the copy's mtime is newer than every file, so git trusts the
-    // stat data it inherited instead of re-reading content. An in-place edit
-    // that keeps a file's size then reads as no change at all, and the
-    // fingerprint comes back as the hash of an empty diff while the working
-    // tree plainly differs. For a value the commit gate rests on, a full
-    // re-read is the right trade.
-    const env = { GIT_INDEX_FILE: indexFile }
-    await git(root, ['add', '-A'], env)
+  for (let i = 0; i < entries.length; i += 1) {
+    const entry = entries[i] as string
+    if (entry.length < 4) continue
 
-    if (await hasCommits(root)) {
-      return await git(root, ['diff', '--cached', 'HEAD'], env)
-    }
+    const index = entry[0] as string
+    const tree = entry[1] as string
 
-    // No commits yet, so compare against the empty tree and a first review works.
-    const empty = (await git(root, ['hash-object', '-t', 'tree', '/dev/null'])).trim()
-    return await git(root, ['diff', '--cached', empty], env)
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
+    // A rename or a copy spends a second NUL-separated chunk on the path the
+    // content came from, and it is a bare path with no status bytes in front
+    // of it. Reading it as an entry of its own is what made `git mv a/foo.ts
+    // b/foo.ts` report an index status of 'a', a tree status of '/', and a
+    // path of "oo.ts" — a divergence naming a file that does not exist, on
+    // every commit carrying a rename, which no approval could ever clear.
+    // R and C are the only statuses that do this; A, D, M, ?? and the
+    // unmerged pairs all fit in one chunk.
+    if (index === 'R' || index === 'C') i += 1
+
+    // Untracked is not staged, and a clean side means the two agree.
+    if (index === ' ' || index === '?' || tree === ' ') continue
+
+    diverged.push(entry.slice(3))
   }
-}
 
-export async function fingerprint(root: string): Promise<string> {
-  return createHash('sha256')
-    .update(await diffAgainstHead(root), 'utf8')
-    .digest('hex')
+  return diverged
 }

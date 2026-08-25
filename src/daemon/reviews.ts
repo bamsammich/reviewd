@@ -8,6 +8,7 @@ import type {
   SnapshotResult,
   SourceSummary,
 } from '../protocol.js'
+import { fingerprintsBySource } from '../fingerprint.js'
 import type { Bus } from './bus.js'
 import type { ResolvedConfig } from './config.js'
 import { newId, now } from './db/ids.js'
@@ -24,7 +25,7 @@ import type { Database } from './db/types.js'
 export class ReviewError extends Error {
   constructor(
     message: string,
-    readonly status: 400 | 404 | 409 | 413,
+    readonly status: 400 | 403 | 404 | 409 | 413,
   ) {
     super(message)
     this.name = 'ReviewError'
@@ -141,6 +142,13 @@ export async function summarize({ db, config }: Deps, reviewId: string): Promise
 
   const turns = await countThreadsByTurn(db, reviewId)
 
+  const lastSubmission = await db
+    .selectFrom('submission')
+    .select('submitted_at')
+    .where('review_id', '=', reviewId)
+    .orderBy('submitted_at', 'desc')
+    .executeTakeFirst()
+
   const sourceSummaries: SourceSummary[] = sources.map((source) => ({
     id: source.id,
     label: source.label,
@@ -162,6 +170,7 @@ export async function summarize({ db, config }: Deps, reviewId: string): Promise
     fileCount: fileCount?.n ?? 0,
     threadsAwaitingAgent: turns.agent,
     threadsAwaitingHuman: turns.human,
+    lastSubmissionAt: lastSubmission?.submitted_at ?? 0,
     sources: sourceSummaries,
   }
 }
@@ -264,15 +273,17 @@ export async function putBlob(
     throw new ReviewError(`blob id ${id} does not match its content (${actual})`, 400)
   }
 
-  const existing = await db.selectFrom('blob').select('id').where('id', '=', id).executeTakeFirst()
-  if (existing) return { stored: false }
-
-  await db
+  // One statement rather than a SELECT that decides whether to INSERT. A
+  // snapshot uploads in parallel, and two uploads of the same content used to
+  // both find no row and both insert, the loser surfacing a primary key
+  // violation as a 500. Whether the row was ours is the insert's own answer.
+  const result = await db
     .insertInto('blob')
     .values({ id, bytes: Buffer.from(bytes), size: bytes.byteLength })
-    .execute()
+    .onConflict((oc) => oc.column('id').doNothing())
+    .executeTakeFirst()
 
-  return { stored: true }
+  return { stored: (result?.numInsertedOrUpdatedRows ?? 0n) > 0n }
 }
 
 export async function readBlob(
@@ -326,17 +337,14 @@ export async function createSnapshot(
     }
   }
 
-  for (const sourceId of Object.keys(manifest.fingerprints)) {
-    if (!sourceIds.has(sourceId)) {
-      throw new ReviewError(`fingerprint names source ${sourceId}, not in this review`, 400)
-    }
-  }
-
-  for (const source of sources) {
-    if (manifest.fingerprints[source.id] === undefined) {
-      throw new ReviewError(`no fingerprint for source ${source.label}`, 400)
-    }
-  }
+  // Derived here, never accepted. A fingerprint on the wire is a claim about
+  // bytes rather than a fact about them, and the gate rests on it: a client
+  // that sent one could show the reviewer one change set and have the approval
+  // cover another.
+  const fingerprints = fingerprintsBySource(
+    manifest.files,
+    sources.map((source) => source.id),
+  )
 
   // Referenced content must already be here. Accepting a manifest that points
   // at bytes nobody uploaded would leave a review that renders as empty files.
@@ -353,23 +361,27 @@ export async function createSnapshot(
   const snapshotId = newId()
   const t = now()
 
-  const previous = await db
-    .selectFrom('snapshot')
-    .selectAll()
-    .where('review_id', '=', reviewId)
-    .orderBy('seq', 'desc')
-    .executeTakeFirst()
+  // The number comes from inside the transaction because snapshot_review_seq
+  // is unique: read outside it, two pushes racing on one review both see the
+  // same predecessor, both claim the next number, and the loser fails on the
+  // constraint instead of simply following.
+  const seq = await db.transaction().execute(async (tx) => {
+    const previous = await tx
+      .selectFrom('snapshot')
+      .selectAll()
+      .where('review_id', '=', reviewId)
+      .orderBy('seq', 'desc')
+      .executeTakeFirst()
 
-  const seq = (previous?.seq ?? 0) + 1
+    const seq = (previous?.seq ?? 0) + 1
 
-  await db.transaction().execute(async (tx) => {
     await tx
       .insertInto('snapshot')
       .values({
         id: snapshotId,
         review_id: reviewId,
         seq,
-        fingerprint: wholeReviewFingerprint(manifest.fingerprints),
+        fingerprint: wholeReviewFingerprint(fingerprints),
         created_at: t,
       })
       .execute()
@@ -380,7 +392,7 @@ export async function createSnapshot(
         sources.map((source) => ({
           snapshot_id: snapshotId,
           source_id: source.id,
-          fingerprint: manifest.fingerprints[source.id] as string,
+          fingerprint: fingerprints[source.id] as string,
         })),
       )
       .execute()
@@ -413,12 +425,19 @@ export async function createSnapshot(
       .set({ last_activity_at: t, updated_at: t, status: 'open' })
       .where('id', '=', reviewId)
       .execute()
+
+    return seq
   })
 
   // Re-anchoring runs after the transaction commits, so it reads the snapshot
   // it is anchoring against rather than a half-written one.
   const { reanchor } = await import('./reanchor.js')
   const { moved, outdated } = await reanchor(db, reviewId, snapshotId)
+
+  // An open review page refreshes on this, which is what keeps a reviewer's
+  // tab showing the revision they are about to approve rather than the one
+  // that was current when they opened it.
+  deps.bus?.publish({ kind: 'snapshot', reviewId, seq, at: t })
 
   return {
     seq,
