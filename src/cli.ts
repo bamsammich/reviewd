@@ -1,7 +1,14 @@
 #!/usr/bin/env node
 import { createRequire } from 'node:module'
 import { parseArgs } from 'node:util'
-import { checkGate, doctor, printFingerprint, runMcp, waitForSubmission } from './ctl/commands.js'
+import {
+  checkGate,
+  doctor,
+  initCommand,
+  printFingerprint,
+  runMcp,
+  waitForSubmission,
+} from './ctl/commands.js'
 import { runServe } from './daemon/serve.js'
 
 /**
@@ -17,6 +24,7 @@ const USAGE = `reviewd - local-first code review
 Usage: reviewd <command> [options]
 
 Commands:
+  init                      Register the plugin with Claude Code, or update it
   serve                     Run the daemon everything else talks to
   mcp                       Serve the MCP tools an agent drives reviews with
   wait --review <id>        Block until the reviewer submits, then exit
@@ -72,6 +80,8 @@ async function main(): Promise<void> {
   }
 
   switch (command) {
+    case 'init':
+      return await initCommand()
     case 'serve':
       return await runServe({
         configPath: values.config,

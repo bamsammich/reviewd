@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module'
 import { EMPTY_FINGERPRINT } from '../fingerprint.js'
 import { WAIT_EXIT, type GateResponse } from '../protocol.js'
 import { Client } from './client.js'
@@ -5,10 +6,17 @@ import { loadClientConfig } from './config.js'
 import { fingerprint } from './diff.js'
 import { ensureDaemon, logPath } from './ensure.js'
 import { repoRoot, stagedDivergence } from './git.js'
+import { initPlugin, installedPluginVersion } from './init.js'
 import { runMcpServer } from './mcp.js'
 
 /** One long-poll round. Shorter than the deadline so a proxy idle timeout cannot strand it. */
 const MAX_POLL_MS = 300_000
+
+/** This binary's version, which is also the version of the plugin it installs. */
+function version(): string {
+  const pkg = createRequire(import.meta.url)('../../package.json') as { version?: string }
+  return pkg.version ?? 'unknown'
+}
 
 /**
  * Serves the MCP tools an agent drives reviews with.
@@ -18,7 +26,80 @@ const MAX_POLL_MS = 300_000
  */
 export async function runMcp(): Promise<void> {
   await ensureDaemon(loadClientConfig().base_url)
+  await catchUpPlugin()
   return await runMcpServer()
+}
+
+/**
+ * Reinstalls the plugin when it is a different version than this binary.
+ *
+ * `npm install -g reviewd@latest` replaces the binary and leaves the plugin
+ * cache holding whatever it held before, so an upgrade would otherwise need a
+ * second command nobody was told about. This is where that second command gets
+ * run: the MCP server starts in every session the plugin loads, which makes it
+ * the one piece of reviewd guaranteed to run under the version being replaced.
+ *
+ * The new copy is picked up next session rather than this one. Claude Code
+ * reads its plugins at startup, so there is nothing to gain by hurrying, and
+ * failure is not worth interrupting a session over: a plugin one version behind
+ * still works, and doctor reports the drift.
+ */
+async function catchUpPlugin(): Promise<void> {
+  if (process.env['REVIEWD_NO_PLUGIN_SYNC']) return
+
+  try {
+    const installed = await installedPluginVersion()
+    if (!installed || installed === version()) return
+
+    await initPlugin()
+    process.stderr.write(
+      `reviewd: plugin was ${installed}, this binary is ${version()}. ` +
+        'Reinstalled; it takes effect next session.\n',
+    )
+  } catch {
+    // Reported by doctor rather than here. Nothing in a session depends on it.
+  }
+}
+
+/**
+ * Says whether Claude Code holds the plugin, and whether it matches.
+ *
+ * Drift is the failure this catches. The binary and the plugin are installed by
+ * different tools, so a plugin one version behind is silent until a hook does
+ * something the binary no longer expects.
+ */
+async function reportPlugin(): Promise<void> {
+  const installed = await installedPluginVersion()
+
+  if (!installed) {
+    process.stdout.write(
+      'reviewd: Claude Code does not have the plugin. Run `reviewd init` to add it.\n',
+    )
+    return
+  }
+
+  if (installed !== version()) {
+    process.stdout.write(
+      `reviewd: plugin is ${installed}, this binary is ${version()}. ` +
+        'Run `reviewd init` to line them up.\n',
+    )
+    return
+  }
+
+  process.stdout.write(`reviewd: plugin ${installed} installed and current\n`)
+}
+
+export async function initCommand(): Promise<void> {
+  try {
+    const result = await initPlugin()
+    process.stdout.write(
+      `reviewd: marketplace ${result.marketplace}, plugin installed.\n` +
+        'Restart Claude Code to load it.\n',
+    )
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
+    process.exitCode = 1
+  }
 }
 
 export async function printFingerprint(path: string, json: boolean): Promise<void> {
@@ -114,6 +195,7 @@ export async function doctor(): Promise<void> {
     const how = result.started ? ', started just now' : ''
     process.stdout.write(`reviewd: answering at ${config.base_url}${how}\n`)
     if (result.started) process.stdout.write(`reviewd: logging to ${logPath()}\n`)
+    await reportPlugin()
     return
   }
 

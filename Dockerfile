@@ -2,14 +2,9 @@
 # their own diffs and upload the blobs, so all that has to be in here is node,
 # this package, and somewhere to put a database. Nothing needs git.
 
-FROM node:22-bookworm-slim AS build
-
-# better-sqlite3 ships prebuilt bindings for glibc and compiles from source when
-# there is no prebuild for the platform. The toolchain covers that fallback and
-# is left behind in this stage.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 make g++ \
- && rm -rf /var/lib/apt/lists/*
+# Node 24 is the floor because the daemon stores its data through `node:sqlite`,
+# which prints an experimental warning on every invocation before it.
+FROM node:24-bookworm-slim AS build
 
 WORKDIR /app
 
@@ -20,12 +15,10 @@ COPY src ./src
 
 RUN npm ci
 
-# Removes the devDependencies without rerunning install scripts, which leaves
-# the better-sqlite3 binding built above exactly as it is.
 RUN npm prune --omit=dev
 
 
-FROM node:22-bookworm-slim AS runtime
+FROM node:24-bookworm-slim AS runtime
 
 # The daemon finds its config and database through the XDG variables, so using
 # them here gives a container the same layout as a laptop instead of a second
