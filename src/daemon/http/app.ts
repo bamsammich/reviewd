@@ -56,10 +56,6 @@ export function createApp(ctx: AppContext): App {
       capabilitiesSchema.parse({
         version,
         local: ctx.local,
-        // Reaching a file to open it, or watching one for changes, only works
-        // where the daemon and the code share a disk.
-        openInEditor: ctx.local,
-        fileWatch: ctx.local,
       }),
     ),
   )

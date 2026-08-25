@@ -87,6 +87,20 @@ export const reviewSummary = z.object({
   fileCount: z.number().int(),
   threadsAwaitingAgent: z.number().int(),
   threadsAwaitingHuman: z.number().int(),
+  /**
+   * When the reviewer last submitted, or 0.
+   *
+   * The review page polls on this. Neither of the counts above can stand in
+   * for it: a reviewer's own note makes it the agent's turn, so it moves the
+   * agent count rather than the human one, and a second note on a thread that
+   * was already the agent's moves neither. A page open in another browser saw
+   * nothing until an agent happened to write.
+   *
+   * `lastActivityAt` cannot stand in for it either. Opening a review stamps
+   * that, and the refresh is itself a GET on the page, so a page keyed on it
+   * would refresh forever.
+   */
+  lastSubmissionAt: z.number().int(),
   sources: z.array(sourceSummary),
 })
 export type ReviewSummary = z.infer<typeof reviewSummary>
@@ -294,11 +308,20 @@ export const releaseResult = z.object({
 })
 export type ReleaseResult = z.infer<typeof releaseResult>
 
+/**
+ * What the daemon can actually do.
+ *
+ * `openInEditor` and `fileWatch` were here and were both answered `true`
+ * whenever the daemon shared a disk with the code. Neither existed: there is no
+ * watcher, no watcher dependency, and no editor-opening code anywhere. A client
+ * written against that contract would build a feature that silently did
+ * nothing, which is worse than the feature being absent.
+ *
+ * Anything added back here has to be something the daemon does.
+ */
 export const capabilities = z.object({
   version: z.string(),
   /** True when the daemon shares a filesystem with the reviewed code. */
   local: z.boolean(),
-  openInEditor: z.boolean(),
-  fileWatch: z.boolean(),
 })
 export type Capabilities = z.infer<typeof capabilities>

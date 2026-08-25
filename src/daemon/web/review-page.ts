@@ -149,6 +149,7 @@ export function reviewPage(
         value="${mintPageToken(review.reviewId, review.snapshotSeq, Date.now())}"
         data-revision="${review.snapshotSeq}"
         data-awaiting="${awaitingYou}"
+        data-submitted="${review.lastSubmissionAt}"
       />
       <div class="rail">
         <h1 class="page-title">${review.title}</h1>
@@ -806,6 +807,12 @@ async function refresh() {
   window.scrollTo(0, offset);
   measureBar();
 
+  /* The status lives in the header, which the line above just replaced with a
+     freshly rendered one that does not have it. Put it back if it still
+     applies, or it vanishes on the first refresh and the page goes back to
+     looking live while it is not. */
+  if (offline) showStale(blockedBefore());
+
   // A reviewer has to be able to see that the ground moved. Clearing the pill
   // as soon as the content lands makes it a flash behind the action bar, which
   // is the same as not saying anything.
@@ -887,46 +894,230 @@ function notice(show, message) {
  * whole mechanism exists to prevent, arriving quietly instead of loudly.
  *
  * The poll decides, because it is the one that gets a straight answer. A
- * dropped stream is not evidence — EventSource reconnects on its own and a
- * blip means nothing — but two failed fetches in a row is a daemon that is not
- * there. Nothing here tries to recover the data; it tells the reviewer to
- * reload, which is the one move that always works.
+ * dropped stream is not evidence: EventSource reconnects on its own and a blip
+ * means nothing. Two failed fetches in a row is something to act on.
+ *
+ * What to do about it depends on which of two situations it is, and the page
+ * can tell them apart by trying. Either the daemon is gone, in which case
+ * nothing helps and saying so is the whole job. Or the daemon is fine and this
+ * browser will not make background requests to it, in which case one thing
+ * still works and the page should use it.
+ *
+ * That second case is real and not exotic. Claude Code's built-in browser
+ * loads a review over a Tailscale name, runs its inline script and stylesheet,
+ * and posts its forms, while refusing every fetch, XHR, image and stylesheet
+ * request the page makes to that same origin. Measured, all four: blocked.
+ * Only top-level navigation gets through.
+ *
+ * Which means the page there knows nothing. It cannot stream, cannot poll, and
+ * has no way to learn that a revision landed. This first shipped as a timer
+ * that reloaded every thirty seconds on that reasoning, and the reasoning was
+ * wrong twice over. A page that moves under someone reading code is worse than
+ * a page that waits, and reloading blind is not knowing something, it is
+ * guessing on a schedule and hiding the guess.
+ *
+ * So the page says what it knows, which is that it cannot tell, and hands the
+ * reviewer the one control that works. Nothing reloads unless they ask.
  */
+
+/* Survives a reload, so a page coming back in a browser that blocks requests
+   says so at once rather than waiting to fail twice again. */
+const BLOCKED_KEY = 'reviewd_background_blocked';
+
 let missedChecks = 0;
 let offline = false;
+
+function blockedBefore() {
+  try {
+    return sessionStorage.getItem(BLOCKED_KEY) === '1';
+  } catch {
+    /* Storage can be denied on its own terms. Falling back to live mode costs
+       a browser that blocks requests its updates, and costs nothing else. */
+    return false;
+  }
+}
+
+function rememberBlocked(yes) {
+  try {
+    if (yes) sessionStorage.setItem(BLOCKED_KEY, '1');
+    else sessionStorage.removeItem(BLOCKED_KEY);
+  } catch {
+    /* Nothing to do. See above. */
+  }
+}
 
 function contactLost() {
   if (offline) return;
   offline = true;
 
-  const pill = document.createElement('div');
-  pill.id = 'stale-notice';
-  pill.className = 'live-notice stale';
-  /* alert, not status: this is the page telling the reviewer it can no longer
-     vouch for what they are reading, which is worth interrupting for. */
-  pill.setAttribute('role', 'alert');
-  pill.textContent = 'Not updating. Lost contact with reviewd — reload to see the current revision.';
-  document.body.appendChild(pill);
+  /* The page loaded, so the daemon answered a navigation seconds ago. A
+     browser blocking background requests is the likelier reading of a failed
+     poll than a daemon that died in between, and it is the one the reviewer
+     can act on. */
+  const blocked = blockedBefore();
+  rememberBlocked(true);
+  showStale(blocked);
+}
+
+/*
+ * No backticks anywhere below this line: it all lives inside a template
+ * literal, and one of them ends the string and turns the rest of the page
+ * script into a syntax error.
+ */
+
+/*
+ * Says how the page is keeping up, in the bar, next to the revision number.
+ *
+ * This was a pill floating over the diff, and floating was the mistake. A pill
+ * suits something momentary; this state lasts for as long as the reviewer
+ * stays in a browser that will not make background requests, which is the
+ * whole session. A permanent overlay is a permanent hole in the code being
+ * read, and moving it around only changes which lines it hides.
+ *
+ * It is also quiet on purpose. The page is not broken, it is keeping up a
+ * slower way, and that is worth one small line rather than an interruption
+ * after every reload.
+ */
+/*
+ * This same review at 127.0.0.1, or nothing if we are already on a loopback
+ * name.
+ *
+ * Same port and same path, because the daemon that served this page is the one
+ * being addressed; only the name it is reached by changes. Built here rather
+ * than sent by the daemon, which knows what it bound to and cannot know which
+ * names a given browser will make requests to.
+ */
+function loopbackHere() {
+  /* IPv6 arrives bracketed from location.hostname in some browsers and bare in
+     others, so both spellings of ::1 reach the comparison below. */
+  const host = location.hostname.toLowerCase().replace(/^[[]|]$/g, '');
+
+  /* The names that already get the privilege, so the notice never offers to
+     take the reviewer somewhere they are. Claude Code's desktop documentation
+     names this set: localhost, any *.localhost subdomain, 127.0.0.1, and ::1.
+     The subdomain form is easy to miss and is why this is a suffix test rather
+     than three equality checks. */
+  const loopbackName =
+    host === '127.0.0.1' || host === '::1' || host === 'localhost' || host.endsWith('.localhost');
+
+  if (loopbackName) return null;
+
+  const port = location.port ? ':' + location.port : '';
+  return 'http://127.0.0.1' + port + location.pathname + location.search;
+}
+
+function showStale(knownBlocked) {
+  if (document.getElementById('keeping-up')) return;
+
+  const bar = document.querySelector('header.top');
+  if (!bar) return;
+
+  const note = document.createElement('span');
+  note.id = 'keeping-up';
+  note.className = 'keeping-up';
+  /* status, not alert. This reads once when it appears and never interrupts
+     again, which is right for something that describes the page rather than
+     the review. */
+  note.setAttribute('role', 'status');
+
+  const what = document.createElement('span');
+  what.className = 'what';
+  /* What is true, not what the page intends to do about it. It cannot tell
+     whether anything has changed, so it does not imply that it can. */
+  what.textContent = 'Not live';
+  note.appendChild(what);
+
+  const sameReviewOnLoopback = loopbackHere();
+
+  /* The full sentence lives here rather than on screen, so the bar stays a bar
+     and the explanation is one hover or one screen reader away. */
+  note.title = sameReviewOnLoopback
+    ? 'This browser only makes background requests to localhost, so this page cannot see new revisions or comments. Open the same review on localhost and it updates by itself.'
+    : knownBlocked
+      ? 'This browser blocks background requests to reviewd, so this page cannot see new revisions or comments. Refresh to catch up.'
+      : 'Lost contact with reviewd, so this page cannot see new revisions or comments. Refresh to catch up.';
+
+  /*
+   * The link that actually fixes it, when there is one.
+   *
+   * Measured in Claude Code's built-in browser: it permits background requests
+   * to a loopback host and refuses them to every other name. Not to a loopback
+   * address, to the name. The control was a server on 127.0.0.1:7788 reached
+   * as localtest.me, a public name resolving to 127.0.0.1: allowed by address,
+   * blocked by name. So editing hosts does not help and changing the address
+   * bar does.
+   *
+   * Which browser this is, and whether it sits on the same machine as the
+   * daemon, are both things the page cannot ask. It does not have to. The
+   * offer only appears once background requests have already failed, and a
+   * browser that makes them normally never sees it. The situation selects its
+   * own audience, so the page can suggest instead of detect.
+   */
+  if (sameReviewOnLoopback) {
+    const local = document.createElement('a');
+    local.className = 'refresh';
+    local.href = sameReviewOnLoopback;
+    local.textContent = 'Open on localhost';
+    note.appendChild(local);
+  }
+
+  /* A real control rather than a countdown.
+     The reviewer is reading code. Moving the page under them on a timer, to
+     fetch something the page has no evidence exists, takes a decision that is
+     theirs and gives back a lost scroll position. This says the page is behind
+     and lets them choose the moment. */
+  const refresh = document.createElement('button');
+  refresh.type = 'button';
+  refresh.className = 'refresh';
+  refresh.textContent = 'Refresh';
+  refresh.addEventListener('click', () => location.reload());
+  note.appendChild(refresh);
+
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'dismiss';
+  close.setAttribute('aria-label', 'Hide this notice');
+  close.textContent = '×';
+  close.addEventListener('click', () => note.remove());
+  note.appendChild(close);
+
+  bar.appendChild(note);
 }
 
 function contactMade() {
   missedChecks = 0;
+  rememberBlocked(false);
   if (!offline) return;
   offline = false;
 
-  const pill = document.getElementById('stale-notice');
-  if (pill) pill.remove();
+  const note = document.getElementById('keeping-up');
+  if (note) note.remove();
 }
 
-/* Two in a row, so one dropped packet does not cry wolf. */
+/* Two in a row, so one dropped packet does not cry wolf. A browser already
+   known to block requests does not get the benefit of the doubt twice. */
 function checkFailed() {
   missedChecks += 1;
-  if (missedChecks >= 2) contactLost();
+  if (missedChecks >= 2 || blockedBefore()) contactLost();
 }
 
 const liveMain = document.getElementById('main');
+
+/* Reachable from a console on purpose. Diagnosing a page that had stopped
+   updating meant opening a second EventSource from the console to guess at the
+   state of the first, because this one was scoped inside the block below and
+   nothing outside could see it. */
+let liveStream = null;
+
 if (liveMain && liveMain.dataset.review && 'EventSource' in window) {
   const source = new EventSource('/r/' + liveMain.dataset.review + '/events');
+  liveStream = source;
+  window.reviewdLive = {
+    stream: source,
+    state: () => ['connecting', 'open', 'closed'][source.readyState],
+    blocked: blockedBefore,
+    check: checkForChanges,
+  };
   source.addEventListener('threads', land);
   source.addEventListener('gone', () => { source.close(); location.reload(); });
 
@@ -984,6 +1175,7 @@ function renderedState() {
   return {
     seq: Number(carrier.dataset.revision),
     awaiting: Number(carrier.dataset.awaiting),
+    submitted: Number(carrier.dataset.submitted),
   };
 }
 
@@ -1018,19 +1210,17 @@ async function checkForChanges() {
     const response = await fetch('/api/reviews/' + liveMain.dataset.review);
     if (!response.ok) { checkFailed(); return; }
     const review = await response.json();
-    now = { seq: review.snapshotSeq, awaiting: review.threadsAwaitingHuman };
+    now = {
+      seq: review.snapshotSeq,
+      awaiting: review.threadsAwaitingHuman,
+      submitted: review.lastSubmissionAt,
+    };
   } catch {
     checkFailed();
     return;
   }
 
   contactMade();
-
-  /* Below the fetch on purpose. Nothing may pull the ground out from under
-     someone mid-sentence, but whether the daemon is still there is worth
-     knowing while they type — and the old early return meant a page could not
-     notice it had gone stale for as long as a textarea held anything. */
-  if (busyWriting()) return;
 
   if (now.seq !== was.seq) {
     settled = 'Now showing revision ' + now.seq + '.';
@@ -1039,7 +1229,12 @@ async function checkForChanges() {
     return;
   }
 
-  if (now.awaiting !== was.awaiting) {
+  /* A submission made in another browser. The turn counts cannot see this:
+     the reviewer's own note makes it the agent's turn, so it moves the agent
+     count and not the human one, and a second note on a thread already the
+     agent's moves neither. A review open on a laptop and a phone showed the
+     laptop's notes on the phone only when an agent happened to write. */
+  if (now.submitted !== was.submitted || now.awaiting !== was.awaiting) {
     land();
     return;
   }

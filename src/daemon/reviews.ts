@@ -142,6 +142,13 @@ export async function summarize({ db, config }: Deps, reviewId: string): Promise
 
   const turns = await countThreadsByTurn(db, reviewId)
 
+  const lastSubmission = await db
+    .selectFrom('submission')
+    .select('submitted_at')
+    .where('review_id', '=', reviewId)
+    .orderBy('submitted_at', 'desc')
+    .executeTakeFirst()
+
   const sourceSummaries: SourceSummary[] = sources.map((source) => ({
     id: source.id,
     label: source.label,
@@ -163,6 +170,7 @@ export async function summarize({ db, config }: Deps, reviewId: string): Promise
     fileCount: fileCount?.n ?? 0,
     threadsAwaitingAgent: turns.agent,
     threadsAwaitingHuman: turns.human,
+    lastSubmissionAt: lastSubmission?.submitted_at ?? 0,
     sources: sourceSummaries,
   }
 }

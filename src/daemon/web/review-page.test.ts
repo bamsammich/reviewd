@@ -19,6 +19,7 @@ function summary(overrides: Partial<ReviewSummary> = {}): ReviewSummary {
     fileCount: 1,
     threadsAwaitingAgent: 0,
     threadsAwaitingHuman: 0,
+    lastSubmissionAt: 0,
     sources: [
       {
         id: SOURCE,
@@ -208,19 +209,187 @@ describe('losing contact with the daemon', () => {
     expect(body).toMatch(/catch \{\s*checkFailed\(\);\s*return;\s*\}/)
   })
 
-  it('asks whether the reviewer is typing only after it has asked the daemon', () => {
+  it('does not consult the draft state at all, and leaves that to land()', () => {
     const body = poll(script())
 
-    // The other order is what let a page hold a draft and stop noticing it had
-    // gone stale for as long as the draft sat there.
-    expect(body.indexOf('fetch(')).toBeLessThan(body.indexOf('busyWriting()'))
+    // This used to return early while a textarea held anything, so a page
+    // could not notice it had gone stale for as long as a draft sat there.
+    // land() already defers correctly and retries every two seconds, so the
+    // poll now has no opinion about typing and every path goes through it.
+    expect(body).not.toContain('busyWriting()')
+    expect(body).toContain('land()')
   })
 
-  it('ships somewhere to put the warning, and a rule to draw it', () => {
+  it('ships somewhere to say so, and a rule to draw it', () => {
     const markup = script()
 
-    expect(markup).toContain('stale-notice')
-    expect(markup).toMatch(/\.live-notice\.stale\s*\{/)
+    expect(markup).toContain('keeping-up')
+    expect(markup).toMatch(/header\.top \.keeping-up\s*\{/)
+  })
+
+  /**
+   * The status goes in the bar, never over the diff.
+   *
+   * It started as a pill floating above the action bar and that was wrong for
+   * a reason the first screenshot made obvious: in a browser that blocks
+   * background requests this state never ends, and a permanent overlay is a
+   * permanent hole in the code being read. Moving it left only changed which
+   * lines it covered.
+   */
+  it('puts the status in the header rather than on top of the code', () => {
+    const markup = script()
+
+    expect(markup).toContain('bar.appendChild(note)')
+    expect(markup).not.toMatch(/document\.body\.appendChild\(note\)/)
+    // The transient "updating when you stop typing" pill is a different thing
+    // and stays an overlay, because it lasts a moment.
+    expect(markup).toContain('document.body.appendChild(pill)')
+  })
+
+  it('survives the refresh that replaces the header it lives in', () => {
+    const markup = script()
+    const fn = markup.slice(markup.indexOf('async function refresh'), markup.indexOf('let settled'))
+
+    // refresh() swaps header.top wholesale for a freshly rendered one, which
+    // does not carry the status. Without this it vanishes on the first refresh
+    // and the page goes back to looking live while it is not.
+    expect(fn).toMatch(/if \(offline\) showStale\(blockedBefore\(\)\)/)
+  })
+
+  it('lets the reviewer hide the notice', () => {
+    const markup = script()
+
+    expect(markup).toContain("close.className = 'dismiss'")
+    expect(markup).toMatch(/close\.addEventListener\('click', \(\) => note\.remove\(\)\)/)
+  })
+})
+
+/**
+ * A browser that refuses to make background requests.
+ *
+ * Claude Code's built-in browser loads a review over a Tailscale name, runs
+ * its inline script, and posts its forms, while blocking every fetch, XHR,
+ * image and stylesheet the page asks for from that same origin. All four
+ * measured, all four blocked, while curl against the identical URL answers
+ * 200 and the response headers are byte-identical to the loopback ones.
+ *
+ * So the page is not broken there, it has one channel left. Top-level
+ * navigation still works, which makes a reload the way those browsers keep up.
+ */
+describe('a browser that blocks background requests', () => {
+  const script = (): string => reviewPage(summary(), [file('src/a.ts')], []).value
+
+  it('offers a refresh the reviewer drives', () => {
+    const markup = script()
+
+    expect(markup).toContain("refresh.textContent = 'Refresh'")
+    expect(markup).toContain('location.reload()')
+  })
+
+  /**
+   * Nothing reloads on a timer.
+   *
+   * This first shipped reloading every thirty seconds whenever background
+   * requests were blocked, on the reasoning that a reload was the one channel
+   * left. Both halves were wrong. The page has no evidence anything changed,
+   * so a timed reload is a guess on a schedule; and a page that moves under
+   * someone reading code takes a decision that belongs to them and costs them
+   * their place. It says it is behind and lets them pick the moment.
+   */
+  it('never moves the page on its own', () => {
+    const markup = script()
+
+    expect(markup).not.toContain('scheduleReload')
+    expect(markup).not.toContain('reloadTimer')
+    // The only reload is the one wired to the button.
+    expect(markup.match(/location\.reload\(\)/g)?.length).toBe(2)
+  })
+
+  /**
+   * The one link that fixes it, offered without having to detect anything.
+   *
+   * Claude Code's built-in browser permits background requests to a loopback
+   * host and refuses them to every other name. The control was a server on
+   * 127.0.0.1:7788 reached as localtest.me, a public name that resolves to
+   * 127.0.0.1: allowed by address, blocked by name. So the address bar is the
+   * fix and an /etc/hosts entry is not.
+   *
+   * The page cannot ask which browser it is in or whether the daemon is on
+   * this machine. It does not need to: the offer appears only after background
+   * requests have already failed, which is a situation that selects its own
+   * audience.
+   */
+  it('offers the same review on loopback, where those requests are permitted', () => {
+    const markup = script()
+
+    expect(markup).toContain("local.textContent = 'Open on localhost'")
+    expect(markup).toContain('function loopbackHere')
+  })
+
+  it('keeps the port and path, changing only the name', () => {
+    const markup = script()
+    const fn = markup.slice(
+      markup.indexOf('function loopbackHere'),
+      markup.indexOf('function showStale'),
+    )
+
+    expect(fn).toContain('location.pathname')
+    expect(fn).toContain('location.port')
+  })
+
+  it('offers nothing when the page is already on a loopback name', () => {
+    const markup = script()
+    const fn = markup.slice(
+      markup.indexOf('function loopbackHere'),
+      markup.indexOf('function showStale'),
+    )
+
+    // Otherwise the notice offers to take the reviewer where they already are.
+    // The privileged set is the one Claude Code's desktop documentation names:
+    // localhost, any *.localhost subdomain, 127.0.0.1, and ::1. The subdomain
+    // form is the one easily missed.
+    expect(fn).toContain("host === '127.0.0.1'")
+    expect(fn).toContain("host === '::1'")
+    expect(fn).toContain("host === 'localhost'")
+    expect(fn).toContain("host.endsWith('.localhost')")
+    expect(fn).toContain('return null')
+  })
+
+  it('says what is true rather than what it intends to do', () => {
+    const markup = script()
+
+    // It cannot tell whether anything changed, so it must not imply it can.
+    expect(markup).toContain("what.textContent = 'Not live'")
+    expect(markup).not.toContain('Refreshing every')
+  })
+
+  it('remembers across a reload that this browser blocks requests', () => {
+    const markup = script()
+
+    // Without this the page comes back, starts the two-failure count over, and
+    // reloads again on a whim rather than because it learned anything.
+    expect(markup).toContain('reviewd_background_blocked')
+    expect(markup).toContain('sessionStorage')
+  })
+
+  it('survives storage being denied rather than failing the page', () => {
+    const markup = script()
+    const fn = markup.slice(
+      markup.indexOf('function blockedBefore'),
+      markup.indexOf('function rememberBlocked'),
+    )
+
+    expect(fn).toContain('catch')
+  })
+})
+
+describe('the live stream is reachable for diagnosis', () => {
+  it('hangs the stream off the page rather than sealing it in a block', () => {
+    const markup = reviewPage(summary(), [file('src/a.ts')], []).value
+
+    // Diagnosing a page that had stopped updating meant opening a second
+    // EventSource from the console to guess at the state of the first.
+    expect(markup).toContain('window.reviewdLive')
   })
 })
 

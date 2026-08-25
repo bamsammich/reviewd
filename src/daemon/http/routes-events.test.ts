@@ -4,7 +4,7 @@ import { configSchema, resolve } from '../config.js'
 import { tempDatabase, type TempDatabase } from '../db/testing.js'
 import { release } from '../gate.js'
 import { createReview, createSnapshot, putBlob, sha256, type Deps } from '../reviews.js'
-import { createThread } from '../threads.js'
+import { createThread, submitReview } from '../threads.js'
 import { createApp, type App } from './app.js'
 
 let ctx: TempDatabase
@@ -126,6 +126,46 @@ async function pushRevision(review: { reviewId: string; sources: { id: string }[
     ],
   })
 }
+
+/**
+ * A review is open in two places at once, which is the ordinary case.
+ *
+ * Reported from a real review: notes sent from a laptop did not appear on a
+ * phone until an agent happened to write something, and that unrelated refresh
+ * carried them down. The stream forwarded agent writes and revisions and left
+ * submissions out, on the reasoning that a submission is the reviewer's own
+ * action on a page that already re-rendered from it. True of the browser they
+ * pressed the button in. False of every other one.
+ */
+describe('a submission the reviewer made somewhere else', () => {
+  it('reaches a page open in another browser', async () => {
+    const review = await seed()
+    await agentComment(review.reviewId)
+    const stream = await listen(review.reviewId, `since=${Date.now()}`)
+
+    await submitReview(deps, review.reviewId, 'comment')
+
+    expect(await stream.frame()).toContain('event: threads')
+    stream.close()
+  })
+
+  it('is replayed to a page that reconnects after missing it', async () => {
+    const review = await seed()
+    const before = Date.now()
+    // The replay asks for submissions strictly after `before`, which is right:
+    // a page must not be sent the event it just handled. Both land in the same
+    // millisecond without this, and the test fails on the clock.
+    await new Promise((r) => setTimeout(r, 5))
+    await submitReview(deps, review.reviewId, 'changes_requested')
+
+    // No agent has written at all here, which is what the old replay asked
+    // about, so this is the case that came back still missing the notes.
+    const stream = await listen(review.reviewId, `since=${before}`)
+
+    expect(await stream.frame()).toContain('event: threads')
+    stream.close()
+  })
+})
 
 describe('the review page event stream', () => {
   it('serves an event stream', async () => {

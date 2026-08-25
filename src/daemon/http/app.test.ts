@@ -30,10 +30,25 @@ describe('app', () => {
     expect(await res.json()).toEqual({ ok: true })
   })
 
-  it('advertises local-only capabilities when it shares a disk with the code', async () => {
+  it('says it shares a disk with the code when it does', async () => {
     const res = await app.request('/api/capabilities', { headers: LOOPBACK })
 
-    expect(await res.json()).toMatchObject({ local: true, openInEditor: true, fileWatch: true })
+    expect(await res.json()).toMatchObject({ local: true })
+  })
+
+  /**
+   * A capability is a promise, and these two were not kept.
+   *
+   * `openInEditor` and `fileWatch` were both answered `true` on a local daemon
+   * and neither existed anywhere in the source. A client written against them
+   * would have built a feature that did nothing at all, which is a worse
+   * outcome than the feature being missing, because nothing fails.
+   */
+  it('advertises nothing it cannot do', async () => {
+    const res = await app.request('/api/capabilities', { headers: LOOPBACK })
+    const body = (await res.json()) as Record<string, unknown>
+
+    expect(Object.keys(body).sort()).toEqual(['local', 'version'])
   })
 
   it('reports the version the package actually says, not one typed by hand', async () => {
@@ -43,7 +58,7 @@ describe('app', () => {
     expect(await res.json()).toMatchObject({ version: pkg.version })
   })
 
-  it('withholds them when it does not', async () => {
+  it('says it does not when it shares no disk with the code', async () => {
     const config = resolve(configSchema.parse({}), {
       configPath: '/tmp/reviewd-test.json',
       bindPublic: false,
@@ -51,7 +66,7 @@ describe('app', () => {
     const remote = createApp({ config, db: ctx.db, local: false })
 
     const res = await remote.request('/api/capabilities', { headers: LOOPBACK })
-    expect(await res.json()).toMatchObject({ local: false, openInEditor: false, fileWatch: false })
+    expect(await res.json()).toMatchObject({ local: false })
   })
 
   it('runs the hardening stack ahead of every route', async () => {
