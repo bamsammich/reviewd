@@ -551,12 +551,15 @@ header.top .keeping-up .dismiss:focus-visible { outline: 2px solid currentColor;
   main.view-split .row > .side.left { border-right: 1px solid var(--rule); }
   main.view-split .side { grid-template-columns: 2.6rem 1.5rem .9rem minmax(0, 1fr); }
 
+  /* Unbounded on purpose. A cap centers the page and turns everything past it
+     into margin, which on a wide monitor is 480px a side that lines wrap for
+     want of. GitHub's Files tab is uncapped for the same reason; its 1280px cap
+     is on the Conversation tab, which is prose. */
   main.review {
     display: grid;
     grid-template-columns: minmax(15rem, 19rem) minmax(0, 1fr);
     gap: 1.5rem;
     align-items: start;
-    max-width: 100rem; margin: 0 auto;
   }
   main.review.rail-closed { grid-template-columns: minmax(0, 1fr); }
   /* Sticky and unbounded means a tree taller than the viewport has entries
@@ -574,7 +577,10 @@ header.top .keeping-up .dismiss:focus-visible { outline: 2px solid currentColor;
   main.review .files { min-width: 0; }
   main.with-bar { padding-bottom: 5rem; }
 
-  .bar .row { max-width: 100rem; margin: 0 auto; flex-wrap: nowrap; }
+  /* The bar spans the window, so its padding is what lines the verdict buttons
+     up with the right edge of the diff above them. */
+  .bar { padding-left: 1.5rem; padding-right: 1.5rem; }
+  .bar .row { flex-wrap: nowrap; }
   .bar .state { flex: 1 1 auto; }
   .bar .verdicts { flex: 0 0 auto; }
   .bar .verdicts button { flex: 0 0 auto; }
