@@ -20,6 +20,7 @@
   "scripts": {
     "build": "tsc --build",
     "prepare": "npm run build",
+    "version": "node scripts/sync-plugin-version.mjs && git add plugin/.claude-plugin/plugin.json",
     "typecheck": "tsc --build",
     "test": "vitest run",
     "test:watch": "vitest",
