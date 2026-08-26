@@ -50,6 +50,19 @@ The first command puts `reviewd` on your `PATH`. The second registers the plugin
 with Claude Code, which is what installs the commit gate hook, the MCP server,
 and the skill that drives a review. Restart Claude Code afterwards to load it.
 
+`init` prints what it is about to do — which marketplace and plugin, which files
+it will rewrite, and that one of them is a hook refusing `git commit` — and waits
+for a yes. It copies every file it names, timestamped, before touching any, and
+reports each path afterwards.
+
+```sh
+reviewd init --dry-run   # print the plan, change nothing
+reviewd init --yes       # skip the question, for scripts
+```
+
+A pipe is not asked: run from something that is not a terminal, `init` proceeds
+and still prints the plan and the paths.
+
 Check it with `reviewd doctor`, which reports where the daemon answers and
 whether the plugin matches the binary.
 

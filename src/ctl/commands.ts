@@ -6,7 +6,8 @@ import { loadClientConfig } from './config.js'
 import { fingerprint } from './diff.js'
 import { ensureDaemon, logPath } from './ensure.js'
 import { repoRoot, stagedDivergence } from './git.js'
-import { initPlugin, installedPluginVersion } from './init.js'
+import { initPlugin, installedPluginVersion, noClaudeMessage, planInit } from './init.js'
+import { renderPlan, renderResult } from './init-report.js'
 import { runMcpServer } from './mcp.js'
 
 /** One long-poll round. Shorter than the deadline so a proxy idle timeout cannot strand it. */
@@ -89,16 +90,63 @@ async function reportPlugin(): Promise<void> {
   process.stdout.write(`reviewd: plugin ${installed} installed and current\n`)
 }
 
-export async function initCommand(): Promise<void> {
+export interface InitOptions {
+  dryRun?: boolean
+  yes?: boolean
+  /** Asks the question. Injected so the tests never wait on a terminal. */
+  confirm?: () => Promise<boolean>
+}
+
+export async function initCommand(options: InitOptions = {}): Promise<void> {
   try {
-    const result = await initPlugin()
-    process.stdout.write(
-      `reviewd: marketplace ${result.marketplace}, plugin installed.\n` +
-        'Restart Claude Code to load it.\n',
-    )
+    const plan = await planInit()
+
+    if (!plan.harness) {
+      // Not a failure worth an exit code on --dry-run: nothing was going to
+      // happen either way, and the message is the useful part.
+      process.stdout.write(`${noClaudeMessage()}\n`)
+      if (!options.dryRun) process.exitCode = 1
+      return
+    }
+
+    process.stdout.write(renderPlan(plan))
+
+    if (options.dryRun) {
+      process.stdout.write('Nothing was changed (--dry-run).\n')
+      return
+    }
+
+    if (!(await agreed(options))) {
+      process.stdout.write('Nothing was changed.\n')
+      return
+    }
+
+    process.stdout.write(renderResult(await initPlugin()))
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
     process.exitCode = 1
+  }
+}
+
+/**
+ * Whether to go ahead.
+ *
+ * A pipe gets no question. init is run from install scripts and from
+ * catchUpPlugin, and a prompt written to something that cannot answer is a
+ * hang, which is worse than the surprise the prompt exists to prevent. The
+ * plan is printed either way, so a non-terminal run still says what it did.
+ */
+async function agreed(options: InitOptions): Promise<boolean> {
+  if (options.yes) return true
+  if (options.confirm) return await options.confirm()
+  if (!process.stdin.isTTY) return true
+
+  const { createInterface } = await import('node:readline/promises')
+  const rl = createInterface({ input: process.stdin, output: process.stdout })
+  try {
+    return /^(y|yes)$/i.test((await rl.question('Go ahead? [y/N] ')).trim())
+  } finally {
+    rl.close()
   }
 }
 
