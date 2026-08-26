@@ -17,6 +17,15 @@ export interface TempRepo {
    * repository" by looking for a directory gets it wrong.
    */
   worktree: (branch: string) => string
+  /**
+   * Adds `other` as a submodule at `path` and commits it, returning the two
+   * commits of the submodule so a test can move the pointer between them.
+   *
+   * A submodule is worth a fixture because its entry is a gitlink: mode 160000,
+   * holding a commit sha that lives in the submodule's object database and not
+   * in this one. Anything that reads a change's sha as a blob breaks on it.
+   */
+  submodule: (path: string, other: TempRepo) => { first: string; second: string }
   cleanup: () => void
 }
 
@@ -60,6 +69,23 @@ export function tempRepo(): TempRepo {
       run('worktree', 'add', '-q', path, '-b', branch)
       trees.push(path)
       return path
+    },
+    submodule: (path: string, other: TempRepo) => {
+      // Two commits in the submodule, so a test has somewhere to move to.
+      other.write('lib.txt', 'one\n')
+      other.commit('lib first')
+      const first = other.run('rev-parse', 'HEAD').trim()
+      other.write('lib.txt', 'two\n')
+      other.commit('lib second')
+      const second = other.run('rev-parse', 'HEAD').trim()
+
+      // Cloning a submodule from a local path is refused by default since
+      // CVE-2022-39253, and this fixture is the case the protection is not
+      // about: a directory the test made moments ago.
+      run('-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', other.root, path)
+      run('commit', '-q', '-m', `add submodule at ${path}`)
+
+      return { first, second }
     },
     cleanup: () => {
       for (const tree of trees) rmSync(dirname(tree), { recursive: true, force: true })
