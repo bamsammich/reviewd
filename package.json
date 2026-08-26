@@ -1,6 +1,6 @@
 {
   "name": "reviewd",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local-first code review for working with coding agents, with a commit gate that holds code until a human has read it",
   "license": "MIT",
   "repository": "github:bamsammich/reviewd",
