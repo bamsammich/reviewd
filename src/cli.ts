@@ -33,6 +33,8 @@ Commands:
   doctor                    Check that the daemon answers where links point
 
 Options:
+  --dry-run                 init: print the plan and change nothing
+  --yes                     init: skip the confirmation, for scripts
   --config <path>           serve: config file, default $XDG_CONFIG_HOME/reviewd/config.json
   --bind-public             serve: allow binding an address reachable beyond this machine
   --review <id>             wait: which review to block on
@@ -56,6 +58,8 @@ async function main(): Promise<void> {
       config: { type: 'string' },
       'bind-public': { type: 'boolean', default: false },
       json: { type: 'boolean', default: false },
+      'dry-run': { type: 'boolean', default: false },
+      yes: { type: 'boolean', default: false },
       review: { type: 'string' },
       timeout: { type: 'string' },
       help: { type: 'boolean', short: 'h', default: false },
@@ -81,7 +85,7 @@ async function main(): Promise<void> {
 
   switch (command) {
     case 'init':
-      return await initCommand()
+      return await initCommand({ dryRun: values['dry-run'], yes: values.yes })
     case 'serve':
       return await runServe({
         configPath: values.config,
