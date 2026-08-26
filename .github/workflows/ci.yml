@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # release.yml runs these same checks before publishing. Called rather than
+  # copied, so a check added here is one a release cannot skip.
+  workflow_call:
 
 jobs:
   check:

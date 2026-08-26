@@ -216,6 +216,26 @@ claude plugin validate ./plugin
 npm run icons                         # after upgrading @phosphor-icons/core
 ```
 
+### Cutting a release
+
+```sh
+npm version patch && git push --follow-tags
+```
+
+That is the whole release. `npm version` writes the new number into
+`plugin/.claude-plugin/plugin.json` as well, and pushing the tag starts
+`.github/workflows/release.yml`, which runs the full CI suite and publishes.
+
+Three things it refuses to publish through: an npm older than 11.5.1, a tag that
+disagrees with `package.json`, and a `plugin.json` left on the old version. Each
+fails before `npm publish` runs, so a bad tag costs a re-tag rather than a
+deprecation.
+
+There is no npm token anywhere. The workflow authenticates with npm's trusted
+publishing over OIDC, which also attaches provenance. Setting that up is a
+one-time step on npmjs.com: on the `reviewd` package, add a trusted publisher
+for the `bamsammich/reviewd` repository with workflow `release.yml`.
+
 ## Status
 
 Working. The daemon, the CLI, the web UI, the MCP interface, and the commit gate
