@@ -93,6 +93,25 @@ check_root() {
   fi
 }
 
+# Asserts the denial says a particular thing, not merely that it denied.
+#
+# Every case here already denies, so `check` cannot tell the two messages
+# apart, and the message is what the reader acts on.
+check_says() {
+  local name=$1 want=$2 command=$3 cwd=$4 out reason
+  out=$(jq -nc --arg c "$command" --arg d "$cwd" '{tool_input:{command:$c},cwd:$d}' | "$HOOK")
+  reason=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // ""')
+
+  if printf '%s' "$reason" | grep -qF "$(printf '%s' "$want" | sed 's/\\//g')"; then
+    pass=$((pass + 1))
+    printf '  ok   %s\n' "$name"
+  else
+    fail=$((fail + 1))
+    printf '  FAIL %s\n    wanted the reason to mention %s\n    got: %s\n    command: %s\n' \
+      "$name" "$want" "${reason:-<none>}" "$command"
+  fi
+}
+
 check() {
   local name=$1 want=$2 command=$3 cwd=$4 got
   got=$(verdict "$command" "$cwd")
@@ -146,6 +165,18 @@ check_root "no cd at all" "$A" "git commit -m x" "$A"
 
 # Nothing identifiable is a denial now, not a silent pass.
 check "commit with no repository anywhere" deny "git commit -m x" "$outside"
+
+# A repository named by a variable still denies, and now says why. The verdict
+# was never the problem: "no git repository could be identified" reads as a
+# typo, so the reader checks a path that is correct and concludes the gate is
+# broken. Assert on the sentence, because the sentence is the whole fix.
+check_says "a -C naming a variable blames the variable" '\$R' "git -C \"\$R\" commit --no-edit" "$outside"
+check_says "a cd to a variable blames the variable" '\$REPO' "cd \"\$REPO\" && git commit -m x" "$outside"
+check_says "a bare variable, unquoted" '\$R' "git -C \$R commit -m x" "$outside"
+check_says "an unresolvable path with no variable stays generic" 'no git repository' "cd /nope/nowhere && git commit -m x" "$outside"
+
+# A variable the walk never reaches is not the cause, so it is not blamed.
+check_says "a variable after the commit is not the cause" 'no git repository' "git commit -m x && cd \"\$R\"" "$outside"
 
 # Still quiet about everything that is not a commit. The word turns up in
 # messages, in echoed text, and in arguments to other programs, and a gate that
