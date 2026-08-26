@@ -44,15 +44,39 @@ describe('parseRawDiff', () => {
   it('reads a modification', () => {
     const raw = ':100644 100644 aaa bbb M\0src/a.ts\0'
     expect(parseRawDiff(raw)).toEqual([
-      { status: 'M', oldSha: 'aaa', newSha: 'bbb', path: 'src/a.ts' },
+      {
+        status: 'M',
+        oldMode: '100644',
+        newMode: '100644',
+        oldSha: 'aaa',
+        newSha: 'bbb',
+        path: 'src/a.ts',
+      },
     ])
   })
 
   it('reads a rename, which carries two paths', () => {
     const raw = ':100644 100644 aaa bbb R100\0old.ts\0new.ts\0'
     expect(parseRawDiff(raw)).toEqual([
-      { status: 'R100', oldSha: 'aaa', newSha: 'bbb', path: 'new.ts', oldPath: 'old.ts' },
+      {
+        status: 'R100',
+        oldMode: '100644',
+        newMode: '100644',
+        oldSha: 'aaa',
+        newSha: 'bbb',
+        path: 'new.ts',
+        oldPath: 'old.ts',
+      },
     ])
+  })
+
+  /**
+   * The mode is the only thing separating a submodule from a file, and dropping
+   * it is what sent a commit sha to `cat-file blob` and failed the whole diff.
+   */
+  it('keeps the modes, so a gitlink can be told from a file', () => {
+    const raw = ':160000 160000 aaa bbb M\0vendor/lib\0'
+    expect(parseRawDiff(raw)[0]).toMatchObject({ oldMode: '160000', newMode: '160000' })
   })
 
   it('reads several records in one pass', () => {
@@ -182,6 +206,80 @@ describe('diffGitSource', () => {
 
     expect(after).not.toBe(before)
     expect((await diffGitSource(source(repo.root))).fingerprint).toBe(after)
+  })
+})
+
+/**
+ * A submodule entry is a gitlink: mode 160000, holding a commit sha from the
+ * submodule's own object database. Reading it as a blob fails with "Not a valid
+ * object name" and took the whole diff with it, so a repository with submodules
+ * could not be reviewed at all.
+ */
+describe('diffGitSource with a submodule', () => {
+  let inner: TempRepo
+
+  beforeEach(() => {
+    inner = tempRepo()
+  })
+
+  afterEach(() => {
+    inner.cleanup()
+  })
+
+  it('diffs a moved pointer rather than failing to read it as a blob', async () => {
+    const { first } = repo.submodule('vendor/lib', inner)
+    repo.run('-C', 'vendor/lib', 'checkout', '-q', first)
+
+    const diff = await diffGitSource(source(repo.root))
+    const change = diff.files.find((f) => f.path === 'vendor/lib')
+
+    expect(change).toBeDefined()
+    expect(change?.changeType).toBe('modified')
+  })
+
+  /** The same line `git diff` renders, so the reviewer reads what git says. */
+  it('shows the pointer on both sides the way git writes it', async () => {
+    const { first, second } = repo.submodule('vendor/lib', inner)
+    repo.run('-C', 'vendor/lib', 'checkout', '-q', first)
+
+    const diff = await diffGitSource(source(repo.root))
+    const change = diff.files.find((f) => f.path === 'vendor/lib')
+
+    expect(text(diff.blobs.get(change?.oldBlobId ?? ''))).toBe(`Subproject commit ${second}\n`)
+    expect(text(diff.blobs.get(change?.newBlobId ?? ''))).toBe(`Subproject commit ${first}\n`)
+  })
+
+  /**
+   * A moved pointer changes what the superproject builds, so it has to re-arm
+   * the gate rather than ride along under the approval given before it.
+   */
+  it('moves the fingerprint when the pointer moves', async () => {
+    const { first, second } = repo.submodule('vendor/lib', inner)
+    const clean = (await diffGitSource(source(repo.root))).fingerprint
+
+    repo.run('-C', 'vendor/lib', 'checkout', '-q', first)
+    const moved = (await diffGitSource(source(repo.root))).fingerprint
+
+    repo.run('-C', 'vendor/lib', 'checkout', '-q', second)
+    const back = (await diffGitSource(source(repo.root))).fingerprint
+
+    expect(moved).not.toBe(clean)
+    expect(back).toBe(clean)
+  })
+
+  it('reads a repository whose submodule has not moved as unchanged', async () => {
+    repo.submodule('vendor/lib', inner)
+    expect((await diffGitSource(source(repo.root))).files).toEqual([])
+  })
+
+  it('handles an added submodule alongside ordinary files', async () => {
+    repo.submodule('vendor/lib', inner)
+    repo.write('src/a.ts', 'const a = 2\n')
+    repo.run('-C', 'vendor/lib', 'checkout', '-q', 'HEAD~1')
+
+    const diff = await diffGitSource(source(repo.root))
+
+    expect(diff.files.map((f) => f.path).sort()).toEqual(['src/a.ts', 'vendor/lib'])
   })
 })
 

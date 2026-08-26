@@ -72,11 +72,22 @@ export function looksBinary(bytes: Uint8Array): boolean {
 
 interface RawChange {
   status: string
+  oldMode: string
+  newMode: string
   oldSha: string
   newSha: string
   path: string
   oldPath?: string
 }
+
+/**
+ * The mode git gives a submodule entry.
+ *
+ * A gitlink's sha names a commit in the submodule's own object database, which
+ * the superproject does not have, so asking it for the blob fails outright.
+ * Reading the mode is the only way to tell one apart from a file.
+ */
+const GITLINK_MODE = '160000'
 
 /**
  * Reads every change against the base ref out of a throwaway index.
@@ -107,7 +118,15 @@ export async function diffGitSource(
 
     const target = await resolveBase(root, base)
     await includeStagedIgnores(root, target, env)
-    const raw = await git(root, ['diff', '--cached', '--raw', '-z', '-M', target], env)
+    // --abbrev=40 because a submodule's sha becomes content here, and git scales
+    // its default abbreviation with the size of the object database. Left to
+    // vary, the same pointer would hash differently as a repository grew and
+    // re-arm the gate for a change nobody made.
+    const raw = await git(
+      root,
+      ['diff', '--cached', '--raw', '-z', '--abbrev=40', '-M', target],
+      env,
+    )
     const changes = parseRawDiff(raw)
 
     if (changes.length > limits.maxFilesPerSnapshot) {
@@ -210,6 +229,8 @@ export function parseRawDiff(raw: string): RawChange[] {
     }
 
     const fields = header.slice(1).split(' ')
+    const oldMode = fields[0] ?? ''
+    const newMode = fields[1] ?? ''
     const oldSha = fields[2] ?? ''
     const newSha = fields[3] ?? ''
     const status = fields[4] ?? ''
@@ -217,12 +238,12 @@ export function parseRawDiff(raw: string): RawChange[] {
     if (status.startsWith('R') || status.startsWith('C')) {
       const oldPath = parts[i + 1] ?? ''
       const path = parts[i + 2] ?? ''
-      changes.push({ status, oldSha, newSha, path, oldPath })
+      changes.push({ status, oldMode, newMode, oldSha, newSha, path, oldPath })
       i += 3
       continue
     }
 
-    changes.push({ status, oldSha, newSha, path: parts[i + 1] ?? '' })
+    changes.push({ status, oldMode, newMode, oldSha, newSha, path: parts[i + 1] ?? '' })
     i += 2
   }
 
@@ -237,8 +258,8 @@ async function toFileChange(
   blobs: Map<string, Uint8Array>,
   limits: DiffLimits,
 ): Promise<FileChangeSpec> {
-  const oldBytes = ZERO_SHA.test(change.oldSha) ? null : await catFile(root, change.oldSha, env)
-  const newBytes = ZERO_SHA.test(change.newSha) ? null : await catFile(root, change.newSha, env)
+  const oldBytes = await sideBytes(root, change.oldMode, change.oldSha, env)
+  const newBytes = await sideBytes(root, change.newMode, change.newSha, env)
 
   const binary =
     (oldBytes !== null && looksBinary(oldBytes)) || (newBytes !== null && looksBinary(newBytes))
@@ -284,6 +305,30 @@ function remember(blobs: Map<string, Uint8Array>, bytes: Uint8Array): string {
   const id = sha256(bytes)
   if (!blobs.has(id)) blobs.set(id, bytes)
   return id
+}
+
+/**
+ * The bytes for one side of a change, or null when that side does not exist.
+ *
+ * A submodule has no bytes to read. What stands in for them is the line git
+ * itself renders for a gitlink, so the diff a reviewer sees says the same thing
+ * `git diff` would and the ordinary rendering path needs to know nothing about
+ * submodules.
+ *
+ * Hashing that line is what makes the pointer part of the approval. A moved
+ * submodule is a real change to what the superproject builds, so it has to move
+ * the fingerprint and re-arm the gate rather than ride along under an approval
+ * given for the commit before it.
+ */
+async function sideBytes(
+  root: string,
+  mode: string,
+  sha: string,
+  env: NodeJS.ProcessEnv,
+): Promise<Uint8Array | null> {
+  if (ZERO_SHA.test(sha)) return null
+  if (mode === GITLINK_MODE) return new TextEncoder().encode(`Subproject commit ${sha}\n`)
+  return await catFile(root, sha, env)
 }
 
 async function catFile(root: string, sha: string, env: NodeJS.ProcessEnv): Promise<Uint8Array> {
