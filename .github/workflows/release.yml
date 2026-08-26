@@ -1,0 +1,80 @@
+name: release
+
+# Publishing is what `npm version patch && git push --follow-tags` means now.
+# 0.1.0 and 0.1.1 went out by hand from whichever machine held the npm token,
+# which is a release process that depends on being at a particular desk.
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  # The whole of ci.yml, not a subset. A publish cannot be undone after 72
+  # hours, so the bar for shipping is the bar for merging.
+  check:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # What trusted publishing runs on: npm reads a short-lived OIDC token
+      # from GitHub instead of a secret this repository would have to store,
+      # and the provenance attestation comes from the same claim.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs npm 11.5.1 or newer. Node 24 ships one, and
+      # this fails loudly rather than falling back to an unauthenticated
+      # publish if that ever stops being true.
+      - name: Check npm is new enough for trusted publishing
+        run: |
+          have=$(npm --version)
+          want=11.5.1
+          if [ "$(printf '%s\n%s\n' "$want" "$have" | sort -V | head -1)" != "$want" ]; then
+            echo "npm $have is older than $want, which trusted publishing needs." >&2
+            exit 1
+          fi
+          echo "npm $have"
+
+      # A tag that disagrees with package.json publishes a version nobody
+      # asked for under a name that says otherwise, and npm keeps it. Cheaper
+      # to refuse here than to deprecate afterwards.
+      - name: Check the tag matches package.json
+        run: |
+          tagged=${GITHUB_REF_NAME#v}
+          packaged=$(node -p 'require("./package.json").version')
+          if [ "$tagged" != "$packaged" ]; then
+            echo "tag $GITHUB_REF_NAME says $tagged, package.json says $packaged." >&2
+            echo "Re-tag, or fix package.json. Nothing was published." >&2
+            exit 1
+          fi
+          echo "publishing $packaged"
+
+      # The other half of the same question. catchUpPlugin compares the
+      # installed plugin's version against the binary's, so a plugin.json left
+      # behind ships a package that reinstalls itself in every session.
+      - name: Check plugin.json agrees
+        run: node scripts/sync-plugin-version.mjs --check
+
+      - run: npm ci
+
+      # No NODE_AUTH_TOKEN. The OIDC exchange above is the whole credential,
+      # and provenance is attached automatically because of it.
+      - run: npm publish
+
+      - name: Record what shipped
+        run: |
+          {
+            echo "### Published"
+            echo
+            echo "\`reviewd@${GITHUB_REF_NAME#v}\` from \`$GITHUB_SHA\`"
+            echo
+            echo "<https://www.npmjs.com/package/reviewd/v/${GITHUB_REF_NAME#v}>"
+          } >>"$GITHUB_STEP_SUMMARY"
