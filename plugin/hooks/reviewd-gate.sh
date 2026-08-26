@@ -227,10 +227,70 @@ target_dir() {
   printf '%s' "$dir"
 }
 
+# The first directory the command names that carries a `$`, or nothing.
+#
+# The hook reads the command before the shell expands it, so `git -C "$R"`
+# arrives as four literal characters and no directory matches. That is the
+# right verdict and the wrong sentence: "no git repository could be identified"
+# describes a typo, so a reader checks the path, finds it correct, and reaches
+# for REVIEWD_SKIP=1 to get past what looks like a broken gate. Naming the
+# variable turns it into an instruction instead.
+#
+# Only consulted once resolution has already failed, so it cannot change which
+# repository the gate picks.
+unexpanded_path() {
+  local segment head path
+  local IFS=$'\n'
+
+  for segment in $(segments "$cmd"); do
+    head=$(command_head "$segment")
+    path=''
+
+    if is_commit_head "$head"; then
+      path=$(printf '%s' "$head" | sed -nE 's/.*[[:space:]]-C[[:space:]]+([^[:space:]]+).*/\1/p')
+    else
+      case $head in
+        cd\ * | pushd\ *)
+          path=$(printf '%s' "$head" | sed -E 's/^(cd|pushd)[[:space:]]+//; s/[[:space:]].*//')
+          ;;
+      esac
+    fi
+
+    case $path in
+      *'$'*)
+        path=${path#[\"\']}
+        path=${path%[\"\']}
+        printf '%s' "$path"
+        return
+        ;;
+    esac
+
+    is_commit_head "$head" && return
+  done
+}
+
 target=$(target_dir)
 root=$(git -C "${target:-/nonexistent}" rev-parse --show-toplevel 2>/dev/null) || root=""
 
 if [ -z "$root" ]; then
+  variable=$(unexpanded_path)
+
+  if [ -n "$variable" ]; then
+    deny "reviewd gate: this is a commit, but the repository is named with a shell
+variable this hook cannot expand: $variable
+
+The hook reads the command as text, before the shell runs it, so $variable is
+still literal here and no directory matches it. The gate is working; it just
+cannot see where you meant.
+
+Write the path out, either way round:
+  git -C /path/to/repo commit ...
+  cd /path/to/repo && git commit ...
+
+Override this one commit only if the user explicitly asks: prefix the command
+with REVIEWD_SKIP=1."
+  fi
+
   deny "reviewd gate: this is a commit, but no git repository could be identified
 for it, so it cannot be checked.
 
