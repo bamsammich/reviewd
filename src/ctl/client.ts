@@ -1,6 +1,7 @@
 import {
   blobCheckResponse,
   gateResponse,
+  observeResponse,
   releaseResult,
   reviewSummary,
   snapshotResult,
@@ -10,6 +11,7 @@ import {
   type CreateReviewRequest,
   type CreateThreadRequest,
   type GateResponse,
+  type ObserveResponse,
   type ReleaseResult,
   type ReviewSummary,
   type SnapshotManifest,
@@ -147,8 +149,17 @@ export class Client {
     )
   }
 
-  gate(root: string, fingerprint: string): Promise<GateResponse> {
-    return this.json('POST', '/api/gate', gateResponse, { root, fingerprint })
+  gate(
+    root: string,
+    fingerprint: string,
+    tree: string | null = null,
+    head: string | null = null,
+  ): Promise<GateResponse> {
+    return this.json('POST', '/api/gate', gateResponse, { root, fingerprint, tree, head })
+  }
+
+  observe(root: string, head: string, tree: string): Promise<ObserveResponse> {
+    return this.json('POST', '/api/observe', observeResponse, { root, head, tree })
   }
 
   wait(reviewId: string, timeoutMs: number, since = 0): Promise<WaitResult> {

@@ -3,6 +3,7 @@ import { createRequire } from 'node:module'
 import { parseArgs } from 'node:util'
 import {
   checkGate,
+  observeCommit,
   doctor,
   initCommand,
   printFingerprint,
@@ -29,6 +30,7 @@ Commands:
   mcp                       Serve the MCP tools an agent drives reviews with
   wait --review <id>        Block until the reviewer submits, then exit
   gate [path]               Ask whether a commit in this repository is approved
+  observe [path]            Report a commit the gate did not clear. Quiet when clean
   fingerprint [path]        Hash every change against HEAD, tracked or not
   doctor                    Check that the daemon answers where links point
 
@@ -113,6 +115,8 @@ async function main(): Promise<void> {
       return await printFingerprint(target ?? process.cwd(), values.json ?? false)
     case 'gate':
       return await checkGate(target ?? process.cwd(), values.json ?? false)
+    case 'observe':
+      return await observeCommit(target ?? process.cwd())
     case 'doctor':
       return await doctor()
     default:

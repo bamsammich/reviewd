@@ -1,5 +1,5 @@
 import type { Kysely } from 'kysely'
-import type { GateResponse, ReleaseResult } from '../protocol.js'
+import type { GateResponse, ObserveResponse, ReleaseResult } from '../protocol.js'
 import { now } from './db/ids.js'
 import type { Database } from './db/types.js'
 import { reviewUrl, ReviewError, type Deps } from './reviews.js'
@@ -27,6 +27,9 @@ const APPROVAL_TTL_MS = 12 * 60 * 60 * 1000
 export interface GateQuery {
   root: string
   fingerprint: string
+  /** What this reading would commit, recorded so observe can compare. */
+  tree?: string | null | undefined
+  head?: string | null | undefined
 }
 
 export async function gate(deps: Deps, query: GateQuery): Promise<GateResponse> {
@@ -48,9 +51,16 @@ export async function gate(deps: Deps, query: GateQuery): Promise<GateResponse> 
     // nothing, so a commit that fails for an unrelated reason passes on the
     // next attempt; its only job is letting release tell used from unused.
     if (approval.consumed_at === null) {
+      // The tree and head ride along with the stamp, because they are only
+      // true of the reading that matched. Recording them on a later call would
+      // describe a different tree than the one this approval cleared.
       await db
         .updateTable('approval')
-        .set({ consumed_at: now() })
+        .set({
+          consumed_at: now(),
+          gated_tree: query.tree ?? null,
+          gated_head: query.head ?? null,
+        })
         .where('id', '=', approval.id)
         .execute()
     }
@@ -68,6 +78,94 @@ export async function gate(deps: Deps, query: GateQuery): Promise<GateResponse> 
   }
 
   return deny(deps, query)
+}
+
+export interface ObserveQuery {
+  root: string
+  head: string
+  tree: string
+}
+
+/**
+ * What a commit turned out to be, asked after it happened.
+ *
+ * The gate runs before the command and reads the tree as it stands then, so a
+ * command that edits files and commits in one line is cleared on bytes that
+ * are not the bytes it records. Nothing before the fact can see that, and
+ * nothing at all sees a commit reached through a wrapper the hook does not
+ * recognise. Both are visible afterwards, from the commit itself.
+ *
+ * Detection, not prevention. The commit already exists; saying so is the whole
+ * job, because the failure today is that it passes unnoticed.
+ */
+export async function observe(deps: Deps, query: ObserveQuery): Promise<ObserveResponse> {
+  const { db, config } = deps
+
+  const sources = await db
+    .selectFrom('source')
+    .select(['review_id'])
+    .where('root_path', '=', query.root)
+    .execute()
+
+  // A repository nobody is reviewing is not this function's business.
+  if (sources.length === 0) {
+    return { finding: 'clean', reason: `no review covers ${query.root}`, reviewUrl: null }
+  }
+
+  const approval = await db
+    .selectFrom('approval')
+    .selectAll()
+    .where('root_path', '=', query.root)
+    .where('consumed_at', 'is not', null)
+    .orderBy('consumed_at', 'desc')
+    .executeTakeFirst()
+
+  const url = (reviewId: string): string => reviewUrl(config, reviewId)
+
+  if (!approval) {
+    return {
+      finding: 'ungated',
+      reason:
+        `${query.head.slice(0, 12)} is committed in ${query.root}, and no approval was used ` +
+        `to make it. The gate never saw the commit, so nothing checked it against a review.`,
+      reviewUrl: url(sources[0]?.review_id ?? ''),
+    }
+  }
+
+  // An approval written before this was recorded cannot answer, and saying
+  // "clean" on a question that was never asked is the failure being fixed.
+  if (approval.gated_tree === null) {
+    return {
+      finding: 'unknown',
+      reason:
+        `${query.root} was approved, but that approval predates recording what it cleared, ` +
+        `so what ${query.head.slice(0, 12)} carries cannot be compared to it.`,
+      reviewUrl: url(approval.review_id),
+    }
+  }
+
+  if (approval.gated_tree === query.tree) {
+    return {
+      finding: 'clean',
+      reason: `${query.head.slice(0, 12)} carries what was approved`,
+      reviewUrl: url(approval.review_id),
+    }
+  }
+
+  // The head the gate saw is the parent the commit was built on. Matching it
+  // says this is that commit, and its tree still disagrees, which is the
+  // edit-then-commit case rather than an unrelated commit turning up.
+  const sameLine = approval.gated_head !== null
+
+  return {
+    finding: sameLine ? 'altered' : 'ungated',
+    reason: sameLine
+      ? `${query.head.slice(0, 12)} records tree ${query.tree.slice(0, 12)}, and the approval ` +
+        `for ${query.root} cleared tree ${approval.gated_tree.slice(0, 12)}. The working tree ` +
+        `changed between the approval and the commit, so the commit carries code no review showed.`
+      : `${query.head.slice(0, 12)} in ${query.root} carries a tree no approval cleared.`,
+    reviewUrl: url(approval.review_id),
+  }
 }
 
 async function deny(deps: Deps, query: GateQuery): Promise<GateResponse> {

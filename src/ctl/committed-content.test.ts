@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { fingerprint } from './diff.js'
+import { diffSource, fingerprint } from './diff.js'
 import { stagedDivergence } from './git.js'
 import { tempRepo, type TempRepo } from './testing.js'
 
@@ -101,5 +101,48 @@ describe('what the fingerprint still ignores, on purpose', () => {
     repo.run('add', '-A')
 
     expect(await fingerprint(repo.root)).toBe(unstaged)
+  })
+})
+
+/**
+ * The tree the gate records, which is what `reviewd observe` compares a commit
+ * against afterwards.
+ *
+ * The fingerprint says whether a tree matches a review. It cannot say whether
+ * the tree that was approved is the tree that got committed, because the gate
+ * runs before the command and the command can write files before it commits.
+ * The tree sha answers that, and only if it names the same reading.
+ */
+describe('the tree a reading would commit', () => {
+  it('is the tree git records when the reading is committed unchanged', async () => {
+    repo.write('src/a.ts', 'const a = 2 // reviewed\n')
+    const { tree } = await diffSource({ id: '', rootPath: repo.root })
+
+    repo.run('add', '-A')
+    repo.commit('the reviewed change')
+
+    expect(tree).toBe(repo.run('rev-parse', 'HEAD^{tree}').trim())
+  })
+
+  /** What an in-place edit in front of the commit produces. */
+  it('differs from the commit when something writes the tree in between', async () => {
+    repo.write('src/a.ts', 'const a = 2 // reviewed\n')
+    const { tree } = await diffSource({ id: '', rootPath: repo.root })
+
+    repo.write('src/a.ts', 'const a = 999 // never reviewed\n')
+    repo.run('add', '-A')
+    repo.commit('carries something else')
+
+    expect(tree).not.toBe(repo.run('rev-parse', 'HEAD^{tree}').trim())
+  })
+
+  it('does not move when a change is only staged', async () => {
+    // Same promise the fingerprint makes: an approval survives `git add`.
+    repo.write('src/a.ts', 'const a = 2\n')
+    const unstaged = await diffSource({ id: '', rootPath: repo.root })
+
+    repo.run('add', '-A')
+
+    expect((await diffSource({ id: '', rootPath: repo.root })).tree).toBe(unstaged.tree)
   })
 })

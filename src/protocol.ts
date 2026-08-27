@@ -247,8 +247,45 @@ export const gateOpenThread = z.object({
 export const gateRequest = z.object({
   root: z.string().min(1),
   fingerprint: z.string().min(1),
+  /**
+   * The tree this reading would commit, and the commit it would sit on.
+   *
+   * Both are what `reviewd observe` compares against afterwards, and both are
+   * optional so an older client still gates. A gate call that carries neither
+   * leaves the approval unable to answer what landed, which observe reports as
+   * unknown rather than as clean.
+   */
+  tree: z.string().min(1).nullish(),
+  head: z.string().min(1).nullish(),
 })
 export type GateRequest = z.infer<typeof gateRequest>
+
+// ---------------------------------------------------------------------------
+// observe
+// ---------------------------------------------------------------------------
+
+export const observeRequest = z.object({
+  root: z.string().min(1),
+  /** HEAD as it stands now, after whatever the command did. */
+  head: z.string().min(1),
+  /** The tree that HEAD records. */
+  tree: z.string().min(1),
+})
+export type ObserveRequest = z.infer<typeof observeRequest>
+
+/**
+ * What the daemon can say about a commit after the fact.
+ *
+ * `ungated` is a commit no approval was consumed for: the gate never saw it.
+ * `altered` is a commit the gate cleared whose tree is not the tree that was
+ * approved, which is what a command editing files before committing produces.
+ */
+export const observeResponse = z.object({
+  finding: z.enum(['clean', 'ungated', 'altered', 'unknown']),
+  reason: z.string(),
+  reviewUrl: z.string().nullable(),
+})
+export type ObserveResponse = z.infer<typeof observeResponse>
 
 export const gateResponse = z.object({
   decision: z.enum(['allow', 'deny']),
