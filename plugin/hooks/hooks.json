@@ -1,5 +1,5 @@
 {
-  "description": "Refuses git commit until reviewd holds an approval for the working tree",
+  "description": "Refuses git commit until reviewd holds an approval, and reports a commit that got past it",
   "hooks": {
     "PreToolUse": [
       {
@@ -11,6 +11,20 @@
             "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/reviewd-gate.sh"],
             "timeout": 15,
             "statusMessage": "Checking this commit against its review..."
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/reviewd-observe.sh"],
+            "timeout": 15,
+            "statusMessage": "Checking what that commit carried..."
           }
         ]
       }

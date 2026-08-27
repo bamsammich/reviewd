@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { configSchema, resolve } from './config.js'
 import { tempDatabase, type TempDatabase } from './db/testing.js'
-import { gate, release, sweepOrphanBlobs } from './gate.js'
+import { gate, observe, release, sweepOrphanBlobs } from './gate.js'
 import { manifestFingerprint } from '../fingerprint.js'
 import { createReview, createSnapshot, putBlob, sha256, type Deps } from './reviews.js'
 import { createThread, submitReview } from './threads.js'
@@ -271,5 +271,95 @@ describe('sweepOrphanBlobs', () => {
     await putBlob(deps, sha256(content), content)
 
     expect(await sweepOrphanBlobs(ctx.db)).toBe(1)
+  })
+})
+
+/**
+ * What a commit turned out to carry, which the gate cannot know before the
+ * command runs. Each case here is a shape the gate reports as allowed and the
+ * commit contradicts afterwards.
+ */
+describe('observe', () => {
+  const ROOT = '/tmp/observed'
+
+  it('says nothing about a repository no review covers', async () => {
+    const result = await observe(deps, { root: '/tmp/elsewhere', head: 'abc123', tree: 't1' })
+
+    expect(result.finding).toBe('clean')
+  })
+
+  it('reports a commit no approval was used for', async () => {
+    await reviewAt(ROOT, 'ob-1')
+
+    const result = await observe(deps, { root: ROOT, head: 'deadbeefcafe', tree: 't1' })
+
+    expect(result.finding).toBe('ungated')
+    expect(result.reason).toContain('no approval was used')
+  })
+
+  it('is clean when the commit carries the tree that was approved', async () => {
+    const review = await reviewAt(ROOT, 'ob-2')
+    await submitReview(deps, review.reviewId, 'approved')
+    await gate(deps, {
+      root: ROOT,
+      fingerprint: fingerprintFor('ob-2'),
+      tree: 'tree-approved',
+      head: 'parent-sha',
+    })
+
+    const result = await observe(deps, { root: ROOT, head: 'new-sha', tree: 'tree-approved' })
+
+    expect(result.finding).toBe('clean')
+  })
+
+  /** The case a `sed -i` in front of the commit produces. */
+  it('reports a commit whose tree is not the tree that was approved', async () => {
+    const review = await reviewAt(ROOT, 'ob-3')
+    await submitReview(deps, review.reviewId, 'approved')
+    await gate(deps, {
+      root: ROOT,
+      fingerprint: fingerprintFor('ob-3'),
+      tree: 'tree-approved',
+      head: 'parent-sha',
+    })
+
+    const result = await observe(deps, { root: ROOT, head: 'new-sha', tree: 'tree-written-after' })
+
+    expect(result.finding).toBe('altered')
+    expect(result.reason).toContain('changed between the approval and the commit')
+    expect(result.reviewUrl).toContain(review.reviewId)
+  })
+
+  /**
+   * An approval taken before the tree was recorded cannot answer. Reporting it
+   * as clean would put a confident "nothing wrong" on a question nobody asked,
+   * which is the failure this whole check exists to remove.
+   */
+  it('reports unknown rather than clean when the approval predates the recording', async () => {
+    const review = await reviewAt(ROOT, 'ob-4')
+    await submitReview(deps, review.reviewId, 'approved')
+    await gate(deps, { root: ROOT, fingerprint: fingerprintFor('ob-4') })
+
+    const result = await observe(deps, { root: ROOT, head: 'new-sha', tree: 'anything' })
+
+    expect(result.finding).toBe('unknown')
+  })
+
+  it('records the tree only against the approval that matched', async () => {
+    const review = await reviewAt(ROOT, 'ob-5')
+    await submitReview(deps, review.reviewId, 'approved')
+
+    // A gate call that matches nothing must leave the stamp alone.
+    await gate(deps, { root: ROOT, fingerprint: 'no-such-fingerprint', tree: 'wrong', head: 'x' })
+    await gate(deps, {
+      root: ROOT,
+      fingerprint: fingerprintFor('ob-5'),
+      tree: 'tree-approved',
+      head: 'parent',
+    })
+
+    const result = await observe(deps, { root: ROOT, head: 'new-sha', tree: 'tree-approved' })
+
+    expect(result.finding).toBe('clean')
   })
 })

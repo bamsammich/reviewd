@@ -138,6 +138,9 @@ export interface ApprovalTable {
   approved_at: Millis
   /** Stamped the first time a gate call matches. Never invalidates the row. */
   consumed_at: Millis | null
+  /** The tree the approved reading would commit, and the commit it sat on. */
+  gated_tree: string | null
+  gated_head: string | null
 }
 
 export interface Database {

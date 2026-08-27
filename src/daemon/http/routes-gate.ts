@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
-import { gateRequest, releaseRequest } from '../../protocol.js'
-import { gate, release } from '../gate.js'
+import { gateRequest, observeRequest, releaseRequest } from '../../protocol.js'
+import { gate, observe, release } from '../gate.js'
 import { ReviewError, type Deps } from '../reviews.js'
 
 /**
@@ -23,6 +23,20 @@ export function gateRoutes(deps: Deps): Hono {
     }
 
     return c.json(await gate(deps, parsed.data))
+  })
+
+  // Reads only, and writes nothing, so a GET would be safe here. It stays a
+  // POST to match the gate it reports on, and because a root path is a long
+  // thing to put in a query string.
+  routes.post('/api/observe', async (c) => {
+    const body: unknown = await c.req.json().catch(() => ({}))
+    const parsed = observeRequest.safeParse(body)
+
+    if (!parsed.success) {
+      return c.json({ error: 'root, head and tree are all required' }, 400)
+    }
+
+    return c.json(await observe(deps, parsed.data))
   })
 
   routes.post('/api/reviews/:id/release', async (c) => {

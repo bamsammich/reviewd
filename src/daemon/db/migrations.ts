@@ -265,9 +265,30 @@ const lineRanges: Migration = {
   },
 }
 
+/**
+ * What the gate authorized, so `reviewd observe` can compare it to what landed.
+ *
+ * `gated_tree` is the tree the approved reading would have committed, and
+ * `gated_head` the commit it sat on. Nullable because every approval written
+ * before this migration has neither, and an approval that cannot answer is
+ * reported as unknown rather than as clean.
+ */
+const gatedTree: Migration = {
+  async up(db: MigrationDb): Promise<void> {
+    await db.schema.alterTable('approval').addColumn('gated_tree', 'text').execute()
+    await db.schema.alterTable('approval').addColumn('gated_head', 'text').execute()
+  },
+
+  async down(db: MigrationDb): Promise<void> {
+    await db.schema.alterTable('approval').dropColumn('gated_head').execute()
+    await db.schema.alterTable('approval').dropColumn('gated_tree').execute()
+  },
+}
+
 export const migrations: Record<string, Migration> = {
   '0001_initial': initial,
   '0002_line_ranges': lineRanges,
+  '0003_gated_tree': gatedTree,
 }
 
 export class CodeMigrationProvider implements MigrationProvider {

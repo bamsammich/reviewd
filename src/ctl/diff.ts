@@ -38,6 +38,14 @@ export interface SourceDiff {
   fingerprint: string
   files: FileChangeSpec[]
   blobs: Map<string, Uint8Array>
+  /**
+   * The tree a commit of this reading would carry, or null off a git source.
+   *
+   * Written from the same scratch index the fingerprint is read out of, so the
+   * two describe one tree rather than two readings that can disagree. `reviewd
+   * observe` compares it against what a commit actually recorded.
+   */
+  tree: string | null
 }
 
 export interface DiffLimits {
@@ -142,11 +150,16 @@ export async function diffGitSource(
       files.push(await toFileChange(root, source.id, change, env, blobs, limits))
     }
 
+    // Written from the index the diff was just read out of, so it names the
+    // same tree rather than a second reading of a directory that may have moved.
+    const tree = (await git(root, ['write-tree'], env)).trim()
+
     return {
       sourceId: source.id,
       fingerprint: manifestFingerprint(files),
       files,
       blobs,
+      tree,
     }
   } finally {
     rmSync(dir, { recursive: true, force: true })
@@ -385,6 +398,8 @@ export async function diffFileSet(
     fingerprint: manifestFingerprint(files),
     files,
     blobs,
+    // No git here, so nothing writes a tree.
+    tree: null,
   }
 }
 

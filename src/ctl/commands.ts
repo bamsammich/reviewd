@@ -1,11 +1,11 @@
 import { createRequire } from 'node:module'
-import { EMPTY_FINGERPRINT } from '../fingerprint.js'
+import { EMPTY_FINGERPRINT, manifestFingerprint } from '../fingerprint.js'
 import { WAIT_EXIT, type GateResponse } from '../protocol.js'
 import { Client } from './client.js'
 import { loadClientConfig } from './config.js'
-import { fingerprint } from './diff.js'
+import { diffSource } from './diff.js'
 import { ensureDaemon, logPath } from './ensure.js'
-import { repoRoot, stagedDivergence } from './git.js'
+import { git, repoRoot, stagedDivergence } from './git.js'
 import { initPlugin, installedPluginVersion, noClaudeMessage, planInit } from './init.js'
 import { renderPlan, renderResult } from './init-report.js'
 import { runMcpServer } from './mcp.js'
@@ -168,7 +168,8 @@ export async function printFingerprint(path: string, json: boolean): Promise<voi
   const root = await requireRepo(path)
   if (!root) return
 
-  const value = await fingerprint(root)
+  const reading = await diffSource({ id: '', rootPath: root })
+  const value = manifestFingerprint(reading.files)
   process.stdout.write(json ? `${JSON.stringify({ root, fingerprint: value })}\n` : `${value}\n`)
 }
 
@@ -204,7 +205,10 @@ export async function checkGate(path: string, json: boolean): Promise<void> {
     return report(result, json)
   }
 
-  const value = await fingerprint(root)
+  // Read once and keep both halves. The tree is what a commit of this reading
+  // would carry, which is what `reviewd observe` compares against afterwards.
+  const reading = await diffSource({ id: '', rootPath: root })
+  const value = manifestFingerprint(reading.files)
 
   // Nothing to review means nothing to gate: an --amend that only edits a
   // message leaves the tree identical to HEAD. This lived in the hook, which
@@ -227,7 +231,55 @@ export async function checkGate(path: string, json: boolean): Promise<void> {
   await ensureDaemon(baseUrl)
 
   const client = new Client(baseUrl)
-  return report(await client.gate(root, value), json)
+  const head = await headSha(root)
+  return report(await client.gate(root, value, reading.tree, head), json)
+}
+
+/**
+ * Says what a commit turned out to carry, after the command that made it.
+ *
+ * Quiet unless there is something wrong, because it runs after every Bash
+ * command and a line of output on each one is noise nobody reads. Never fails
+ * the command either: the commit already happened, and a non-zero exit here
+ * would report the observation as the command's own failure.
+ */
+export async function observeCommit(path: string): Promise<void> {
+  const root = await repoRoot(path)
+  if (!root) return
+
+  const head = await headSha(root)
+  if (!head) return
+
+  const tree = (await gitOut(root, ['rev-parse', 'HEAD^{tree}'])) ?? null
+  if (!tree) return
+
+  try {
+    const baseUrl = loadClientConfig().base_url
+    const client = new Client(baseUrl)
+    const result = await client.observe(root, head, tree)
+
+    if (result.finding === 'clean') return
+
+    process.stderr.write(`reviewd: ${result.reason}\n`)
+    if (result.reviewUrl) process.stderr.write(`Review: ${result.reviewUrl}\n`)
+  } catch {
+    // A daemon that is down denies commits at the gate, which is the loud half.
+    // Saying so again here would put an error on every command after it.
+  }
+}
+
+async function headSha(root: string): Promise<string | null> {
+  return gitOut(root, ['rev-parse', 'HEAD'])
+}
+
+/** git output, or null when the command has nothing to say. */
+async function gitOut(root: string, args: string[]): Promise<string | null> {
+  try {
+    const out = (await git(root, args)).trim()
+    return out.length > 0 ? out : null
+  } catch {
+    return null
+  }
 }
 
 /** One shape for the hook to read, whoever decided. */
