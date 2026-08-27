@@ -32,6 +32,7 @@
   "dependencies": {
     "@hono/node-server": "^2.1.1",
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "commander": "^15.0.0",
     "diff": "^9.0.0",
     "hono": "^4.13.3",
     "kysely": "^0.29.0",
