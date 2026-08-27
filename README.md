@@ -239,7 +239,12 @@ npm version patch && git push --follow-tags
 
 That is the whole release. `npm version` writes the new number into
 `plugin/.claude-plugin/plugin.json` as well, and pushing the tag starts
-`.github/workflows/release.yml`, which runs the full CI suite and publishes.
+`.github/workflows/release.yml`, which runs the full CI suite, publishes to
+npm, and creates the GitHub Release with generated notes.
+
+The Release comes after `npm publish`, since npm is the half that cannot be
+taken back. A re-run skips a Release that already exists rather than failing on
+it.
 
 Three things it refuses to publish through: an npm older than 11.5.1, a tag that
 disagrees with `package.json`, and a `plugin.json` left on the old version. Each

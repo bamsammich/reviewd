@@ -17,7 +17,9 @@ jobs:
     needs: check
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      # Write because the last step creates the GitHub Release. Reading the
+      # repository is all the rest of the job needs.
+      contents: write
       # What trusted publishing runs on: npm reads a short-lived OIDC token
       # from GitHub instead of a secret this repository would have to store,
       # and the provenance attestation comes from the same claim.
@@ -69,6 +71,23 @@ jobs:
       # and provenance is attached automatically because of it.
       - run: npm publish
 
+      # After npm, not before. npm is the half that cannot be taken back, so a
+      # Release announcing a version npm rejected is the worse way to be wrong.
+      #
+      # Skipping an existing Release rather than failing on one keeps a re-run
+      # useful: the tag is what triggered this, so it is always there, and a
+      # second attempt should finish the job rather than stop on the part that
+      # already succeeded.
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists, leaving it alone."
+            exit 0
+          fi
+          gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
+
       - name: Record what shipped
         run: |
           {
@@ -77,4 +96,6 @@ jobs:
             echo "\`reviewd@${GITHUB_REF_NAME#v}\` from \`$GITHUB_SHA\`"
             echo
             echo "<https://www.npmjs.com/package/reviewd/v/${GITHUB_REF_NAME#v}>"
+            echo
+            echo "<$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$GITHUB_REF_NAME>"
           } >>"$GITHUB_STEP_SUMMARY"
