@@ -52,6 +52,20 @@ async function catchUpPlugin(): Promise<void> {
     const installed = await installedPluginVersion()
     if (!installed || installed === version()) return
 
+    // A marketplace pointing somewhere other than where init would install
+    // from is a deliberate local setup, and repointing it is how an automatic
+    // sync deletes work nobody asked it to touch. Explicit `reviewd init`
+    // still repoints, because a person typed it.
+    const plan = await planInit()
+    if (plan.marketplace.action === 'repoint') {
+      process.stderr.write(
+        `reviewd: plugin is ${installed}, this binary is ${version()}, and the ` +
+          `${plan.marketplace.name} marketplace points at ${plan.marketplace.current}. ` +
+          'Left alone. Run `reviewd init` to repoint it.\n',
+      )
+      return
+    }
+
     await initPlugin()
     process.stderr.write(
       `reviewd: plugin was ${installed}, this binary is ${version()}. ` +

@@ -8,9 +8,19 @@ import { promisify } from 'node:util'
 const execFileAsync = promisify(execFile)
 
 /** Where the plugin is published. The marketplace manifest lives at that root. */
-const MARKETPLACE_SOURCE = 'bamsammich/reviewd'
+const PUBLISHED_SOURCE = 'bamsammich/reviewd'
 const MARKETPLACE_NAME = 'bamsammich'
 const PLUGIN = 'reviewd'
+
+/**
+ * Where init installs the plugin from, which a checkout can redirect.
+ *
+ * The source was a constant, and initPlugin's repoint branch exists to undo a
+ * local checkout, so working on the plugin meant losing the published one.
+ * Environment rather than a flag, because catchUpPlugin calls init too.
+ */
+const marketplaceSourceSetting = (): string =>
+  process.env['REVIEWD_MARKETPLACE_SOURCE'] || PUBLISHED_SOURCE
 
 /**
  * Runs `claude` and returns its stdout, or throws if it fails.
@@ -155,17 +165,19 @@ export async function planInit(run: Runner = runClaude, version = ownVersion()):
   let action: MarketplaceAction = 'add'
   let current: string | undefined
 
+  const wanted = marketplaceSourceSetting()
+
   if (harness) {
     const source = await marketplaceSource(run)
     if (source !== undefined) {
-      current = source === MARKETPLACE_SOURCE ? undefined : source
+      current = source === wanted ? undefined : source
       action = current === undefined ? 'update' : 'repoint'
     }
   }
 
   return {
     harness,
-    marketplace: { name: MARKETPLACE_NAME, source: MARKETPLACE_SOURCE, action, current },
+    marketplace: { name: MARKETPLACE_NAME, source: wanted, action, current },
     plugin: {
       name: PLUGIN,
       version,
@@ -207,11 +219,11 @@ export async function initPlugin(
     // and changes nothing that matters, which is how a stale checkout kept
     // serving the plugin after the source moved to GitHub. Remove and re-add.
     await run(['plugin', 'marketplace', 'remove', MARKETPLACE_NAME])
-    await run(['plugin', 'marketplace', 'add', MARKETPLACE_SOURCE])
+    await run(['plugin', 'marketplace', 'add', plan.marketplace.source])
   } else if (plan.marketplace.action === 'update') {
     await run(['plugin', 'marketplace', 'update', MARKETPLACE_NAME])
   } else {
-    await run(['plugin', 'marketplace', 'add', MARKETPLACE_SOURCE])
+    await run(['plugin', 'marketplace', 'add', plan.marketplace.source])
   }
 
   // --yes because init is run from a shell that may not be a terminal, and the

@@ -222,3 +222,73 @@ describe('installedPluginVersion', () => {
     expect(await installedPluginVersion(claude.run)).toBeUndefined()
   })
 })
+
+/**
+ * The env var exists so a checkout can serve the plugin locally without the
+ * published one being replaced everywhere else, so the cases worth pinning are
+ * the two that decide whether a dev setup survives: what init installs from,
+ * and whether a marketplace already pointing at the checkout reads as settled
+ * rather than as something to undo.
+ */
+describe('REVIEWD_MARKETPLACE_SOURCE', () => {
+  const CHECKOUT = '/Users/t/ghq/github.com/bamsammich/reviewd'
+
+  function withSource<T>(value: string | undefined, body: () => Promise<T>): Promise<T> {
+    const before = process.env['REVIEWD_MARKETPLACE_SOURCE']
+    if (value === undefined) delete process.env['REVIEWD_MARKETPLACE_SOURCE']
+    else process.env['REVIEWD_MARKETPLACE_SOURCE'] = value
+
+    return body().finally(() => {
+      if (before === undefined) delete process.env['REVIEWD_MARKETPLACE_SOURCE']
+      else process.env['REVIEWD_MARKETPLACE_SOURCE'] = before
+    })
+  }
+
+  it('is the published source when the variable is unset', async () => {
+    await withSource(undefined, async () => {
+      const plan = await planInit(fakeClaude().run, '1.0.0')
+      expect(plan.marketplace.source).toBe('bamsammich/reviewd')
+    })
+  })
+
+  it('installs from the checkout when the variable names one', async () => {
+    await withSource(CHECKOUT, async () => {
+      const claude = fakeClaude()
+      const backups = fakeBackups()
+
+      await init(claude.run, backups.backup)
+
+      expect(claude.calls).toContainEqual(['plugin', 'marketplace', 'add', CHECKOUT])
+      expect(claude.calls).not.toContainEqual([
+        'plugin',
+        'marketplace',
+        'add',
+        'bamsammich/reviewd',
+      ])
+    })
+  })
+
+  /**
+   * Without this the dev setup is undone on the next sync: catchUpPlugin skips
+   * on `repoint`, so a checkout that reported one would be repointed by the
+   * very thing meant to leave it alone.
+   */
+  it('reads a marketplace already on the checkout as update, not repoint', async () => {
+    await withSource(CHECKOUT, async () => {
+      const plan = await planInit(fakeClaude({ marketplaces: onACheckout }).run, '1.0.0')
+
+      expect(plan.marketplace.action).toBe('update')
+      expect(plan.marketplace.current).toBeUndefined()
+    })
+  })
+
+  /** The published source is the odd one out once a checkout is configured. */
+  it('reads the published marketplace as a repoint while the checkout is configured', async () => {
+    await withSource(CHECKOUT, async () => {
+      const plan = await planInit(fakeClaude({ marketplaces: onGitHub }).run, '1.0.0')
+
+      expect(plan.marketplace.action).toBe('repoint')
+      expect(plan.marketplace.current).toBe('bamsammich/reviewd')
+    })
+  })
+})
