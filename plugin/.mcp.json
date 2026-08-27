@@ -2,7 +2,7 @@
   "mcpServers": {
     "reviewd": {
       "type": "stdio",
-      "command": "reviewd",
+      "command": "${REVIEWD_BIN:-reviewd}",
       "args": ["mcp"]
     }
   }

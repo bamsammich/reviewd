@@ -201,13 +201,28 @@ Load the plugin from a checkout without installing it:
 
 ```sh
 npm install && npm link
+export REVIEWD_NO_PLUGIN_SYNC=1
 claude --plugin-dir ./plugin
 ```
 
-`npm link` is what puts the checkout's `reviewd` on `PATH`, which the hook and
-the MCP declaration both call. A local plugin takes precedence over an installed
-one of the same name for that session, so this works without uninstalling first.
-`/reload-plugins` picks up edits.
+`npm link` puts the checkout's `reviewd` on `PATH`, which the hook and the MCP
+declaration both call. A local plugin wins over an installed one of the same
+name for that session. `/reload-plugins` picks up edits.
+
+`REVIEWD_NO_PLUGIN_SYNC` is not optional here. The MCP server reinstalls the
+plugin whenever its version differs from the binary's, and in a checkout they
+always differ, so without it a dev session upgrades the installed plugin on
+startup.
+
+| Variable                        | Effect                                                                                  |
+| ------------------------------- | --------------------------------------------------------------------------------------- |
+| `REVIEWD_NO_PLUGIN_SYNC=1`      | Stops the MCP server reinstalling the plugin on version drift.                            |
+| `REVIEWD_BIN=<path>`            | Binary the gate hook and the MCP server run. The gate prints the redirect on every commit. |
+| `REVIEWD_MARKETPLACE_SOURCE=<path>` | Where `reviewd init` installs from. A persistent `--plugin-dir`.                      |
+| `XDG_CONFIG_HOME`, `XDG_STATE_HOME` | Config and database roots. Repoint both for a dev daemon on its own port.             |
+
+Only an explicit `reviewd init` repoints a marketplace. The automatic sync
+leaves an unexpected one alone and says so on stderr.
 
 ```sh
 npm test                              # the daemon and client suites
