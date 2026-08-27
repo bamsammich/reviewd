@@ -70,15 +70,61 @@ cwd=$(printf '%s' "$payload" | jq -r '.cwd // empty')
 # segment the shell would run, past any environment assignments or wrappers in
 # front of it, with commit as the subcommand rather than a word further along.
 #
-# Quoting is the known limit: this splits on shell operators without knowing
-# which are inside quotes, so `printf 'git commit'` still reads as one. That
-# errs toward denying a command that was not a commit, which is the direction
-# to be wrong in, and the alternative of blanking quoted text would let
-# `sh -c '... git commit'` through unchecked.
+# Quoted text is data. Splitting through it denied `gh pr create --body` for
+# naming a repository it never touched.
+#
+# Safe only with the recursion in is_commit: a wrapper's argument now survives
+# whole, so it is re-read rather than tested as a single command.
+
+# command_head strips leading whitespace, so without this every segment after
+# the first differs from its head and reads as a wrapper.
+trim() {
+  local s=$1
+  s=${s#"${s%%[![:space:]]*}"}
+  s=${s%"${s##*[![:space:]]}"}
+  printf '%s' "$s"
+}
 
 # Splits a command into the segments a shell would run, in order.
+#
+# awk because quote state has to carry across the string, which a regex cannot
+# do, and because `${s:i:1}` is quadratic: a 32KB `--body` cost 7.7s that way,
+# against this hook's 15s timeout.
 segments() {
-  printf '%s' "$1" | sed -E 's/(\&\&|\|\||[;|`()])/\n/g'
+  printf '%s' "$1" | awk '
+    BEGIN { RS = "\036"; quote = ""; out = "" }
+    {
+      n = length($0)
+      for (i = 1; i <= n; i++) {
+        c = substr($0, i, 1)
+
+        if (quote != "") {
+          out = out c
+          # Backslash escapes inside double quotes, and nowhere else the shell
+          # would honor it.
+          if (c == "\\" && quote == "\"") { out = out substr($0, ++i, 1); continue }
+          if (c == quote) quote = ""
+          continue
+        }
+
+        if (c == "\"" || c == "\047") { quote = c; out = out c; continue }
+        if (c == "\\") { out = out c substr($0, ++i, 1); continue }
+
+        # `&&` and `||` split, and so does a single `|`. A lone `&`
+        # backgrounds what came before, which is still a command that ran.
+        if (c == "&" || c == "|") {
+          out = out "\n"
+          if (substr($0, i + 1, 1) == c) i++
+          continue
+        }
+
+        if (c == ";" || c == "`" || c == "(" || c == ")") { out = out "\n"; continue }
+
+        out = out c
+      }
+    }
+    END { printf "%s", out }
+  '
 }
 
 # Strips leading whitespace, environment assignments, and wrappers, leaving
@@ -138,12 +184,23 @@ is_commit_head() {
     grep -Eq "^git([[:space:]]+-[^[:space:]]+([[:space:]]+[^-][^[:space:]]*)?)*[[:space:]]+(${COMMIT_VERBS})([[:space:]]|$)"
 }
 
+# Recursive because segments() keeps a quoted argument whole. command_head
+# strips the wrapper off `sh -c 'cd /repo && git commit'`, leaving a command
+# line with its own operators, so it goes back through the same reading.
+#
+# Only a head command_head changed is worth recursing on; anything else is the
+# same string and would not terminate.
 is_commit() {
-  local segment
+  local segment head depth=${2:-0}
   local IFS=$'\n'
 
+  [ "$depth" -gt 8 ] && return 1
+
   for segment in $(segments "$1"); do
-    is_commit_head "$(command_head "$segment")" && return 0
+    segment=$(trim "$segment")
+    head=$(command_head "$segment")
+    is_commit_head "$head" && return 0
+    [ "$head" != "$segment" ] && is_commit "$head" $((depth + 1)) && return 0
   done
 
   return 1
@@ -200,11 +257,20 @@ resolve_dir() {
   (cd "$from" 2>/dev/null && cd "$path" 2>/dev/null && pwd) || printf ''
 }
 
-target_dir() {
-  local dir=$cwd segment head path
+# Prints the directory this line's first commit runs in, failing when it holds
+# no commit. Recursive for is_commit's reason: a wrapper's argument is walked
+# rather than read as one command, so an inner -C still decides the repository.
+#
+# A `cd` inside a wrapper does not carry out to the caller, since a subshell
+# that moves does not move the shell that started it.
+walk_to_commit() {
+  local line=$1 dir=$2 depth=${3:-0} segment head path inner
   local IFS=$'\n'
 
-  for segment in $(segments "$cmd"); do
+  [ "$depth" -gt 8 ] && return 1
+
+  for segment in $(segments "$line"); do
+    segment=$(trim "$segment")
     head=$(command_head "$segment")
 
     if is_commit_head "$head"; then
@@ -212,19 +278,31 @@ target_dir() {
       # shell, so it wins over wherever the walk had reached.
       path=$(printf '%s' "$head" | sed -nE 's/.*[[:space:]]-C[[:space:]]+([^[:space:]]+).*/\1/p')
       [ -n "$path" ] && resolve_dir "$dir" "$path" || printf '%s' "$dir"
-      return
+      return 0
+    fi
+
+    if [ "$head" != "$segment" ]; then
+      inner=$(walk_to_commit "$head" "$dir" $((depth + 1))) && {
+        printf '%s' "$inner"
+        return 0
+      }
+      continue
     fi
 
     case $head in
       cd\ * | pushd\ *)
         path=$(printf '%s' "$head" | sed -E 's/^(cd|pushd)[[:space:]]+//; s/[[:space:]].*//')
         [ -n "$path" ] && dir=$(resolve_dir "$dir" "$path")
-        [ -n "$dir" ] || { printf ''; return; }
+        [ -n "$dir" ] || { printf ''; return 0; }
         ;;
     esac
   done
 
-  printf '%s' "$dir"
+  return 1
+}
+
+target_dir() {
+  walk_to_commit "$cmd" "$cwd" || printf '%s' "$cwd"
 }
 
 # The first directory the command names that carries a `$`, or nothing.

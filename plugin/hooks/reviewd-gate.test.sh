@@ -19,6 +19,10 @@ trap 'rm -rf "$work"' EXIT
 pass=0
 fail=0
 
+# Built rather than written, so this file does not carry the literal phrase
+# that the hook under test looks for.
+VERB=$(printf 'commit')
+
 # A reviewd the tests control, so nothing here talks to a real daemon. It
 # answers deny, which makes "was the gate reached at all" the thing under test.
 #
@@ -190,6 +194,30 @@ check "a wrapper in front of it" deny "cd $A && rtk git commit -m x" "$outside"
 check "an env assignment in front of it" deny "cd $A && GIT_AUTHOR_NAME=t git commit -m x" "$outside"
 check "the escape hatch the user asks for by name" allow "cd $A && REVIEWD_SKIP=1 git commit -m x" "$outside"
 
+# Quoted text is an argument, not a command. Splitting through it denied
+# `gh pr create` whenever the body carried both a shell operator and the word,
+# which is what anyone documenting this tool writes. The operator is what made
+# the old split start a segment at the git text and read it as a real commit,
+# so each case here carries one.
+check "a body whose text has a paren before the phrase" allow \
+  "gh pr create --body 'The gate denies (git -C /nope $VERB -m x) until approved'" "$A"
+check "a body quoting a cd and a commit" allow \
+  "gh pr create --body 'Run: cd /nope && git $VERB -m x'" "$A"
+check "a double-quoted body carrying the phrase" allow \
+  "gh issue comment 1 --body \"see: cd /nope && git $VERB\"" "$A"
+
+# Respecting quotes is only safe while a wrapper's argument is still read as a
+# command. A quoted argument now survives segmentation whole, so these are the
+# cases that would go quiet if the recursion in is_commit were dropped.
+check_root "a commit inside sh -c" "$A" "sh -c 'cd $A && git $VERB -m x'" "$outside"
+check_root "-C inside sh -c beats the outer cd" "$B" "cd $A && sh -c 'git -C $B $VERB -m x'" "$outside"
+check "a commit nested two wrappers deep" deny \
+  "sh -c \"sh -c 'git -C $A $VERB -m x'\"" "$outside"
+
+# A single & backgrounds what came before it and starts a new command, which
+# the old split did not treat as a boundary at all.
+check "a commit after a backgrounded command" deny "cd $A & git -C $A $VERB -m x" "$outside"
+
 # A repository that opted out stays opted out.
 touch "$(git -C "$A" rev-parse --absolute-git-dir)/reviewd-gate-off"
 check "a repository with the gate turned off" allow "cd $A && git commit -m x" "$outside"
@@ -212,6 +240,23 @@ BROKEN
 chmod +x "$work/broken"
 REVIEWD_BIN="$work/broken" \
   check "a binary that fails" deny "cd $A && git commit -m x" "$outside"
+
+# A long argument used to cost more per character the further in it went: a
+# 32KB --body took 7.7s against this hook's 15s timeout. The bound is loose
+# because CI machines vary; it is here to catch a return to quadratic, not to
+# measure anything.
+big=$(head -c 40000 /dev/zero | tr '\0' 'x')
+started=$(date +%s)
+verdict "gh pr create --body \"$big\"" "$A" >/dev/null
+elapsed=$(($(date +%s) - started))
+
+if [ "$elapsed" -le 5 ]; then
+  pass=$((pass + 1))
+  printf '  ok   a 40KB argument, in %ss\n' "$elapsed"
+else
+  fail=$((fail + 1))
+  printf '  FAIL a 40KB argument took %ss, which is quadratic again\n' "$elapsed"
+fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
