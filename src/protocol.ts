@@ -177,11 +177,17 @@ export type Message = z.infer<typeof message>
 
 export const thread = z.object({
   id: z.string(),
-  sourceId: z.string(),
-  sourceLabel: z.string(),
-  path: z.string(),
-  side,
-  line: z.number().int(),
+  /**
+   * All null together when the comment is about the review rather than a line.
+   *
+   * A reader asking "what is owed" has to see one of these, so they travel in
+   * the same list as anchored threads rather than in a shape of their own.
+   */
+  sourceId: z.string().nullable(),
+  sourceLabel: z.string().nullable(),
+  path: z.string().nullable(),
+  side: side.nullable(),
+  line: z.number().int().nullable(),
   /** Last line of a range, or null when the comment is on one line. */
   endLine: z.number().int().nullable().default(null),
   state: threadState,
@@ -195,19 +201,37 @@ export type Thread = z.infer<typeof thread>
 export const createThreadRequest = z
   .object({
     sourceId: z.string().optional(),
-    path: z.string().min(1),
-    line: z.number().int().positive(),
+    /**
+     * Both omitted for a comment about the review rather than about a line.
+     *
+     * Omitting one and not the other is a caller mistake rather than a shape
+     * with a meaning, so the refinement below names it instead of guessing.
+     */
+    path: z.string().min(1).optional(),
+    line: z.number().int().positive().optional(),
     /** Last line of a range. Omit for a comment on one line. */
     endLine: z.number().int().positive().optional(),
     side: side.default('new'),
     body: z.string().min(1),
   })
-  // A range that ends before it starts is a caller mistake worth naming rather
-  // than quietly reordering, and one that ends where it starts is one line.
-  .refine((request) => request.endLine === undefined || request.endLine >= request.line, {
-    message: 'endLine must not be before line',
+  .refine((request) => (request.path === undefined) === (request.line === undefined), {
+    message: 'path and line go together: give both to comment on a line, or neither on the review',
+    path: ['path'],
+  })
+  // A range needs a line to start from.
+  .refine((request) => request.endLine === undefined || request.line !== undefined, {
+    message: 'endLine needs a line to start from',
     path: ['endLine'],
   })
+  // A range that ends before it starts is a caller mistake worth naming rather
+  // than quietly reordering, and one that ends where it starts is one line.
+  .refine(
+    (request) =>
+      request.endLine === undefined ||
+      request.line === undefined ||
+      request.endLine >= request.line,
+    { message: 'endLine must not be before line', path: ['endLine'] },
+  )
 /**
  * Authorship is not on the wire.
  *

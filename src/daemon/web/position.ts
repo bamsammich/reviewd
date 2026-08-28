@@ -38,7 +38,17 @@ export function positionAt(file: FileView, half: Half): Position | undefined {
   }
 }
 
-export function positionOfThread(thread: Thread): Position {
+/** Where a thread sits, or undefined when it belongs to the review not a line. */
+export function positionOfThread(thread: Thread): Position | undefined {
+  if (
+    thread.sourceId === null ||
+    thread.path === null ||
+    thread.side === null ||
+    thread.line === null
+  ) {
+    return undefined
+  }
+
   return {
     sourceId: thread.sourceId,
     path: thread.path,
@@ -46,6 +56,11 @@ export function positionOfThread(thread: Thread): Position {
     line: thread.line,
     endLine: thread.endLine,
   }
+}
+
+/** Whether this thread is about the review rather than about a line. */
+export function isReviewLevel(thread: Thread): boolean {
+  return thread.path === null
 }
 
 /** Same file and same side, whatever lines are involved. */

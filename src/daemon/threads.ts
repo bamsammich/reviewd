@@ -132,14 +132,33 @@ export async function createThread(
   const snapshot = await latestSnapshot(db, reviewId)
   if (!snapshot) throw new ReviewError('review has no snapshot to comment on', 409)
 
-  const sourceId = request.sourceId ?? (await onlySource(db, reviewId, request.path))
+  // A comment about the review as a whole is anchored to nothing, so every
+  // column that describes a position stays null and there is no anchor to read.
+  const unanchored = request.path === undefined || request.line === undefined
+
+  if (unanchored) {
+    return await insertThread(deps, reviewId, snapshot.id, request, {
+      sourceId: null,
+      path: null,
+      side: null,
+      line: null,
+      endLine: null,
+      anchorHash: null,
+      contextHash: null,
+      endAnchorHash: null,
+    })
+  }
+
+  const path = request.path as string
+  const line = request.line as number
+  const sourceId = request.sourceId ?? (await onlySource(db, reviewId, path))
 
   // The wire schema refuses a backwards range, but that only runs on a parsed
   // request and this function is exported. Coercing it quietly would store a
   // one-line comment for a caller who asked for a block and say nothing.
-  if (request.endLine !== undefined && request.endLine < request.line) {
+  if (request.endLine !== undefined && request.endLine < line) {
     throw new ReviewError(
-      `a comment cannot end on line ${request.endLine} and start on line ${request.line}`,
+      `a comment cannot end on line ${request.endLine} and start on line ${line}`,
       400,
     )
   }
@@ -147,29 +166,54 @@ export async function createThread(
   // A range that ends on its own first line is one line, and storing it as a
   // range would mean two ways to say the same thing.
   const endLine =
-    request.endLine !== undefined && request.endLine > request.line ? request.endLine : undefined
+    request.endLine !== undefined && request.endLine > line ? request.endLine : undefined
 
-  const anchor = await readAnchor(
-    db,
-    snapshot.id,
-    sourceId,
-    request.path,
-    request.side,
-    request.line,
-    endLine,
-  )
+  const anchor = await readAnchor(db, snapshot.id, sourceId, path, request.side, line, endLine)
 
   // A line past the end of the file hashes to the empty string, which matches
   // nothing later and would leave the comment marked drifted forever for a
   // reason that is really "this line was never there". Found by asking for a
   // range ending on line 280 of a 277-line file and getting no complaint.
-  const last = endLine ?? request.line
+  const last = endLine ?? line
   if (anchor.lineCount !== undefined && last > anchor.lineCount) {
     throw new ReviewError(
-      `${request.path} has ${anchor.lineCount} lines on the ${request.side} side, so there is no line ${last}`,
+      `${path} has ${anchor.lineCount} lines on the ${request.side} side, so there is no line ${last}`,
       400,
     )
   }
+
+  return await insertThread(deps, reviewId, snapshot.id, request, {
+    sourceId,
+    path,
+    side: request.side,
+    line,
+    endLine: endLine ?? null,
+    anchorHash: anchor.start.anchorHash,
+    contextHash: anchor.start.contextHash,
+    endAnchorHash: anchor.end?.anchorHash ?? null,
+  })
+}
+
+/** Where a thread sits, with every field null for one about the review. */
+interface ThreadPlace {
+  sourceId: string | null
+  path: string | null
+  side: 'old' | 'new' | null
+  line: number | null
+  endLine: number | null
+  anchorHash: string | null
+  contextHash: string | null
+  endAnchorHash: string | null
+}
+
+async function insertThread(
+  deps: Deps,
+  reviewId: string,
+  snapshotId: string,
+  request: CreateThreadRequest,
+  place: ThreadPlace,
+): Promise<{ threadId: string }> {
+  const { db } = deps
 
   const threadId = newId()
   const t = now()
@@ -180,19 +224,19 @@ export async function createThread(
       .values({
         id: threadId,
         review_id: reviewId,
-        source_id: sourceId,
-        path: request.path,
-        side: request.side,
-        line: request.line,
-        end_line: endLine ?? null,
-        anchor_hash: anchor.start.anchorHash,
-        context_hash: anchor.start.contextHash,
-        end_anchor_hash: anchor.end?.anchorHash ?? null,
+        source_id: place.sourceId,
+        path: place.path,
+        side: place.side,
+        line: place.line,
+        end_line: place.endLine,
+        anchor_hash: place.anchorHash,
+        context_hash: place.contextHash,
+        end_anchor_hash: place.endAnchorHash,
         state: 'active',
         origin: request.author,
         drifted: 0,
-        first_seen_snapshot: snapshot.id,
-        last_seen_snapshot: snapshot.id,
+        first_seen_snapshot: snapshotId,
+        last_seen_snapshot: snapshotId,
         created_at: t,
         updated_at: t,
       })
@@ -335,9 +379,11 @@ export async function listThreads(
 ): Promise<Thread[]> {
   const { db } = deps
 
+  // Left, not inner. A thread about the review has no source, and an inner
+  // join drops it from the list entirely rather than showing it unlabelled.
   let query = db
     .selectFrom('thread')
-    .innerJoin('source', 'source.id', 'thread.source_id')
+    .leftJoin('source', 'source.id', 'thread.source_id')
     .select([
       'thread.id',
       'thread.source_id',

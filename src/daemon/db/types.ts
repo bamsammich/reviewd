@@ -77,12 +77,20 @@ export interface BlobTable {
 export interface ThreadTable {
   id: string
   review_id: string
-  source_id: string
-  path: string
-  side: 'old' | 'new'
-  line: number
-  anchor_hash: string
-  context_hash: string
+  /**
+   * All null together, for a comment about the review rather than about a line.
+   *
+   * Feedback on the approach, the naming, or the shape of a change belongs to
+   * no line, and anchoring it to one is worse than leaving it loose: the next
+   * snapshot re-anchors or outdates a comment that was never about that code.
+   * Re-anchoring skips these, since there is nothing to re-anchor.
+   */
+  source_id: string | null
+  path: string | null
+  side: 'old' | 'new' | null
+  line: number | null
+  anchor_hash: string | null
+  context_hash: string | null
   /**
    * The last line a range covers, or null for a comment on one line.
    *

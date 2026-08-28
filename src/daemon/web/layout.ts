@@ -422,7 +422,32 @@ tr.threadrow td { padding: 0; background: var(--surface-2); white-space: normal;
   font-size: .7rem; font-weight: 700; text-transform: uppercase;
   letter-spacing: .05em; color: var(--muted); margin-right: .35rem;
 }
-.thread .body { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: .15rem; }
+/* Markdown builds real blocks now, so pre-wrap would double every gap. Line
+   breaks a reader typed survive as <br>, which is the part pre-wrap was for. */
+.thread .body { overflow-wrap: anywhere; margin-top: .15rem; }
+.thread .body > :first-child { margin-top: 0; }
+.thread .body > :last-child { margin-bottom: 0; }
+.thread .body p { margin: .4rem 0; }
+.thread .body ul, .thread .body ol { margin: .4rem 0; padding-left: 1.3rem; }
+.thread .body li { margin: .15rem 0; }
+.thread .body code {
+  font-family: var(--mono); font-size: .88em;
+  background: var(--surface-2); border: 1px solid var(--rule);
+  border-radius: 4px; padding: .05em .3em;
+}
+.thread .body pre.code {
+  margin: .45rem 0; padding: .5rem .6rem; overflow-x: auto;
+  background: var(--surface-2); border: 1px solid var(--rule); border-radius: 6px;
+}
+/* The border and background belong to the block, not to every line in it. */
+.thread .body pre.code code {
+  background: none; border: 0; padding: 0; font-size: .85em; white-space: pre;
+}
+.thread .body blockquote {
+  margin: .45rem 0; padding: .1rem 0 .1rem .7rem;
+  border-left: 3px solid var(--rule-strong); color: var(--muted);
+}
+.thread .body a { color: var(--accent); }
 .thread label { display: block; font-size: .78rem; color: var(--muted); margin-bottom: .25rem; }
 .thread textarea {
   width: 100%; font: inherit; font-size: 16px; padding: .5rem .6rem;
@@ -458,6 +483,61 @@ button.primary, .btn.primary {
 }
 button.quiet, .btn.quiet { color: var(--muted); border-color: var(--rule); background: transparent; }
 button:hover, .btn:hover { border-color: var(--accent); }
+
+/* ---------- comments on the whole change ---------- */
+
+/* Deliberately not a file card. Reusing .file put a thing that is not a file
+   in the same visual family as the files, immediately above them. */
+.overall { margin: 1rem 0 0; }
+
+.overall-title {
+  display: flex; align-items: center; gap: .5rem;
+  font-size: .95rem; margin: 0 0 .5rem;
+}
+
+.overall .compose {
+  background: var(--surface); border: 1px solid var(--rule);
+  border-radius: var(--radius);
+}
+.overall .compose > summary {
+  display: flex; align-items: center; gap: .4rem;
+  padding: .7rem .9rem; min-height: var(--tap);
+  cursor: pointer; list-style: none;
+  font-size: .9rem; font-weight: 600; color: var(--accent);
+}
+.overall .compose > summary::-webkit-details-marker { display: none; }
+.overall .compose > summary::before { content: "+"; font-weight: 700; }
+.overall .compose[open] > summary::before { content: "\\2212"; }
+.overall .compose > summary:hover { background: var(--surface-2); border-radius: var(--radius); }
+
+.overall .compose form { padding: 0 .9rem .9rem; display: grid; gap: .4rem; }
+
+/* A label that is read, not a placeholder standing in for one. The old box
+   showed its only guidance inside itself, which vanished on the first keypress
+   and was never available to a screen reader as a label at all. */
+.overall .compose label { font-size: .85rem; font-weight: 600; color: var(--ink-2); }
+
+/* Full width, and the size and family of prose rather than of a diff. The
+   inline reply styling it borrowed made a 183px monospace box in an 858px
+   column. 16px is also what stops iOS zooming the page on focus. */
+.overall .compose textarea {
+  width: 100%; font: inherit; font-size: 16px; font-family: var(--sans);
+  padding: .5rem .6rem; min-height: 6rem; resize: vertical;
+  color: var(--ink); background: var(--bg);
+  border: 1px solid var(--rule-strong); border-radius: 8px;
+}
+
+.overall .compose .help { margin: 0; font-size: .8rem; color: var(--muted); }
+
+/* Secondary. Approve is the page's primary action and should stay the only
+   thing wearing that weight. */
+.overall .compose button {
+  justify-self: start; min-height: var(--tap); padding: 0 1rem;
+  font: inherit; font-weight: 600; cursor: pointer;
+  color: var(--ink); background: var(--surface-2);
+  border: 1px solid var(--rule-strong); border-radius: 8px;
+}
+.overall .compose button:hover { border-color: var(--accent); color: var(--accent); }
 
 /* ---------- submit bar ---------- */
 

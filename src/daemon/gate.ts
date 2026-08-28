@@ -249,6 +249,9 @@ async function openThreadsFor(
   const first = new Map<string, { path: string; line: number; excerpt: string }>()
   for (const row of rows) {
     if (first.has(row.id)) continue
+    // A comment on the review as a whole has no line to point the reader at.
+    // It still counts as an open thread; it just cannot be listed by position.
+    if (row.path === null || row.line === null) continue
     first.set(row.id, {
       path: row.path,
       line: row.line,
