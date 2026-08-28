@@ -60,8 +60,14 @@ function reviewCard(review: ReviewSummary): SafeHtml {
         ${review.fileCount} file${review.fileCount === 1 ? '' : 's'} &middot; rev
         ${review.snapshotSeq} &middot; ${age(review.ageSeconds)} ago
         ${
+          // Named, not just counted. The heading above counts reviews waiting
+          // on you and these count threads, so two bare "for you" numbers on
+          // one screen read as the same tally disagreeing with itself.
           review.threadsAwaitingHuman > 0
-            ? html` <span class="badge you">${review.threadsAwaitingHuman} for you</span>`
+            ? html` <span class="badge you"
+                >${review.threadsAwaitingHuman} comment${review.threadsAwaitingHuman === 1 ? '' : 's'}
+                for you</span
+              >`
             : raw('')
         }
         ${review.status === 'approved' ? html` <span class="badge approved">approved</span>` : raw('')}
@@ -97,7 +103,8 @@ export interface FileView {
   newBlobId?: string | undefined
 }
 
-function age(seconds: number): string {
+/** Compact enough to sit inside a line of metadata without wrapping it. */
+export function age(seconds: number): string {
   if (seconds < 60) return `${seconds}s`
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`
   if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h`

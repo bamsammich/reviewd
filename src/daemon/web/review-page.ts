@@ -1,13 +1,13 @@
 import type { ReviewSummary, SourceSummary, Thread } from '../../protocol.js'
 import { Palette, renderLine, type Token } from './highlight.js'
-import { FOLDER_ICON, GIT_ICON } from './icons.js'
+import { COMMENT_ICON, EXTEND_ICON, FOLDER_ICON, GIT_ICON } from './icons.js'
 import { escapeHtml, html, raw, type SafeHtml } from './html.js'
 import { renderMarkdown } from './markdown.js'
 // anchorForHalf is gone from here: nothing in the renderer asks where a row is
 // without also needing the file it is in, which is what a position carries.
 import { buildRows, toHunks, toSplitRows, type Half, type SplitRow } from './hunks.js'
 import { page, topBar } from './layout.js'
-import type { FileView } from './pages.js'
+import { age, type FileView } from './pages.js'
 import { basenameOf, displayPath } from './paths.js'
 import { mintPageToken } from './tokens.js'
 import { buildTree, filesOf, type TreeDirectory, type TreeFile, type TreeNode } from './tree.js'
@@ -80,6 +80,18 @@ export function parseRail(value: string | undefined): RailState {
   return value === 'closed' ? 'closed' : 'open'
 }
 
+/*
+ * There is no wrap setting, on purpose.
+ *
+ * One was built and taken out. Not wrapping means the column is as wide as the
+ * file's longest line, so a single 200-character string sets the width of every
+ * row and split view stops showing two halves at once, which is the only thing
+ * split view is for. Measured on GitHub's own split diff: fifteen tables,
+ * `table-layout: fixed`, the table exactly as wide as its container, zero of
+ * them scrolling horizontally, and no wrap control anywhere on the page. Every
+ * line wraps and the halves stay level.
+ */
+
 /** Identifies one file block across renders. Opaque: only membership is asked. */
 export function foldKey(sourceId: string, path: string): string {
   return `${sourceId}:${path}`
@@ -124,7 +136,8 @@ export function reviewPage(
     (count, thread) => count + thread.messages.filter((m) => m.submittedAt === null).length,
     0,
   )
-  const awaitingYou = threads.filter((t) => t.state === 'active' && t.turn === 'human').length
+  const owed = threads.filter((t) => t.state === 'active' && t.turn === 'human')
+  const awaitingYou = owed.length
   const outdated = threads.filter((t) => t.state === 'outdated')
   const grouped = groupBySource(review.sources, files)
   // Filled while the body renders, read after. Every colour the diff used, and
@@ -154,7 +167,8 @@ export function reviewPage(
       />
       <div class="rail">
         <h1 class="page-title">${review.title}</h1>
-        ${scopeList(grouped, threads)} ${coaching(threads.length, drafts, awaitingYou)}
+        ${coaching(threads.length, drafts, awaitingYou)} ${commentIndex(threads)}
+        ${scopeList(grouped, threads)}
       </div>
 
       <div class="files">
@@ -169,7 +183,7 @@ export function reviewPage(
         ${outdatedBlock(page_, outdated)}
       </div>
     </main>
-    ${submitBar(review, drafts, awaitingYou)}`
+    ${submitBar(review, drafts, awaitingYou, owed[0])}`
 
   const highlighting = palette.css()
 
@@ -226,12 +240,36 @@ function scopeList(groups: SourceGroup[], threads: Thread[]): SafeHtml {
 
   const files = groups.reduce((total, group) => total + group.files.length, 0)
 
-  return html`<nav class="scope" aria-labelledby="scope-heading">
-    <h2 id="scope-heading">
-      ${files} file${files === 1 ? '' : 's'} in
-      ${groups.length === 1 ? '1 place' : `${groups.length} places`}
-    </h2>
-    ${groups.map((group) => sourceBranch(group, threads))}
+  return html`<nav class="scope" aria-labelledby="scope-heading" data-sources="${groups.length}">
+    <div class="scopehead">
+      <h2 id="scope-heading">
+        ${files} file${files === 1 ? '' : 's'} in
+        ${groups.length === 1 ? '1 place' : `${groups.length} places`}
+      </h2>
+      <!--
+        Hidden until the script unhides it. A filter box that does nothing is
+        worse than no filter box, and the filtering is the script's job.
+      -->
+      <div class="scopetools" hidden>
+        <label class="visually-hidden" for="file-filter">Filter files</label>
+        <input
+          id="file-filter"
+          class="filter"
+          type="search"
+          placeholder="Filter files"
+          autocomplete="off"
+          autocapitalize="off"
+          spellcheck="false"
+        />
+        <button type="button" class="foldall" aria-pressed="false">Collapse all</button>
+      </div>
+    </div>
+
+    <!-- What the filter draws into, and what it says when nothing matches. -->
+    <ul class="matches" hidden></ul>
+    <p class="nomatch" role="status" hidden>No file matches.</p>
+
+    <div class="branches">${groups.map((group) => sourceBranch(group, threads))}</div>
   </nav>`
 }
 
@@ -249,24 +287,28 @@ function sourceBranch(group: SourceGroup, threads: Thread[]): SafeHtml {
         >${displayPath(group.source.rootPath)}</span
       >
     </a>
-    ${treeList(group.tree, threads)}
+    ${treeList(group.tree, threads, name)}
   </div>`
 }
 
-function treeList(nodes: TreeNode[], threads: Thread[]): SafeHtml {
+function treeList(nodes: TreeNode[], threads: Thread[], sourceLabel: string): SafeHtml {
   if (nodes.length === 0) return raw('')
 
   return html`<ul class="tree">
     ${nodes.map(
       (node) =>
         html`<li>
-          ${node.kind === 'directory' ? treeDirectory(node, threads) : treeFile(node, threads)}
+          ${
+            node.kind === 'directory'
+              ? treeDirectory(node, threads, sourceLabel)
+              : treeFile(node, threads, sourceLabel)
+          }
         </li>`,
     )}
   </ul>`
 }
 
-function treeDirectory(node: TreeDirectory, threads: Thread[]): SafeHtml {
+function treeDirectory(node: TreeDirectory, threads: Thread[], sourceLabel: string): SafeHtml {
   return html`<details class="dir" open>
     <summary>
       <span class="name">${node.name}</span>
@@ -275,7 +317,7 @@ function treeDirectory(node: TreeDirectory, threads: Thread[]): SafeHtml {
         ${node.fileCount} file${node.fileCount === 1 ? '' : 's'}
       </span>
     </summary>
-    ${treeList(node.children, threads)}
+    ${treeList(node.children, threads, sourceLabel)}
   </details>`
 }
 
@@ -288,9 +330,11 @@ const CHANGE_MARK: Record<string, string> = {
   binary: 'B',
 }
 
-function treeFile(node: TreeFile, threads: Thread[]): SafeHtml {
+function treeFile(node: TreeFile, threads: Thread[], sourceLabel: string): SafeHtml {
   const { file } = node
   const key = foldKey(file.sourceId, file.path)
+  const cut = file.path.lastIndexOf('/')
+  const directory = cut === -1 ? '' : file.path.slice(0, cut)
   const comments = threads.filter(
     (thread) =>
       thread.state !== 'outdated' &&
@@ -301,7 +345,14 @@ function treeFile(node: TreeFile, threads: Thread[]): SafeHtml {
 
   const mark = CHANGE_MARK[file.changeType] ?? '?'
 
-  return html`<a class="leaf" href="#file-${key}" data-tree-file="${key}">
+  return html`<a
+    class="leaf"
+    href="#file-${key}"
+    data-tree-file="${key}"
+    data-path="${file.path}"
+    data-dir="${directory}"
+    data-source-label="${sourceLabel}"
+  >
     <span class="mark ${file.changeType}" aria-hidden="true">${mark}</span>
     <span class="name">${node.name}</span>
     ${comments > 0 ? html`<span class="count" aria-hidden="true">${comments}</span>` : raw('')}
@@ -312,36 +363,125 @@ function treeFile(node: TreeFile, threads: Thread[]): SafeHtml {
 }
 
 /**
- * The one line that says how to review.
+ * The one line that says how to review, on the one review that needs telling.
  *
- * Shown until the reviewer has written something, because the affordance it
- * describes is discoverable but the rule about drafts is not: nothing reaches
- * the agent until a verdict button, and a person who does not know that will
- * wonder why their comment went nowhere.
+ * Only before the first thread exists. The two states it used to announce as
+ * well, threads waiting on you and comments not sent, are both already on
+ * screen twice: the index heading immediately below carries the count next to
+ * the list itself, and the submit bar is fixed to the bottom of the viewport
+ * and says the same thing from there. A banner restating a number it is sitting
+ * on top of costs the top of every active review to tell the reader something
+ * they are already looking at.
+ *
+ * What survives is the part nothing else says: which control opens a comment,
+ * and that a saved comment goes nowhere until a verdict. A reviewer who does
+ * not know the second one wonders why their comment vanished.
  */
 function coaching(threadCount: number, drafts: number, awaitingYou: number): SafeHtml {
-  if (awaitingYou > 0) {
-    return html`<p class="hint">
-      <b>${awaitingYou} thread${awaitingYou === 1 ? '' : 's'} waiting on you.</b>
-      Reply in place, then send with a verdict below.
-    </p>`
-  }
+  if (threadCount > 0 || drafts > 0 || awaitingYou > 0) return raw('')
 
-  if (drafts > 0) {
-    return html`<p class="hint">
-      <b>${drafts} comment${drafts === 1 ? '' : 's'} not sent yet.</b>
-      Choose a verdict below to send them to the agent.
-    </p>`
-  }
+  // "Every line takes a comment" rather than "the icon is there", because on a
+  // mouse the gutter is empty until you are on a row. Naming the icon still
+  // does the work: it is what the reader recognises when it appears.
+  return html`<p class="hint">
+    Every line takes a comment: the <span class="key">${COMMENT_ICON}</span> in its gutter, or drag
+    down the gutter to cover a block. <b>Nothing reaches the agent</b> until you choose a verdict.
+  </p>`
+}
 
-  if (threadCount === 0) {
-    return html`<p class="hint">
-      Tap <span class="key">+</span> beside any line to comment.
-      <b>Nothing reaches the agent</b> until you choose a verdict below.
-    </p>`
-  }
+/**
+ * Every open comment, and where it is.
+ *
+ * The page had no answer to "where are the three threads waiting on me". The
+ * counts said three, the bar said reply above, and the threads themselves were
+ * at 5,000, 13,000 and 33,000 pixels of a review that is 34,000 tall. The tree
+ * carried a per-file tally and nothing carried the comment on the change as a
+ * whole, which has no file to hang a tally on.
+ *
+ * Owed first. A reader with a thread waiting on them has one job and the rest
+ * of the list is reference.
+ */
+function commentIndex(threads: Thread[]): SafeHtml {
+  const open = threads.filter((thread) => thread.state === 'active')
+  if (open.length === 0) return raw('')
 
-  return raw('')
+  const owed = open.filter((thread) => thread.turn === 'human')
+  const rest = open.filter((thread) => thread.turn !== 'human')
+  const ordered = [...owed, ...rest]
+
+  const shown = ordered.slice(0, INDEX_SHOWN)
+  const held = ordered.slice(INDEX_SHOWN)
+
+  return html`<nav class="commentindex" aria-labelledby="comments-heading">
+    <h2 id="comments-heading">
+      ${open.length} open comment${open.length === 1 ? '' : 's'}
+      ${owed.length > 0 ? html`<span class="badge you">${owed.length} for you</span>` : raw('')}
+    </h2>
+    <ul>
+      ${shown.map((thread) => commentIndexEntry(thread))}
+    </ul>
+    ${
+      held.length > 0
+        ? html`<details class="more">
+            <summary>${held.length} more</summary>
+            <ul>
+              ${held.map((thread) => commentIndexEntry(thread))}
+            </ul>
+          </details>`
+        : raw('')
+    }
+  </nav>`
+}
+
+/**
+ * How many entries the index lists before the rest go behind a disclosure.
+ *
+ * Measured with 21 open threads: at 73px each the list ran 1,652px and put the
+ * file tree 1,840px into a rail that shows 737px, so the tree was unreachable
+ * without scrolling past every card. Six is what fits above the tree while
+ * still showing more than the two or three a short review has.
+ *
+ * Ordering does the rest of the work: threads waiting on the reader sort first,
+ * so the six on show are the six that matter.
+ */
+const INDEX_SHOWN = 6
+
+function commentIndexEntry(thread: Thread): SafeHtml {
+  const last = thread.messages[thread.messages.length - 1]
+  const anchored = thread.path !== null
+
+  // Monospace belongs to the thing that is actually a path. A sentence set in
+  // it alongside two filenames reads as a third filename.
+  const where = anchored
+    ? `${basenameOf(thread.path as string)}:${thread.line}${thread.endLine ? `–${thread.endLine}` : ''}`
+    : 'The change as a whole'
+
+  return html`<li>
+    <a class="${thread.turn === 'human' ? 'owed' : ''}" href="#t-${thread.id}">
+      <span class="where ${anchored ? 'at' : ''}">${where}</span>
+      <span class="gist">${excerpt(last?.body ?? '')}</span>
+      ${
+        thread.turn === 'human'
+          ? html`<span class="visually-hidden">waiting on you</span>`
+          : raw('')
+      }
+    </a>
+  </li>`
+}
+
+/**
+ * The first sentence or so of a comment, flattened.
+ *
+ * Markdown in the body would come through as its own source text here, and a
+ * list marker or a fence in a one-line summary reads as damage rather than as
+ * formatting.
+ */
+function excerpt(body: string): string {
+  const flat = body
+    .replace(/[`*_>#]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return flat.length > 90 ? `${flat.slice(0, 89).trimEnd()}…` : flat
 }
 
 function sourceGroup(page: Page, group: SourceGroup, showHeading: boolean): SafeHtml {
@@ -489,7 +629,7 @@ function half(page: Page, file: FileView, side: Half, which: 'left' | 'right'): 
         )}"
         aria-label="Extend the comment down to line ${here.line}"
         title="Extend down to line ${here.line}"
-        >↧</a
+        >${EXTEND_ICON}</a
       >`
     : html`<a
         class="addnote"
@@ -498,7 +638,7 @@ function half(page: Page, file: FileView, side: Half, which: 'left' | 'right'): 
         data-box
         aria-label="Comment on ${file.path} line ${here.line}"
         title="Comment on line ${here.line}"
-        >+</a
+        >${COMMENT_ICON}</a
       >`
 
   // Highlighted where we recognise the language and the line counts agreed,
@@ -524,8 +664,43 @@ function half(page: Page, file: FileView, side: Half, which: 'left' | 'right'): 
     <span class="n">${side.line ?? ''}</span>
     <span class="act">${action}</span>
     <span class="sign" aria-hidden="true">${sign}</span>
-    <span class="t">${code}</span>
+    <span class="t"${hangingIndent(side.text)}>${code}</span>
   </div>`
+}
+
+/** A tab counts as this many columns, matching the tab-size the diff sets. */
+const TAB_COLUMNS = 4
+
+/**
+ * How far a wrapped line's continuation rows are pushed in.
+ *
+ * A wrapped line used to start every continuation at column zero, so the shape
+ * of nested code was destroyed by the wrap. Measured at 1024px in split view,
+ * where a half carries 52 characters: 14 of 27 lines wrapped, the worst to 11
+ * rows, and `const pool =` / `createConnectionPool({` / `maximumConnections:`
+ * all sat flush left with nothing saying which one opened the statement.
+ *
+ * The line's own leading whitespace plus two columns, so a continuation lands
+ * just inside the code it belongs to and reads as a continuation rather than
+ * as a new statement. Emitted only where it changes something, which is every
+ * line that is indented at all.
+ *
+ * A negative text-indent against the matching padding is what makes it hang:
+ * the first row is pulled back out to where the padding would otherwise put
+ * it, and the literal leading whitespace positions it from there.
+ */
+function hangingIndent(text: string): SafeHtml {
+  const leading = /^[ \t]*/.exec(text)?.[0] ?? ''
+  if (leading.length === 0) return raw('')
+
+  let columns = 0
+  for (const character of leading) {
+    columns += character === '\t' ? TAB_COLUMNS - (columns % TAB_COLUMNS) : 1
+  }
+
+  // Past a point the hang costs more width than the alignment returns, and a
+  // deeply indented long line is exactly where width is already scarce.
+  return raw(` style="--hang:${Math.min(columns, 12) + 2}ch"`)
 }
 
 /**
@@ -580,22 +755,30 @@ function threadBlock(page: Page, thread: Thread, showLocation: boolean): SafeHtm
         (message) =>
           html`<div class="msg">
             <span class="who">${message.author === 'human' ? 'you' : 'agent'}</span>
+            <span class="when" title="${new Date(message.createdAt).toISOString()}"
+              >${age(Math.max(0, Math.floor((Date.now() - message.createdAt) / 1000)))} ago</span
+            >
             ${message.submittedAt === null ? html`<span class="badge draft">not sent</span>` : raw('')}
             <div class="body">${renderMarkdown(message.body)}</div>
           </div>`,
       )}
-      <details class="reply">
-        <summary>Reply</summary>
-        <form method="post" action="/r/${page.review.reviewId}/threads/${thread.id}/replies">
-          ${tokenField(page)}
-          <label class="visually-hidden" for="reply-${thread.id}"> Reply to this comment </label>
-          <textarea id="reply-${thread.id}" name="body" rows="2" required></textarea>
-          <div class="actions">
-            <button type="submit" class="primary">Save reply</button>
-          </div>
-        </form>
-      </details>
-      <div class="actions">
+      <!--
+        Reply and Resolve on one row. Stacked, they read as two unrelated
+        controls of equal weight, and the one a thread waiting on you actually
+        wants is the top one.
+      -->
+      <div class="threadactions">
+        <details class="reply">
+          <summary>Reply</summary>
+          <form method="post" action="/r/${page.review.reviewId}/threads/${thread.id}/replies">
+            ${tokenField(page)}
+            <label class="visually-hidden" for="reply-${thread.id}"> Reply to this comment </label>
+            <textarea id="reply-${thread.id}" name="body" rows="2" required></textarea>
+            <div class="actions">
+              <button type="submit" class="primary">Save reply</button>
+            </div>
+          </form>
+        </details>
         <form
           method="post"
           action="/r/${page.review.reviewId}/threads/${thread.id}/${
@@ -727,7 +910,7 @@ function viewToggle(review: ReviewSummary, view: ViewMode, rail: RailState): Saf
       >${rail === 'open' ? 'Hide files' : 'Show files'}</a
     >
     <a class="btn quiet viewmode" href="/r/${review.reviewId}?view=${other}">
-      ${other === 'split' ? 'Side by side' : 'Unified'}
+      ${other === 'split' ? 'Show side by side' : 'Show unified'}
     </a>
   </div>`
 }
@@ -735,11 +918,13 @@ function viewToggle(review: ReviewSummary, view: ViewMode, rail: RailState): Saf
 /**
  * The submit controls.
  *
- * One primary action at a time. With unsent comments the primary action is
- * requesting changes, because that is what a reviewer who has written something
- * usually means; with nothing unsent it is approving, because that is what a
- * reviewer who has read and is satisfied usually means. The state line says
- * what approving does, since unblocking a commit is not visible from here.
+ * One primary action at a time, and sometimes none. With unsent comments the
+ * primary action is requesting changes, because that is what a reviewer who has
+ * written something usually means; with nothing unsent and nothing owed it is
+ * approving, because that is what a reviewer who has read and is satisfied
+ * usually means. With threads still waiting on an answer neither button gets
+ * the accent: the next thing to do is read them, not decide. The state line
+ * says what approving does, since unblocking a commit is not visible from here.
  *
  * Approval is its own state rather than an extra button on the same row. A
  * reviewer who has just approved and gets back a highlighted Approve reads it
@@ -747,7 +932,12 @@ function viewToggle(review: ReviewSummary, view: ViewMode, rail: RailState): Saf
  * beside it invite the wrong one. What is left is the one thing still true:
  * the decision is made and the agent has not committed yet.
  */
-function submitBar(review: ReviewSummary, drafts: number, awaitingYou: number): SafeHtml {
+function submitBar(
+  review: ReviewSummary,
+  drafts: number,
+  awaitingYou: number,
+  firstOwed: Thread | undefined,
+): SafeHtml {
   const approved = review.sources.length > 0 && review.sources.every((source) => source.approved)
 
   const state = approved
@@ -759,7 +949,17 @@ function submitBar(review: ReviewSummary, drafts: number, awaitingYou: number): 
       ? html`<strong>${drafts} comment${drafts === 1 ? '' : 's'} not sent.</strong> Choose how to
           send them.`
       : awaitingYou > 0
-        ? html`<strong>${awaitingYou} waiting on you.</strong> Reply above, or decide now.`
+        ? // Not "reply above". A thread sits wherever its code sits, which on a
+          // fifteen-file review measured here was 5,000, 13,000 and 33,600
+          // pixels down a page 34,000 tall, in both directions from wherever
+          // the reader had got to. The bar hands them the nearest one to start
+          // on; the rail lists the rest.
+          html`<strong>${awaitingYou} thread${awaitingYou === 1 ? '' : 's'} waiting on you.</strong>
+            ${
+              firstOwed
+                ? html`<a href="#t-${firstOwed.id}">Go to the first</a>, or decide now.`
+                : raw('Decide now, or read them first.')
+            }`
         : html`Approving lets the agent commit.`
 
   // A verdict carries the same token every other form does, and the route
@@ -795,10 +995,19 @@ function submitBar(review: ReviewSummary, drafts: number, awaitingYou: number): 
                     Request changes
                   </button>
                   <button type="submit" name="verdict" value="approved">Approve</button>`
-              : html`<button type="submit" name="verdict" value="changes_requested" class="quiet">
+              : // Approve loses the accent while the agent is waiting on an
+                // answer. The bar was saying "3 threads waiting on you" and
+                // putting the loudest control in the room on the one action
+                // that ends the review without reading them.
+                html`<button type="submit" name="verdict" value="changes_requested" class="quiet">
                     Request changes
                   </button>
-                  <button type="submit" name="verdict" value="approved" class="primary">
+                  <button
+                    type="submit"
+                    name="verdict"
+                    value="approved"
+                    class="${awaitingYou > 0 ? '' : 'primary'}"
+                  >
                     Approve
                   </button>`
         }
@@ -882,6 +1091,9 @@ async function refresh() {
   if (head && nextHead) head.outerHTML = nextHead.outerHTML;
 
   restoreReplies(replies);
+  // The new markup arrives with the tools hidden and the tree unfiltered,
+  // because the server does not know either was ever changed.
+  restoreDrawer();
   window.scrollTo(0, offset);
   measureBar();
 
@@ -1349,6 +1561,151 @@ function measureBar() {
 
 addEventListener('resize', measureBar, { passive: true });
 measureBar();
+
+/* ---- filtering the file tree ------------------------------------------ */
+
+/*
+ * Narrowing the drawer to the files you are looking for.
+ *
+ * The drawer listed every changed file and offered no way to reach one by
+ * name, so a review of any size meant reading the whole tree to find the
+ * entry you already knew you wanted.
+ *
+ * Matching runs over the whole path, so "web/mark" finds what typing either
+ * half alone would. Measured on GitHub's own file tree: typing "markdown"
+ * takes 21 rows to 3, and the directory chain collapses into one row carrying
+ * the full path rather than staying nested. Same shape here, because a nested
+ * chain of one-child directories is most of the drawer once a filter has
+ * thrown the rest away.
+ *
+ * The controls only exist once this runs. A filter box that cannot filter is
+ * worse than no filter box.
+ */
+/*
+ * Everything is looked up per call rather than held.
+ *
+ * A live refresh replaces the whole of main, so any node captured here is
+ * detached moments later and any listener bound to one stops firing. Measured:
+ * the tools row came back hidden after the first poll and the filter went dead
+ * without a single error in the console. Delegated listeners and fresh queries
+ * survive the swap; restoreDrawer puts back what the new markup does not know.
+ */
+function drawer() {
+  const scope = document.querySelector('.scope');
+  if (!scope) return null;
+
+  return {
+    scope: scope,
+    tools: scope.querySelector('.scopetools'),
+    filter: scope.querySelector('.filter'),
+    matches: scope.querySelector('ul.matches'),
+    nomatch: scope.querySelector('.nomatch'),
+    branches: scope.querySelector('.branches'),
+    foldall: scope.querySelector('.foldall'),
+  };
+}
+
+/* One row per match, grouped under the directory holding them, in the order
+   the tree already put them in. */
+function drawMatches(parts, query) {
+  const manySources = parts.scope.dataset.sources !== '1';
+  const hits = Array.from(parts.branches.querySelectorAll('a.leaf')).filter((leaf) =>
+    (leaf.dataset.path || '').toLowerCase().includes(query),
+  );
+
+  let lastGroup = null;
+  parts.matches.replaceChildren();
+
+  for (const leaf of hits) {
+    const where =
+      (manySources ? leaf.dataset.sourceLabel + ' / ' : '') + (leaf.dataset.dir || '.');
+
+    if (where !== lastGroup) {
+      lastGroup = where;
+      const head = document.createElement('li');
+      head.className = 'matchdir';
+      head.textContent = where;
+      parts.matches.appendChild(head);
+    }
+
+    const row = document.createElement('li');
+    row.appendChild(leaf.cloneNode(true));
+    parts.matches.appendChild(row);
+  }
+
+  return hits.length;
+}
+
+function applyFilter() {
+  const parts = drawer();
+  if (!parts || !parts.filter) return;
+
+  const query = parts.filter.value.trim().toLowerCase();
+
+  if (!query) {
+    parts.branches.hidden = false;
+    parts.matches.hidden = true;
+    parts.nomatch.hidden = true;
+    parts.matches.replaceChildren();
+    return;
+  }
+
+  const found = drawMatches(parts, query);
+  parts.branches.hidden = true;
+  parts.matches.hidden = found === 0;
+  parts.nomatch.hidden = found !== 0;
+}
+
+/* What the reviewer set, which the server does not know and a refresh drops. */
+let drawerFilter = '';
+let drawerCollapsed = false;
+
+function restoreDrawer() {
+  const parts = drawer();
+  if (!parts || !parts.tools) return;
+
+  parts.tools.hidden = false;
+  parts.filter.value = drawerFilter;
+
+  if (drawerCollapsed) {
+    for (const dir of parts.scope.querySelectorAll('details.dir')) dir.open = false;
+    parts.foldall.setAttribute('aria-pressed', 'true');
+    parts.foldall.textContent = 'Expand all';
+  }
+
+  applyFilter();
+}
+
+document.addEventListener('input', (event) => {
+  const target = event.target;
+  if (!target.classList || !target.classList.contains('filter')) return;
+  drawerFilter = target.value;
+  applyFilter();
+});
+
+/* Escape clears rather than leaving the drawer filtered behind you. */
+document.addEventListener('keydown', (event) => {
+  const target = event.target;
+  if (event.key !== 'Escape') return;
+  if (!target.classList || !target.classList.contains('filter') || !target.value) return;
+  target.value = '';
+  drawerFilter = '';
+  applyFilter();
+});
+
+document.addEventListener('click', (event) => {
+  const button = event.target.closest ? event.target.closest('.foldall') : null;
+  if (!button) return;
+
+  drawerCollapsed = button.getAttribute('aria-pressed') === 'false';
+  for (const dir of document.querySelectorAll('.scope details.dir')) {
+    dir.open = !drawerCollapsed;
+  }
+  button.setAttribute('aria-pressed', drawerCollapsed ? 'true' : 'false');
+  button.textContent = drawerCollapsed ? 'Expand all' : 'Collapse all';
+});
+
+restoreDrawer();
 
 /* ---- marking the file being read -------------------------------------- */
 

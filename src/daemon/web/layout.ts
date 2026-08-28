@@ -169,7 +169,45 @@ ul.reviews .roots {
 .scope { margin: 0 0 .9rem; }
 .scope h2 {
   font-size: .74rem; text-transform: uppercase; letter-spacing: .07em;
-  color: var(--muted); margin: 0 0 .4rem;
+  color: var(--muted); margin: 0;
+}
+
+/* The heading and the controls that act on what it counts. */
+.scopehead { display: grid; gap: .4rem; margin-bottom: .5rem; }
+.scopetools { display: flex; gap: .35rem; align-items: center; }
+
+/* type=search, so the browser draws its own clear button and Escape behaves
+   the way it does in every other search field. */
+.scope .filter {
+  flex: 1 1 auto; min-width: 0;
+  font: inherit; font-size: 16px; font-family: var(--sans);
+  padding: .35rem .55rem; min-height: 2.25rem;
+  color: var(--ink); background: var(--surface);
+  border: 1px solid var(--rule-strong); border-radius: 8px;
+}
+.scope .filter::placeholder { color: var(--muted); }
+.scope .filter:focus-visible { border-color: var(--accent); }
+
+.scope .foldall {
+  flex: 0 0 auto; font: inherit; font-size: .74rem;
+  min-height: 2.25rem; padding: 0 .5rem;
+  color: var(--muted); background: transparent;
+  border: 1px solid var(--rule); border-radius: 8px; cursor: pointer;
+}
+.scope .foldall:hover { border-color: var(--accent); color: var(--accent); }
+
+/* What a filter leaves behind: matches grouped under the directory holding
+   them, flat, with no chain of one-child directories in between. */
+.scope ul.matches { list-style: none; margin: 0; padding: 0; display: grid; gap: .1rem; }
+.scope .matchdir {
+  font-family: var(--mono); font-size: .7rem; color: var(--muted);
+  padding: .45rem .3rem .15rem; overflow-wrap: anywhere;
+}
+.scope .matchdir:first-child { padding-top: .1rem; }
+.scope ul.matches a.leaf { padding-left: .55rem; }
+
+.scope .nomatch {
+  margin: 0; padding: .8rem .3rem; color: var(--muted); font-size: .8rem;
 }
 .scope ul { list-style: none; margin: 0; padding: 0; display: grid; gap: .1rem; }
 .scope .branch + .branch { margin-top: .8rem; }
@@ -250,9 +288,25 @@ ul.reviews .roots {
 /* Above the diff on a narrow screen rather than beside it, so a tree of any
    size would push the code off the bottom. Bounded and given its own scroll,
    which is a nested scroll region and a deliberate one: the alternative is
-   scrolling past the whole tree to reach the first line of code. */
+   scrolling past the whole tree to reach the first line of code.
+
+   Measured on a 760px viewport before this: the title, the source card, the
+   tree and the hint filled the screen and the submit bar cut the hint off
+   mid-sentence. A reviewer opening a review on a phone saw no code at all. */
 @media (max-width: 1023px) {
-  .scope { max-height: 45vh; overflow-y: auto; }
+  .scope { max-height: 34vh; overflow-y: auto; }
+
+  /* Not capped and not scrolled: the disclosure already bounds the list, and a
+     cut-off entry under a heading reads as damage rather than as more below. */
+  .commentindex a { min-height: 2.75rem; }
+
+  /* The app bar is already showing this exact string, two lines above, and it
+     stays there while you scroll. Kept for the document outline and for a
+     screen reader, which is what an h1 is for. */
+  main.review > .rail > .page-title {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap;
+  }
 }
 
 .hint {
@@ -262,8 +316,66 @@ ul.reviews .roots {
 }
 .hint b { color: var(--ink); }
 .hint .key {
-  font-family: var(--mono); font-weight: 700; color: var(--accent);
-  padding: 0 .2rem;
+  color: var(--accent); padding: 0 .1rem;
+  display: inline-flex; align-items: center; vertical-align: -.15em;
+}
+
+/* ---------- where the comments are ---------- */
+
+/*
+ * Every open thread, and how to reach it.
+ *
+ * The page could count comments and could not take you to one. A tally sat on
+ * each file in the tree, the bar said "reply above", and the threads were
+ * wherever their code was: in a fifteen-file review measured here, at 5,000,
+ * 13,000 and 33,600 pixels down a page 34,000 tall. A comment on the change as
+ * a whole had no file to be counted against and appeared nowhere at all.
+ */
+.commentindex { margin: 0 0 .9rem; }
+.commentindex h2 {
+  font-size: .74rem; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--muted); margin: 0 0 .4rem;
+  display: flex; align-items: center; gap: .4rem; flex-wrap: wrap;
+}
+.commentindex h2 .badge { text-transform: none; letter-spacing: 0; }
+.commentindex ul { list-style: none; margin: 0; padding: 0; display: grid; gap: .25rem; }
+.commentindex a {
+  display: grid; gap: 0; align-content: center;
+  padding: .3rem .55rem; min-height: 2.6rem;
+  border: 1px solid var(--rule); border-radius: 8px;
+  background: var(--surface); text-decoration: none; color: inherit;
+}
+.commentindex a:hover { border-color: var(--accent); }
+
+/* The entries past the sixth. A count rather than a chevron and a word,
+   because the number is the thing worth knowing before opening it. */
+.commentindex details.more > summary {
+  list-style: none; cursor: pointer;
+  font-size: .76rem; color: var(--muted);
+  padding: .4rem .55rem; min-height: 2.2rem;
+  display: flex; align-items: center; gap: .3rem;
+  border-radius: 8px;
+}
+.commentindex details.more > summary::-webkit-details-marker { display: none; }
+.commentindex details.more > summary::before { content: "\\25b8"; font-size: .65rem; }
+.commentindex details.more[open] > summary::before { content: "\\25be"; }
+.commentindex details.more > summary:hover { background: var(--surface-2); color: var(--ink-2); }
+.commentindex details.more > ul { margin-top: .25rem; }
+
+/* The ones owed an answer carry the accent. The rest are reference. */
+.commentindex a.owed { border-color: var(--accent); background: var(--accent-soft); }
+.commentindex .where {
+  font-size: .74rem; color: var(--muted); overflow-wrap: anywhere;
+}
+.commentindex .where.at { font-family: var(--mono); }
+.commentindex a.owed .where { color: var(--accent); }
+
+/* One line of the comment itself. A location alone makes the reader open each
+   one to find out which is which; a second line of it costs 27px per entry and
+   pushes the file tree out of the rail. */
+.commentindex .gist {
+  font-size: .76rem; color: var(--ink-2); overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 1; line-clamp: 1; -webkit-box-orient: vertical;
 }
 
 /* ---------- files ---------- */
@@ -345,7 +457,30 @@ details.file > summary h3 {
 }
 .side .act { padding: 0; }
 .side .sign { padding: .1rem 0; user-select: none; text-align: center; }
-.side .t { padding: .1rem .4rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Eight columns per tab is the browser default and a diff column is the last
+   place that fits. Four, and the server counts the same four when it works out
+   how far a wrapped line hangs. */
+/* break-word, not anywhere: a token breaks only once it cannot fit on a line
+   of its own, which is what GitHub's diff cells use. pre-wrap stays, because
+   this renderer emits the line's own leading whitespace as text rather than as
+   markup, and normal white-space would collapse the indentation away. */
+.side .t {
+  padding: .1rem .4rem; white-space: pre-wrap; overflow-wrap: break-word;
+  tab-size: 4;
+}
+
+/* A wrapped line keeps the shape of the code it came from.
+ *
+ * Continuation rows used to start at column zero, which on nested code put the
+ * second half of a statement to the left of the statement that opened it. The
+ * server measures each line's own leading whitespace into --hang; the negative
+ * text-indent pulls the first row back out to where it belongs, and every row
+ * after it lands two columns inside the code. */
+.side .t[style*="--hang"] {
+  padding-left: calc(.4rem + var(--hang));
+  text-indent: calc(-1 * var(--hang));
+}
 
 .side.added { background: var(--add-bg); }
 .side.added .sign { color: var(--add-ink); }
@@ -357,15 +492,53 @@ details.file > summary h3 {
 .row[data-unified='right'] > .side.left,
 .row[data-unified='left'] > .side.right { display: none; }
 
-/* The comment affordance. Always visible rather than revealed on hover,
-   because a phone has no hover and a control nobody can find does not exist. */
+
+/* The comment affordance.
+ *
+ * A drawn icon rather than a character. This was a plus sign, sitting one
+ * column from the plus that means "added line" and one column from the minus
+ * that means "removed": the control the page exists for, wearing the
+ * notation's clothes and contradicting it on half the rows.
+ *
+ * Visible on every line by default, revealed per row where a pointer can
+ * hover. GitHub reveals on hover and is right to for a mouse; the same
+ * stylesheet on a phone is why commenting on a line from GitHub's mobile web
+ * is something people give up on, and a phone is the case reviewd is for.
+ * The question is not which of the two is correct, it is which device is
+ * asking, and a media query knows.
+ */
 a.addnote {
   display: flex; align-items: center; justify-content: center;
   width: 100%; min-height: 1.5rem;
-  color: var(--muted); text-decoration: none; font-weight: 700; font-size: .95rem;
+  color: var(--muted); text-decoration: none;
   border-radius: 4px;
+
+  /* A bubble is a denser mark than the character it replaced, and on a touch
+     screen there is one on every line with no hover to thin them out. Held
+     back far enough that the column reads as gutter rather than as content,
+     and no further: still 3.5:1 against the surface. */
+  opacity: .65;
 }
-a.addnote:hover, a.addnote:focus-visible { background: var(--accent); color: var(--accent-ink); }
+a.addnote svg { display: block; }
+
+/* A pointer that can hover gets GitHub's gutter: empty until you are on a row.
+   Opacity rather than display, so the control keeps its place in the layout
+   and in the tab order, and a keyboard still finds it below. */
+/* The row rule deliberately skips the control the pointer is actually on.
+   Without :not(:hover) it wins on specificity, 0-3-1 against 0-2-1, and paints
+   --ink-2 over the --accent-ink the filled state below sets: a pale icon on a
+   pale blue button, 1.3:1 in dark mode, right at the moment the control is
+   being pressed. */
+@media (hover: hover) and (pointer: fine) {
+  a.addnote { opacity: 0; }
+  .side:hover a.addnote:not(:hover) { opacity: 1; color: var(--ink-2); }
+}
+
+/* Focus outranks both. A control revealed only by a pointer would otherwise be
+   invisible to the keyboard that is on it. */
+a.addnote:hover, a.addnote:focus-visible {
+  background: var(--accent); color: var(--accent-ink); opacity: 1;
+}
 
 /* The lines a comment covers, whether it is saved or still being chosen. A
    left border rather than a background, because added and removed lines
@@ -375,7 +548,7 @@ a.addnote:hover, a.addnote:focus-visible { background: var(--accent); color: var
 
 /* Offered on every line below an open comment box, and the path a touch
    screen takes, where a drag is a scroll. */
-a.addnote.extend { color: var(--accent); font-weight: 700; }
+a.addnote.extend { color: var(--accent); opacity: 1; }
 
 /* Under the pointer mid-drag. Brighter than the saved shading, because this
    one answers "what am I about to pick" rather than "what does this cover". */
@@ -392,9 +565,9 @@ a.addnote.extend { color: var(--accent); font-weight: 700; }
 }
 
 /* Hiding the tree matters most on a narrow screen, where it sits above the
-   diff rather than beside it, so the row shows at every width. Only the
-   side-by-side choice is hidden below the breakpoint, where it is ignored
-   anyway. */
+   diff rather than beside it, so the row shows at every width. The two choices
+   that only mean something on a wide screen, side-by-side and wrapping, are
+   hidden below the breakpoint, where both are ignored anyway. */
 .viewtoggle { display: flex; justify-content: flex-end; gap: .4rem; margin-bottom: .6rem; }
 .viewtoggle .viewmode { display: none; }
 
@@ -421,6 +594,12 @@ tr.threadrow td { padding: 0; background: var(--surface-2); white-space: normal;
 .thread .who {
   font-size: .7rem; font-weight: 700; text-transform: uppercase;
   letter-spacing: .05em; color: var(--muted); margin-right: .35rem;
+}
+/* When it was written. A thread carried no time at all, so a reply from four
+   days ago and one from four minutes ago read identically. */
+.thread .when {
+  font-size: .7rem; color: var(--muted); margin-right: .35rem;
+  font-variant-numeric: tabular-nums;
 }
 /* Markdown builds real blocks now, so pre-wrap would double every gap. Line
    breaks a reader typed survive as <br>, which is the part pre-wrap was for. */
@@ -456,6 +635,18 @@ tr.threadrow td { padding: 0; background: var(--surface-2); white-space: normal;
 }
 .thread .actions { display: flex; gap: .5rem; margin-top: .5rem; flex-wrap: wrap; }
 
+/* Reply and Resolve belong on one row. Stacked, they were two full-width-looking
+   controls of equal weight in a column, and the reader had to work out that the
+   second one closes the thread rather than continuing it. */
+.thread .threadactions {
+  display: flex; gap: .5rem; align-items: flex-start; flex-wrap: wrap;
+  margin-top: .5rem;
+}
+
+/* Open, the reply takes the row to itself so the textarea gets the full width
+   rather than sharing it with a button. */
+.thread .threadactions > details.reply[open] { flex: 1 1 100%; }
+
 /* The reply box starts closed. A thread is usually read, not answered, and an
    open textarea under every one of them reads as work outstanding. */
 .thread details.reply > summary {
@@ -463,8 +654,9 @@ tr.threadrow td { padding: 0; background: var(--surface-2); white-space: normal;
   font-size: .88rem; font-weight: 500; min-height: 2.5rem;
   padding: .45rem .85rem; border-radius: 8px;
   border: 1px solid var(--rule-strong); background: var(--surface);
-  color: var(--ink); cursor: pointer; list-style: none; margin-top: .5rem;
+  color: var(--ink); cursor: pointer; list-style: none;
 }
+.thread details.reply > summary:hover { border-color: var(--accent); }
 .thread details.reply > summary::-webkit-details-marker { display: none; }
 .thread details.reply[open] > summary { margin-bottom: .5rem; }
 
@@ -619,17 +811,21 @@ header.top .keeping-up .dismiss:focus-visible { outline: 2px solid currentColor;
 
   .viewtoggle .viewmode { display: inline-flex; }
 
-  /* Below this width two columns of code are unreadable, so the preference is
-     ignored rather than honored into uselessness. */
-  main.view-split .row { grid-template-columns: 1fr 1fr; }
-
-  /* Both halves come back, at a specificity that beats the stacking rules
-     above rather than relying on source order. */
-  main.view-split .row[data-unified='right'] > .side.left,
-  main.view-split .row[data-unified='left'] > .side.right,
-  main.view-split .row > .side { display: grid; }
-  main.view-split .row > .side.left { border-right: 1px solid var(--rule); }
-  main.view-split .side { grid-template-columns: 2.6rem 1.5rem .9rem minmax(0, 1fr); }
+  /* Split needs a diff column wide enough to carry two readable halves, and
+     what decides that is the diff column, not the window. Measured at 1024px
+     with the rail open: 52 characters a half, 14 of 27 lines wrapping, the
+     worst to 11 rows. Honouring the preference there is honouring it into
+     uselessness, which is the thing the old breakpoint was trying to avoid and
+     landed one notch too low. Closing the rail hands its 19rem to the diff, so
+     the same window can carry split once it does. */
+  main.view-split.rail-closed .row { grid-template-columns: 1fr 1fr; }
+  main.view-split.rail-closed .row[data-unified='right'] > .side.left,
+  main.view-split.rail-closed .row[data-unified='left'] > .side.right,
+  main.view-split.rail-closed .row > .side { display: grid; }
+  main.view-split.rail-closed .row > .side.left { border-right: 1px solid var(--rule); }
+  main.view-split.rail-closed .side {
+    grid-template-columns: 2.6rem 1.5rem .9rem minmax(0, 1fr);
+  }
 
   /* Unbounded on purpose. A cap centers the page and turns everything past it
      into margin, which on a wide monitor is 480px a side that lines wrap for
@@ -664,6 +860,17 @@ header.top .keeping-up .dismiss:focus-visible { outline: 2px solid currentColor;
   .bar .state { flex: 1 1 auto; }
   .bar .verdicts { flex: 0 0 auto; }
   .bar .verdicts button { flex: 0 0 auto; }
+}
+
+/* Wide enough that split carries two readable halves with the rail still open,
+   which is the layout most reviews are actually read in. */
+@media (min-width: 1280px) {
+  main.view-split .row { grid-template-columns: 1fr 1fr; }
+  main.view-split .row[data-unified='right'] > .side.left,
+  main.view-split .row[data-unified='left'] > .side.right,
+  main.view-split .row > .side { display: grid; }
+  main.view-split .row > .side.left { border-right: 1px solid var(--rule); }
+  main.view-split .side { grid-template-columns: 2.6rem 1.5rem .9rem minmax(0, 1fr); }
 }
 
 @media (prefers-reduced-motion: reduce) {

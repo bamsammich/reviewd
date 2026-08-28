@@ -17,7 +17,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 const require_ = createRequire(import.meta.url)
 
 /** Every icon the web UI renders. Adding one here is the whole change. */
-const ICONS = ['git-branch', 'folder']
+const ICONS = ['git-branch', 'folder', 'chat-teardrop-dots', 'arrow-line-down']
 
 const entries = ICONS.map((name) => {
   const path = require_.resolve(`@phosphor-icons/core/regular/${name}.svg`)

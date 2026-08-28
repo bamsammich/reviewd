@@ -414,8 +414,29 @@ describe('indentation in the code cell', () => {
   it('renders a line byte for byte, leading whitespace included', () => {
     const markup = reviewPage(summary(), [indented()], []).value
 
-    expect(markup).toContain('<span class="t">\tif (x) {</span>')
-    expect(markup).toContain('<span class="t">        deeply()</span>')
+    expect(markup).toContain('>\tif (x) {</span>')
+    expect(markup).toContain('>        deeply()</span>')
+  })
+
+  /**
+   * A wrapped line's continuation rows sit under the code, not under the
+   * gutter, and how far in that is depends on the line's own indentation. The
+   * server is the only side that can measure it, so it travels as a custom
+   * property the stylesheet reads.
+   */
+  it('measures each line-s own indent into a hanging indent', () => {
+    const markup = reviewPage(summary(), [indented()], []).value
+
+    // One tab at the default four columns, plus the two-column hang.
+    expect(markup).toContain('<span class="t" style="--hang:6ch">\tif (x) {</span>')
+    // Eight spaces, plus the same hang.
+    expect(markup).toContain('<span class="t" style="--hang:10ch">        deeply()</span>')
+  })
+
+  it('leaves an unindented line without the property to read', () => {
+    const markup = reviewPage(summary(), [indented()], []).value
+
+    expect(markup).toContain('<span class="t">fn()</span>')
   })
 })
 
