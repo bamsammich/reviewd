@@ -17,7 +17,7 @@ import { raw, type SafeHtml } from './html.js'
  * An icon is decoration until something names it, so every caller gets
  * `aria-hidden` and has to put the meaning in text of its own.
  */
-function load(name: string, className: string): SafeHtml {
+function load(name: string, className: string, size = 14): SafeHtml {
   const svg = ICONS[name]
 
   if (!svg) {
@@ -30,7 +30,10 @@ function load(name: string, className: string): SafeHtml {
   }
 
   return raw(
-    svg.replace('<svg ', `<svg class="${className}" width="14" height="14" aria-hidden="true" `),
+    svg.replace(
+      '<svg ',
+      `<svg class="${className}" width="${size}" height="${size}" aria-hidden="true" `,
+    ),
   )
 }
 
@@ -39,3 +42,17 @@ export const GIT_ICON = load('git-branch', 'vcs')
 
 /** A source that is just a directory. */
 export const FOLDER_ICON = load('folder', 'vcs')
+
+/**
+ * Start a comment on this line.
+ *
+ * Drawn rather than typed, because the character this used to be was `+`, and
+ * `+` is already the diff's word for an added line. The two sat one column
+ * apart: the control that is the whole point of the page wore the costume of
+ * the syntax beside it, and on a removed line it contradicted the `-` next to
+ * it. A speech bubble belongs to no diff notation and needs no legend.
+ */
+export const COMMENT_ICON = load('chat-teardrop-dots', 'ico', 13)
+
+/** Pull a comment already being written down as far as this line. */
+export const EXTEND_ICON = load('arrow-line-down', 'ico', 13)
