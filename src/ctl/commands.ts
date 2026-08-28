@@ -1,4 +1,6 @@
+import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import { join } from 'node:path'
 import { EMPTY_FINGERPRINT, manifestFingerprint } from '../fingerprint.js'
 import { WAIT_EXIT, type GateResponse } from '../protocol.js'
 import { Client } from './client.js'
@@ -247,6 +249,12 @@ export async function observeCommit(path: string): Promise<void> {
   const root = await repoRoot(path)
   if (!root) return
 
+  // A repository that opted out consumes no approval, so every commit in it
+  // reads as one the gate never saw. Saying so on each one blames the gate for
+  // a decision somebody made deliberately, and the gate already announces
+  // itself off on every commit there.
+  if (await gateIsOff(root)) return
+
   const head = await headSha(root)
   if (!head) return
 
@@ -266,6 +274,17 @@ export async function observeCommit(path: string): Promise<void> {
     // A daemon that is down denies commits at the gate, which is the loud half.
     // Saying so again here would put an error on every command after it.
   }
+}
+
+/**
+ * Whether this repository opted out, read the way the hook reads it.
+ *
+ * `--absolute-git-dir` rather than joining `.git` onto the root, because a
+ * worktree and a submodule both keep theirs somewhere else entirely.
+ */
+async function gateIsOff(root: string): Promise<boolean> {
+  const gitDir = await gitOut(root, ['rev-parse', '--absolute-git-dir'])
+  return gitDir !== null && existsSync(join(gitDir, 'reviewd-gate-off'))
 }
 
 async function headSha(root: string): Promise<string | null> {
