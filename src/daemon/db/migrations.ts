@@ -285,10 +285,74 @@ const gatedTree: Migration = {
   },
 }
 
+/**
+ * Threads that belong to the review rather than to a line.
+ *
+ * Plenty of review feedback is not about a line: the approach is right and the
+ * naming is off, or why this shape rather than that one. Anchoring those to an
+ * arbitrary line is worse than leaving them unanchored, because the next
+ * snapshot re-anchors or outdates a comment that was never about that code.
+ *
+ * SQLite cannot drop a NOT NULL, so the table is rebuilt. Every existing row
+ * keeps its anchor; only the constraint changes.
+ */
+const reviewLevelThreads: Migration = {
+  async up(db: MigrationDb): Promise<void> {
+    // The rebuild order matters. Renaming `thread` first rewrites
+    // `message.thread_id` to point at the renamed table, and dropping it then
+    // leaves the foreign key naming a table that is gone. Building beside it
+    // and renaming into place last keeps every reference on `thread`.
+    await sql`PRAGMA foreign_keys = OFF`.execute(db)
+
+    await db.schema
+      .createTable('thread_rebuilt')
+      .addColumn('id', 'text', (c) => c.primaryKey())
+      .addColumn('review_id', 'text', (c) =>
+        c.notNull().references('review.id').onDelete('cascade'),
+      )
+      .addColumn('source_id', 'text')
+      .addColumn('path', 'text')
+      .addColumn('side', 'text')
+      .addColumn('line', 'integer')
+      .addColumn('anchor_hash', 'text')
+      .addColumn('context_hash', 'text')
+      .addColumn('end_line', 'integer')
+      .addColumn('end_anchor_hash', 'text')
+      .addColumn('state', 'text', (c) => c.notNull())
+      .addColumn('origin', 'text', (c) => c.notNull())
+      .addColumn('drifted', 'integer', (c) => c.notNull())
+      .addColumn('first_seen_snapshot', 'text', (c) => c.notNull())
+      .addColumn('last_seen_snapshot', 'text', (c) => c.notNull())
+      .addColumn('created_at', 'integer', (c) => c.notNull())
+      .addColumn('updated_at', 'integer', (c) => c.notNull())
+      .execute()
+
+    await sql`
+      INSERT INTO thread_rebuilt
+      SELECT id, review_id, source_id, path, side, line, anchor_hash, context_hash,
+             end_line, end_anchor_hash, state, origin, drifted,
+             first_seen_snapshot, last_seen_snapshot, created_at, updated_at
+      FROM thread
+    `.execute(db)
+
+    await db.schema.dropTable('thread').execute()
+    await db.schema.alterTable('thread_rebuilt').renameTo('thread').execute()
+
+    await sql`PRAGMA foreign_keys = ON`.execute(db)
+  },
+
+  async down(): Promise<void> {
+    throw new Error(
+      '0004_review_level_threads cannot be undone: a thread on no line has nowhere to go',
+    )
+  },
+}
+
 export const migrations: Record<string, Migration> = {
   '0001_initial': initial,
   '0002_line_ranges': lineRanges,
   '0003_gated_tree': gatedTree,
+  '0004_review_level_threads': reviewLevelThreads,
 }
 
 export class CodeMigrationProvider implements MigrationProvider {

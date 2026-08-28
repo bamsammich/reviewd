@@ -2,6 +2,7 @@ import type { ReviewSummary, SourceSummary, Thread } from '../../protocol.js'
 import { Palette, renderLine, type Token } from './highlight.js'
 import { FOLDER_ICON, GIT_ICON } from './icons.js'
 import { escapeHtml, html, raw, type SafeHtml } from './html.js'
+import { renderMarkdown } from './markdown.js'
 // anchorForHalf is gone from here: nothing in the renderer asks where a row is
 // without also needing the file it is in, which is what a position carries.
 import { buildRows, toHunks, toSplitRows, type Half, type SplitRow } from './hunks.js'
@@ -164,6 +165,7 @@ export function reviewPage(
         }
         ${viewToggle(review, view, rail)}
         ${grouped.map((group) => sourceGroup(page_, group, grouped.length > 1))}
+        ${reviewLevelBlock(page_, threads)}
         ${outdatedBlock(page_, outdated)}
       </div>
     </main>
@@ -290,7 +292,11 @@ function treeFile(node: TreeFile, threads: Thread[]): SafeHtml {
   const { file } = node
   const key = foldKey(file.sourceId, file.path)
   const comments = threads.filter(
-    (thread) => thread.state !== 'outdated' && foldKey(thread.sourceId, thread.path) === key,
+    (thread) =>
+      thread.state !== 'outdated' &&
+      thread.sourceId !== null &&
+      thread.path !== null &&
+      foldKey(thread.sourceId, thread.path) === key,
   ).length
 
   const mark = CHANGE_MARK[file.changeType] ?? '?'
@@ -363,7 +369,12 @@ function fileBlock(page: Page, file: FileView): SafeHtml {
   const hunks = toHunks(rows)
 
   const key = foldKey(file.sourceId, file.path)
-  const mine = page.threads.filter((thread) => foldKey(thread.sourceId, thread.path) === key)
+  const mine = page.threads.filter(
+    (thread) =>
+      thread.sourceId !== null &&
+      thread.path !== null &&
+      foldKey(thread.sourceId, thread.path) === key,
+  )
 
   // A collapsed file stays collapsed across renders, except when the comment
   // box the reviewer just opened lives inside it. Honouring the fold there
@@ -436,9 +447,11 @@ function threadsAt(file: FileView, threads: Thread[], side: Half): Thread[] {
   const here = positionAt(file, side)
   if (!here) return []
 
-  return threads.filter(
-    (thread) => thread.state !== 'outdated' && samePlace(positionOfThread(thread), here),
-  )
+  return threads.filter((thread) => {
+    if (thread.state === 'outdated') return false
+    const position = positionOfThread(thread)
+    return position !== undefined && samePlace(position, here)
+  })
 }
 
 function isOpenOn(open: OpenBox | undefined, file: FileView, side: Half): boolean {
@@ -531,7 +544,8 @@ function coveredBy(page: Page, here: Position): boolean {
 
   return page.threads.some((thread) => {
     const position = positionOfThread(thread)
-    return thread.state !== 'outdated' && isRange(position) && covers(position, here)
+    if (thread.state === 'outdated' || position === undefined) return false
+    return isRange(position) && covers(position, here)
   })
 }
 
@@ -553,7 +567,7 @@ function threadBlock(page: Page, thread: Thread, showLocation: boolean): SafeHtm
   return html`<div class="threadrow">
     <div class="thread ${thread.state}" id="t-${thread.id}">
       ${
-        showLocation
+        showLocation && thread.path !== null
           ? html`<p class="where">${thread.sourceLabel} · ${thread.path}:${thread.line}</p>`
           : raw('')
       }
@@ -567,7 +581,7 @@ function threadBlock(page: Page, thread: Thread, showLocation: boolean): SafeHtm
           html`<div class="msg">
             <span class="who">${message.author === 'human' ? 'you' : 'agent'}</span>
             ${message.submittedAt === null ? html`<span class="badge draft">not sent</span>` : raw('')}
-            <div class="body">${message.body}</div>
+            <div class="body">${renderMarkdown(message.body)}</div>
           </div>`,
       )}
       <details class="reply">
@@ -632,6 +646,54 @@ function newThreadBlock(page: Page, file: FileView, at: Position): SafeHtml {
       </form>
     </div>
   </div>`
+}
+
+/**
+ * Comments about the review rather than about a line, and the box for writing
+ * one.
+ *
+ * Below the diff, because that is when a reader has something to say about the
+ * whole of it. Above the diff the box asked for a verdict before the evidence,
+ * and sat in the way of the first file besides.
+ *
+ * The composer is closed until asked for. An empty textarea open on every
+ * review is a permanent invitation to do something most readers do not want,
+ * in the space belonging to the thing they came to read.
+ */
+function reviewLevelBlock(page: Page, threads: Thread[]): SafeHtml {
+  const mine = threads.filter((thread) => thread.path === null && thread.state !== 'outdated')
+
+  return html`<section class="overall">
+    ${
+      mine.length > 0
+        ? html`<h3 class="overall-title">
+              On the change as a whole
+              <span class="badge">${mine.length}</span>
+            </h3>
+            ${mine.map((thread) => threadBlock(page, thread, false))}`
+        : raw('')
+    }
+    <details class="compose">
+      <summary>
+        ${mine.length > 0 ? 'Add another comment on the whole change' : 'Comment on the whole change'}
+      </summary>
+      <form method="post" action="/r/${page.review.reviewId}/threads">
+        ${tokenField(page)}
+        <label for="overall-body">
+          Something about the change that is not about one line
+        </label>
+        <textarea id="overall-body" name="body" rows="4" required aria-describedby="overall-help">
+        </textarea>
+        <p class="help" id="overall-help">
+          The approach, the naming, a question about the shape of it. Nothing reaches the agent
+          until you choose a verdict below.
+        </p>
+        <div class="actions">
+          <button type="submit">Save comment</button>
+        </div>
+      </form>
+    </details>
+  </section>`
 }
 
 function outdatedBlock(page: Page, outdated: Thread[]): SafeHtml {

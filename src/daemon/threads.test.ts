@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { createThreadRequest } from '../protocol.js'
 import { Bus, type ReviewEvent } from './bus.js'
 import { configSchema, resolve } from './config.js'
 import { tempDatabase, type TempDatabase } from './db/testing.js'
@@ -482,5 +483,86 @@ describe('errors', () => {
     await expect(replyToThread(deps, 'nope', 'hello', 'agent')).rejects.toMatchObject({
       status: 404,
     })
+  })
+})
+
+/**
+ * A comment about the review rather than about a line.
+ *
+ * Plenty of feedback is not about code that can move: the approach is right
+ * and the naming is off, or why this shape rather than that one. Anchoring
+ * those to an arbitrary line is worse than leaving them loose, because the
+ * next snapshot re-anchors or outdates a comment that was never about it.
+ */
+describe('a thread on the review itself', () => {
+  it('stores no position at all', async () => {
+    const review = await reviewWithFile()
+
+    const { threadId } = await createThread(deps, review.reviewId, {
+      body: 'the approach is right, the naming is off',
+      author: 'human',
+      side: 'new',
+    })
+
+    const row = await ctx.db
+      .selectFrom('thread')
+      .selectAll()
+      .where('id', '=', threadId)
+      .executeTakeFirstOrThrow()
+
+    expect(row.path).toBeNull()
+    expect(row.line).toBeNull()
+    expect(row.side).toBeNull()
+    expect(row.source_id).toBeNull()
+    expect(row.anchor_hash).toBeNull()
+    expect(row.context_hash).toBeNull()
+  })
+
+  it('comes back in the same list as the anchored ones', async () => {
+    const review = await reviewWithFile()
+
+    await createThread(deps, review.reviewId, {
+      body: 'about the whole thing',
+      author: 'human',
+      side: 'new',
+    })
+    await createThread(deps, review.reviewId, {
+      path: 'src/a.ts',
+      line: 1,
+      body: 'about this line',
+      author: 'human',
+      side: 'new',
+    })
+
+    // Drafts included, because a reviewer's comment is a draft until submitted.
+    const threads = await listThreads(deps, review.reviewId, { includeDrafts: true })
+
+    expect(threads).toHaveLength(2)
+    expect(threads.filter((t) => t.path === null)).toHaveLength(1)
+  })
+
+  it('takes replies like any other thread', async () => {
+    const review = await reviewWithFile()
+    const { threadId } = await createThread(deps, review.reviewId, {
+      body: 'why this shape?',
+      author: 'human',
+      side: 'new',
+    })
+
+    await replyToThread(deps, threadId, 'because of the second root', 'agent')
+
+    const threads = await listThreads(deps, review.reviewId, { includeDrafts: true })
+    expect(threads[0]?.messages).toHaveLength(2)
+  })
+
+  /** Half a position is a caller mistake, not a shape with a meaning. */
+  it('refuses a path with no line, and a line with no path', () => {
+    expect(createThreadRequest.safeParse({ path: 'src/a.ts', body: 'x' }).success).toBe(false)
+    expect(createThreadRequest.safeParse({ line: 4, body: 'x' }).success).toBe(false)
+    expect(createThreadRequest.safeParse({ body: 'x' }).success).toBe(true)
+  })
+
+  it('refuses a range with no line to start from', () => {
+    expect(createThreadRequest.safeParse({ endLine: 9, body: 'x' }).success).toBe(false)
   })
 })

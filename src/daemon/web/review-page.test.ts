@@ -869,3 +869,57 @@ describe('submit bar after approval', () => {
     expect(markup).toContain('value="comment"')
   })
 })
+
+/**
+ * The composer for a comment about the whole change.
+ *
+ * Every assertion here is a property the first version got wrong: it borrowed
+ * the file card's markup, showed its only guidance in a placeholder, opened an
+ * empty box on every review, and sat above the diff asking for a verdict
+ * before the evidence.
+ */
+describe('commenting on the change as a whole', () => {
+  it('sits below the diff, not above it', () => {
+    const markup = reviewPage(summary(), [file('src/a.ts')], []).value
+
+    expect(markup.indexOf('class="overall"')).toBeGreaterThan(markup.indexOf('class="diff"'))
+  })
+
+  it('is not dressed as a file', () => {
+    const markup = reviewPage(summary(), [file('src/a.ts')], []).value
+    const section = markup.slice(markup.indexOf('class="overall"'))
+
+    expect(section.slice(0, section.indexOf('</section>'))).not.toContain('class="file"')
+  })
+
+  it('stays closed until asked for', () => {
+    const markup = reviewPage(summary(), [file('src/a.ts')], []).value
+    const section = markup.slice(markup.indexOf('class="overall"'))
+
+    expect(section.slice(0, section.indexOf('</section>'))).not.toContain(
+      '<details class="compose" open',
+    )
+  })
+
+  it('labels the box visibly rather than in a placeholder', () => {
+    const markup = reviewPage(summary(), [file('src/a.ts')], []).value
+
+    expect(markup).toContain('<label for="overall-body"')
+    expect(markup).not.toContain('placeholder="Something about')
+  })
+
+  it('points the box at its own help text', () => {
+    const markup = reviewPage(summary(), [file('src/a.ts')], []).value
+
+    expect(markup).toContain('aria-describedby="overall-help"')
+    expect(markup).toContain('id="overall-help"')
+  })
+
+  it('leaves the primary weight to the verdict', () => {
+    const markup = reviewPage(summary(), [file('src/a.ts')], []).value
+    const section = markup.slice(markup.indexOf('class="overall"'))
+    const compose = section.slice(0, section.indexOf('</section>'))
+
+    expect(compose).not.toContain('class="primary"')
+  })
+})

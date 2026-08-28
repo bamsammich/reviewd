@@ -164,22 +164,26 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
 
     requireToken(reviewId, form['token'])
 
-    const line = Number(form['line'])
     const side = form['side'] === 'old' ? 'old' : 'new'
     const body = String(form['body'] ?? '').trim()
+    if (!body) return back(c, reviewId)
 
-    if (!body || !Number.isInteger(line)) return back(c, reviewId)
+    // The overall-comment form posts a body and nothing else, which is what
+    // makes it a comment about the review rather than about a line.
+    const path = String(form['path'] ?? '')
+    const line = Number(form['line'])
+    const anchored = path.length > 0 && Number.isInteger(line)
+
+    if (path.length > 0 !== Number.isInteger(line)) return back(c, reviewId)
 
     const end = Number(form['endLine'])
-    const endLine = Number.isInteger(end) && end > line ? end : undefined
+    const endLine = anchored && Number.isInteger(end) && end > line ? end : undefined
 
     const created = await createThread(deps, reviewId, {
-      sourceId: String(form['sourceId'] ?? ''),
-      path: String(form['path'] ?? ''),
-      line,
       side,
       body,
       author: 'human',
+      ...(anchored ? { sourceId: String(form['sourceId'] ?? ''), path, line } : {}),
       ...(endLine === undefined ? {} : { endLine }),
     })
 

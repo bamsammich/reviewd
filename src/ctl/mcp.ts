@@ -249,11 +249,20 @@ export function createMcpServer(client = new Client(loadClientConfig().base_url)
       title: 'Ask about your own change',
       description:
         'Opens a thread on a line of your own output, anchored where it applies. Use it for a ' +
-        'judgment call worth flagging rather than burying the question in chat.',
+        'judgment call worth flagging rather than burying the question in chat. Omit path and ' +
+        'line together to ask about the change as a whole rather than about one line.',
       inputSchema: {
         reviewId: z.string(),
-        path: z.string().describe('Path relative to the source root'),
-        line: z.number().int().positive().describe('First line the comment covers'),
+        path: z
+          .string()
+          .optional()
+          .describe('Path relative to the source root. Omit, with line, to ask about the review'),
+        line: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe('First line the comment covers. Omit, with path, to ask about the review'),
         endLine: z
           .number()
           .int()

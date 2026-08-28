@@ -17,6 +17,30 @@ export interface ReanchorResult {
   outdated: number
 }
 
+/** A thread as read, which may belong to the review rather than to a line. */
+type ThreadCandidate = {
+  [K in keyof ThreadRow]: K extends 'end_line' | 'end_anchor_hash'
+    ? ThreadRow[K]
+    : ThreadRow[K] | null
+}
+
+/**
+ * Whether this thread is about a line at all.
+ *
+ * A comment on the review as a whole has nothing to re-anchor and cannot go
+ * outdated, because it was never about code that could move.
+ */
+function isAnchored(thread: ThreadCandidate): thread is ThreadRow {
+  return (
+    thread.source_id !== null &&
+    thread.path !== null &&
+    thread.side !== null &&
+    thread.line !== null &&
+    thread.anchor_hash !== null &&
+    thread.context_hash !== null
+  )
+}
+
 interface ThreadRow {
   id: string
   source_id: string
@@ -61,7 +85,7 @@ export async function reanchor(
   // file is the normal case.
   const lineCache = new Map<string, string[] | null>()
 
-  for (const thread of threads) {
+  for (const thread of threads.filter(isAnchored)) {
     const lines = await linesFor(db, snapshotId, thread, lineCache)
 
     if (!lines) {
