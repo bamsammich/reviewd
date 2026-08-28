@@ -462,9 +462,15 @@ function half(page: Page, file: FileView, side: Half, which: 'left' | 'right'): 
   // fallback when the drag handler has not loaded.
   const extendable = open !== undefined && inSameFile(open, here) && open.line < here.line
 
+  // draggable="false" because a browser drags a link by default, and that drag
+  // swallows the pointer sequence the gutter selection is built on. Without it,
+  // pressing on the + and pulling down starts a link drag, no pointerup reaches
+  // the handler below, and the one column the page tells you to use is the one
+  // where selecting a range does nothing.
   const action = extendable
     ? html`<a
         class="addnote extend"
+        draggable="false"
         href="${raw(
           `/r/${review.reviewId}?box=${encodeURIComponent(keyAt(open.line))}&to=${here.line}#box`,
         )}"
@@ -474,6 +480,7 @@ function half(page: Page, file: FileView, side: Half, which: 'left' | 'right'): 
       >`
     : html`<a
         class="addnote"
+        draggable="false"
         href="${raw(`/r/${review.reviewId}?box=${encodeURIComponent(keyAt(here.line))}#box`)}"
         data-box
         aria-label="Comment on ${file.path} line ${here.line}"

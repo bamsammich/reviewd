@@ -490,6 +490,19 @@ describe('selecting a range', () => {
     expect(markup).toContain('data-line="5"')
   })
 
+  /**
+   * A browser drags a link by default, and that drag swallows the pointer
+   * sequence the gutter selection needs. Pressing the + and pulling down then
+   * does nothing, in the one column the page tells the reader to use.
+   */
+  it('stops the gutter links being dragged as links', () => {
+    const markup = reviewPage(summary(), [many()], []).value
+    const anchors = markup.match(/<a[^>]*class="addnote[^"]*"[^>]*>/g) ?? []
+
+    expect(anchors.length).toBeGreaterThan(0)
+    for (const anchor of anchors) expect(anchor).toContain('draggable="false"')
+  })
+
   it('leaves a blank half out of a drag', () => {
     const markup = reviewPage(summary(), [many()], []).value
     const blanks = markup.match(/class="side left empty"[^>]*data-key/g) ?? []
