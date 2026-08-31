@@ -27,7 +27,8 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "icons": "node scripts/generate-icons.mjs"
+    "icons": "node scripts/generate-icons.mjs",
+    "languages": "node scripts/generate-languages.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.1",

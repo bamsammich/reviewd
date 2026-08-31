@@ -1,5 +1,6 @@
 import { bundledLanguages, createHighlighter, type BundledLanguage, type Highlighter } from 'shiki'
 import { escapeHtml, raw, type SafeHtml } from './html.js'
+import { GENERATED_BY_EXTENSION } from './languages.generated.js'
 
 /**
  * Syntax highlighting for the diff.
@@ -28,51 +29,39 @@ const DARK = 'github-dark'
 /** Lines beyond this stay plain. Past it the reader is scrolling, not reading. */
 const MAX_LINES = 5000
 
-const BY_EXTENSION: Record<string, BundledLanguage> = {
-  bash: 'bash',
-  c: 'c',
-  cjs: 'javascript',
-  css: 'css',
-  go: 'go',
-  h: 'c',
-  hpp: 'cpp',
-  cpp: 'cpp',
-  html: 'html',
-  java: 'java',
-  js: 'javascript',
-  json: 'json',
-  jsonc: 'jsonc',
-  jsx: 'jsx',
-  kt: 'kotlin',
-  lua: 'lua',
-  md: 'markdown',
-  mjs: 'javascript',
-  mts: 'typescript',
-  php: 'php',
-  plist: 'xml',
-  py: 'python',
-  rb: 'ruby',
-  rs: 'rust',
-  scss: 'scss',
-  sh: 'bash',
-  sql: 'sql',
-  svg: 'xml',
-  swift: 'swift',
-  toml: 'toml',
-  ts: 'typescript',
-  tsx: 'tsx',
-  xml: 'xml',
-  yaml: 'yaml',
-  yml: 'yaml',
-  zsh: 'bash',
-}
-
-/** Files without an extension that are still worth colouring. */
+/**
+ * Three tables answer what language a file is written in, and languageFor
+ * reads them in the order they appear here.
+ *
+ * BY_NAME comes first and covers files whose name is the whole answer, since a
+ * Makefile has no extension to read.
+ *
+ * DECIDED_BY_EXTENSION holds extensions a person settled, and beats the
+ * generated map on purpose. Four rows, all of them judgement shiki has no way
+ * to make: reviewd's own .h files are C rather than C++, and .svg and .plist
+ * are both XML containers that shiki has no grammar of its own for.
+ *
+ * GENERATED_BY_EXTENSION is the other 551, written from shiki's own grammars
+ * by `npm run languages`. Bulk without judgement. It knows .proto is protobuf
+ * because the proto grammar says so, and it leaves .m alone because matlab and
+ * wolfram both claim it and picking one would be a guess.
+ *
+ * The split is what keeps a decision from being overwritten. Regenerating
+ * rewrites the third table and never touches the second, so `.h` still means C
+ * after the next shiki upgrade.
+ */
 const BY_NAME: Record<string, BundledLanguage> = {
   '.bashrc': 'bash',
   '.zshrc': 'bash',
   dockerfile: 'docker',
   makefile: 'makefile',
+}
+
+const DECIDED_BY_EXTENSION: Record<string, BundledLanguage> = {
+  h: 'c',
+  hpp: 'cpp',
+  plist: 'xml',
+  svg: 'xml',
 }
 
 export function languageFor(path: string): BundledLanguage | undefined {
@@ -85,7 +74,12 @@ export function languageFor(path: string): BundledLanguage | undefined {
   if (dot <= 0) return undefined
 
   const extension = name.slice(dot + 1)
-  const language = BY_EXTENSION[extension]
+
+  // What a person decided, then what shiki's grammars say.
+  const language = DECIDED_BY_EXTENSION[extension] ?? GENERATED_BY_EXTENSION[extension]
+
+  // Checked rather than trusted, because loadLanguage throws on an id it does
+  // not have and a generated file can outlive the shiki it was written from.
   return language && language in bundledLanguages ? language : undefined
 }
 
