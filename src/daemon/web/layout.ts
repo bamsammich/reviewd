@@ -34,6 +34,12 @@ const STYLE = `
   --del-ink: #a3322f;
   --warn-ink: #8a5a12;
 
+  /* A deeper tint of each row colour, for the words that changed inside a
+     changed line. The darkest each can go while keyword red stays as legible
+     on it as the red family allows. */
+  --add-mark: #c9edd3;
+  --del-mark: #fcd8d0;
+
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
 
@@ -65,6 +71,9 @@ const STYLE = `
     --del-bg: #2a1517;
     --del-ink: #e58b85;
     --warn-ink: #d8a95e;
+
+    --add-mark: #1d4630;
+    --del-mark: #5c2a2d;
   }
 }
 
@@ -487,6 +496,27 @@ details.file > summary h3 {
 .side.removed { background: var(--del-bg); }
 .side.removed .sign { color: var(--del-ink); }
 .side.empty { background: var(--surface-2); }
+
+/* The words that actually changed, against the words that only moved.
+ *
+ * A deeper tint of the row's own colour, so the mark reads as more of what the
+ * row already says rather than as a third state. The <mark> element brings a
+ * yellow ground and a black foreground of its own, and both go: the colour
+ * here belongs to the diff, and the text keeps whatever colour the highlighter
+ * gave it.
+ *
+ * Known cost, decided rather than overlooked. Keyword red on the removed tint
+ * measures 4.05:1 in light and 4.57:1 in dark, against the 4.5:1 this
+ * stylesheet holds everywhere else. No tint in the red family clears both that
+ * floor and enough separation from --del-bg to read as a mark, so light loses
+ * the floor on one of six syntax colours. Every other colour on either tint
+ * clears 10:1. */
+.side .word {
+  background: none; color: inherit;
+  border-radius: 2px; padding: 0 1px;
+}
+.side.added .word { background: var(--add-mark); }
+.side.removed .word { background: var(--del-mark); }
 
 /* Stacked by default, which is what a phone gets and what unified means. */
 .row[data-unified='right'] > .side.left,
