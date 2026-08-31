@@ -223,7 +223,81 @@ export class Palette {
 }
 
 /** One line of code as spans, escaped here rather than anywhere else. */
-export function renderLine(tokens: Token[], palette: Palette): SafeHtml {
+/**
+ * One line of code as spans, escaped here rather than anywhere else.
+ *
+ * `marks` covers the words that changed within this line. Syntax colouring and
+ * word marks divide the line differently and neither divides the other, so a
+ * token straddling a mark boundary is cut at it. The colour span is what gets
+ * cut, never the mark: one changed word can span several syntax colours, and
+ * closing and reopening the mark between them would draw its rounded ends
+ * inside the word.
+ */
+export function renderLine(tokens: Token[], palette: Palette, marks: Span[] = []): SafeHtml {
+  const ranges = usable(marks)
+  if (ranges.length === 0) return raw(plain(tokens, palette))
+
+  let out = ''
+  let at = 0
+  let next = 0
+  let open = false
+
+  for (const token of tokens) {
+    let text = token.text
+
+    while (text.length > 0) {
+      const mark = ranges[next]
+      const inside = mark !== undefined && at >= mark.start && at < mark.end
+      // As far as this run goes: to the next boundary, or to the token's end.
+      const boundary = inside ? mark.end : (mark?.start ?? Number.MAX_SAFE_INTEGER)
+      const take = Math.min(text.length, boundary - at)
+
+      if (inside && !open) {
+        out += '<mark class="word">'
+        open = true
+      } else if (!inside && open) {
+        out += '</mark>'
+        open = false
+      }
+
+      out += plain([{ ...token, text: text.slice(0, take) }], palette)
+
+      at += take
+      text = text.slice(take)
+      if (inside && at >= mark.end) next += 1
+    }
+  }
+
+  return raw(open ? `${out}</mark>` : out)
+}
+
+/** Half-open character range within a line. */
+export interface Span {
+  start: number
+  end: number
+}
+
+/**
+ * Sorted, non-empty, non-overlapping.
+ *
+ * The walk above advances by whichever boundary comes next and would not
+ * terminate on a range of zero width, so the shape it needs is established
+ * once here rather than trusted.
+ */
+function usable(marks: Span[]): Span[] {
+  const sorted = marks.filter((mark) => mark.end > mark.start).sort((a, b) => a.start - b.start)
+  const kept: Span[] = []
+
+  for (const mark of sorted) {
+    const last = kept[kept.length - 1]
+    if (last && mark.start < last.end) last.end = Math.max(last.end, mark.end)
+    else kept.push({ ...mark })
+  }
+
+  return kept
+}
+
+function plain(tokens: Token[], palette: Palette): string {
   let out = ''
 
   for (const token of tokens) {
@@ -231,5 +305,5 @@ export function renderLine(tokens: Token[], palette: Palette): SafeHtml {
     out += name ? `<span class="${name}">${escapeHtml(token.text)}</span>` : escapeHtml(token.text)
   }
 
-  return raw(out)
+  return out
 }

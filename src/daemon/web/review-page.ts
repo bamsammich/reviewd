@@ -1,5 +1,6 @@
 import type { ReviewSummary, SourceSummary, Thread } from '../../protocol.js'
 import { Palette, renderLine, type Token } from './highlight.js'
+import { lineMarkKey, markRows, type LineMarks } from './words.js'
 import { COMMENT_ICON, EXTEND_ICON, FOLDER_ICON, GIT_ICON } from './icons.js'
 import { escapeHtml, html, raw, type SafeHtml } from './html.js'
 import { renderMarkdown } from './markdown.js'
@@ -508,6 +509,11 @@ function fileBlock(page: Page, file: FileView): SafeHtml {
   const rows = file.isBinary || file.truncated ? [] : buildRows(file.oldText, file.newText)
   const hunks = toHunks(rows)
 
+  // Which words moved, worked out over the whole file rather than per hunk: a
+  // block of changed lines is an edit whether or not a hunk boundary falls
+  // inside it.
+  const marks = markRows(rows)
+
   const key = foldKey(file.sourceId, file.path)
   const mine = page.threads.filter(
     (thread) =>
@@ -550,7 +556,7 @@ function fileBlock(page: Page, file: FileView): SafeHtml {
                 ${hunks.map(
                   (hunk) => html`
                     <div class="hunkhead">${hunk.header}</div>
-                    ${toSplitRows(hunk.rows).map((row) => splitRow(page, file, row, mine))}
+                    ${toSplitRows(hunk.rows).map((row) => splitRow(page, file, row, mine, marks))}
                   `,
                 )}
               </div>`
@@ -566,7 +572,13 @@ function fileBlock(page: Page, file: FileView): SafeHtml {
  * stack, so a context line is not printed twice.
  */
 /** `mine` is this file's threads, already filtered by the caller that has them. */
-function splitRow(page: Page, file: FileView, row: SplitRow, mine: Thread[]): SafeHtml {
+function splitRow(
+  page: Page,
+  file: FileView,
+  row: SplitRow,
+  mine: Thread[],
+  marks: LineMarks,
+): SafeHtml {
   // Both halves, with nothing to deduplicate. A half now reports the side its
   // line number belongs to, so a thread matches exactly one of them. The
   // previous guard dropped the right half on context rows to stop a thread
@@ -576,7 +588,7 @@ function splitRow(page: Page, file: FileView, row: SplitRow, mine: Thread[]): Sa
   const boxHere = [row.left, row.right].find((half) => isOpenOn(page.open, file, half))
 
   return html`<div class="row" data-unified="${row.unified}">
-      ${half(page, file, row.left, 'left')} ${half(page, file, row.right, 'right')}
+      ${half(page, file, row.left, 'left', marks)} ${half(page, file, row.right, 'right', marks)}
     </div>
     ${attached.map((thread) => threadBlock(page, thread, false))}
     ${boxHere && page.open ? newThreadBlock(page, file, page.open) : raw('')}`
@@ -599,7 +611,13 @@ function isOpenOn(open: OpenBox | undefined, file: FileView, side: Half): boolea
   return open !== undefined && here !== undefined && samePlace(open, here)
 }
 
-function half(page: Page, file: FileView, side: Half, which: 'left' | 'right'): SafeHtml {
+function half(
+  page: Page,
+  file: FileView,
+  side: Half,
+  which: 'left' | 'right',
+  marks: LineMarks,
+): SafeHtml {
   const here = positionAt(file, side)
 
   if (side.kind === 'empty' || !here) {
@@ -645,7 +663,17 @@ function half(page: Page, file: FileView, side: Half, which: 'left' | 'right'): 
   // and the raw text otherwise. `side.text` is escaped by the template;
   // renderLine escapes each token itself.
   const tokens = tokensForHalf(file, side, which)
-  const code = tokens ? renderLine(tokens, page.palette) : side.text
+
+  // An unhighlighted file still gets marks, as one colourless token, so a
+  // language the highlighter does not know is not also a file whose edits are
+  // invisible. renderLine escapes either way.
+  const spans = marks.get(lineMarkKey(side.side, here.line)) ?? []
+  const code =
+    tokens !== undefined
+      ? renderLine(tokens, page.palette, spans)
+      : spans.length > 0
+        ? renderLine([{ text: side.text, light: '', dark: '' }], page.palette, spans)
+        : side.text
 
   // The box key and line ride on the element so the drag handler can build a
   // selection without parsing hrefs back apart.
