@@ -229,7 +229,13 @@ npm test                              # the daemon and client suites
 ./plugin/hooks/reviewd-gate.test.sh   # the commit gate, which is shell
 claude plugin validate ./plugin
 npm run icons                         # after upgrading @phosphor-icons/core
+npm run languages                     # after upgrading shiki
 ```
+
+`npm run languages` rewrites the diff's extension map from the grammars shiki
+bundles, and prints the extensions two grammars both claim. Those are left out
+of the map; deciding one means adding it to `DECIDED_BY_EXTENSION` in
+`highlight.ts`, which overrides anything generated.
 
 ### Cutting a release
 

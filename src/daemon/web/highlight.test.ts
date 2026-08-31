@@ -23,6 +23,39 @@ describe('picking a language', () => {
     expect(languageFor('notes.xyzzy')).toBeUndefined()
     expect(languageFor('LICENSE')).toBeUndefined()
   })
+
+  // The reason the generated map exists. A .proto file rendered plain while
+  // every language shiki bundles a grammar for sat unreachable behind a table
+  // of 40 extensions someone had typed.
+  it('reaches the languages shiki ships rather than a hand-written few', () => {
+    expect(languageFor('api/user.proto')).toBe('proto')
+    expect(languageFor('main.tf')).toBe('terraform')
+    expect(languageFor('lib/thing.exs')).toBe('elixir')
+    expect(languageFor('schema.graphql')).toBe('graphql')
+    expect(languageFor('App.svelte')).toBe('svelte')
+  })
+
+  // php and sql carry no fileTypes of their own, while hack claims `.php` and
+  // plsql claims `.sql`. Reading the grammars alone hands the two commonest
+  // extensions in this tree to the wrong languages; matching the language's own
+  // name first is what stops it.
+  it('gives an extension to the language that owns its name', () => {
+    expect(languageFor('index.php')).toBe('php')
+    expect(languageFor('schema.sql')).toBe('sql')
+  })
+
+  it('lets a decided extension beat the generated map', () => {
+    expect(languageFor('src/parser.h')).toBe('c')
+    expect(languageFor('icon.svg')).toBe('xml')
+    expect(languageFor('Info.plist')).toBe('xml')
+  })
+
+  // Two grammars claim `.m`, and neither of them is objective-c. Picking one
+  // colours the file wrong, which is worse than leaving it plain.
+  it('stays plain where two grammars claim the same extension', () => {
+    expect(languageFor('matrix.m')).toBeUndefined()
+    expect(languageFor('nginx.conf')).toBeUndefined()
+  })
 })
 
 describe('tokenising', () => {
