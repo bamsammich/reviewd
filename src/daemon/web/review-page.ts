@@ -601,7 +601,7 @@ function fileBlock(page: Page, file: FileView): SafeHtml {
   // Which words moved, worked out over the whole file rather than per hunk: a
   // block of changed lines is an edit whether or not a hunk boundary falls
   // inside it.
-  const marks = markRows(rows)
+  const marks = markRows(diff.rows)
 
   const key = foldKey(file.sourceId, file.path)
   const mine = page.threads.filter(
