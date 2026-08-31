@@ -6,7 +6,7 @@ import { escapeHtml, html, raw, type SafeHtml } from './html.js'
 import { renderMarkdown } from './markdown.js'
 // anchorForHalf is gone from here: nothing in the renderer asks where a row is
 // without also needing the file it is in, which is what a position carries.
-import { buildRows, toHunks, toSplitRows, type Half, type SplitRow } from './hunks.js'
+import { buildRows, toHunks, toSplitRows, type Half, type Row, type SplitRow } from './hunks.js'
 import { page, topBar } from './layout.js'
 import { age, type FileView } from './pages.js'
 import { basenameOf, displayPath } from './paths.js'
@@ -52,12 +52,51 @@ export type OpenBox = Position
  * only things that actually differ between calls, which is the opposite of the
  * point.
  */
+/** A file's line diff and its size, which three parts of the page both want. */
+interface Diff {
+  rows: Row[]
+  added: number
+  removed: number
+}
+
+/**
+ * Every file's diff, keyed by change id, built once for the whole render.
+ *
+ * The hunks, the size on the file header, and the size in the tree rail all
+ * want the same line diff, and they render far apart. Kept here rather than on
+ * FileView, which describes what the client uploaded: a diff stored beside the
+ * text it came from goes quietly stale the moment anyone hands on a copy with
+ * different text.
+ */
+type Diffs = ReadonlyMap<string, Diff>
+
+function diffsFor(files: FileView[]): Diffs {
+  return new Map(
+    files.map((file) => {
+      const rows = file.isBinary || file.truncated ? [] : buildRows(file.oldText, file.newText)
+
+      return [
+        file.changeId,
+        {
+          rows,
+          added: rows.filter((row) => row.kind === 'added').length,
+          removed: rows.filter((row) => row.kind === 'removed').length,
+        },
+      ]
+    }),
+  )
+}
+
+/** Empty rather than absent, so a caller never has to ask whether a file was found. */
+const NO_DIFF: Diff = { rows: [], added: 0, removed: 0 }
+
 interface Page {
   review: ReviewSummary
   threads: Thread[]
   open: OpenBox | undefined
   folded: ReadonlySet<string>
   palette: Palette
+  diffs: Diffs
 }
 
 export { parsePosition as parseOpenBox, positionKey as boxKey } from './position.js'
@@ -144,7 +183,8 @@ export function reviewPage(
   // Filled while the body renders, read after. Every colour the diff used, and
   // no others, reaches the stylesheet at the end.
   const palette = new Palette()
-  const page_: Page = { review, threads, open, folded, palette }
+  const diffs = diffsFor(files)
+  const page_: Page = { review, threads, open, folded, palette, diffs }
 
   const body = html` ${topBar(review.title, html`<span class="rev">rev ${review.snapshotSeq}</span>`)}
     <main
@@ -168,8 +208,12 @@ export function reviewPage(
       />
       <div class="rail">
         <h1 class="page-title">${review.title}</h1>
+        ${tally(
+          [...diffs.values()].reduce((sum, diff) => sum + diff.added, 0),
+          [...diffs.values()].reduce((sum, diff) => sum + diff.removed, 0),
+        )}
         ${coaching(threads.length, drafts, awaitingYou)} ${commentIndex(threads)}
-        ${scopeList(grouped, threads)}
+        ${scopeList(grouped, threads, diffs)}
       </div>
 
       <div class="files">
@@ -236,7 +280,7 @@ function groupBySource(sources: SourceSummary[], files: FileView[]): SourceGroup
  * JavaScript except the marker for the file you are currently reading, which
  * is the one thing the server cannot know.
  */
-function scopeList(groups: SourceGroup[], threads: Thread[]): SafeHtml {
+function scopeList(groups: SourceGroup[], threads: Thread[], diffs: Diffs): SafeHtml {
   if (groups.length === 0) return raw('')
 
   const files = groups.reduce((total, group) => total + group.files.length, 0)
@@ -270,11 +314,11 @@ function scopeList(groups: SourceGroup[], threads: Thread[]): SafeHtml {
     <ul class="matches" hidden></ul>
     <p class="nomatch" role="status" hidden>No file matches.</p>
 
-    <div class="branches">${groups.map((group) => sourceBranch(group, threads))}</div>
+    <div class="branches">${groups.map((group) => sourceBranch(group, threads, diffs))}</div>
   </nav>`
 }
 
-function sourceBranch(group: SourceGroup, threads: Thread[]): SafeHtml {
+function sourceBranch(group: SourceGroup, threads: Thread[], diffs: Diffs): SafeHtml {
   const name = group.source.label || basenameOf(group.source.rootPath)
   const tracked = group.source.vcs === 'git'
 
@@ -288,11 +332,16 @@ function sourceBranch(group: SourceGroup, threads: Thread[]): SafeHtml {
         >${displayPath(group.source.rootPath)}</span
       >
     </a>
-    ${treeList(group.tree, threads, name)}
+    ${treeList(group.tree, threads, name, diffs)}
   </div>`
 }
 
-function treeList(nodes: TreeNode[], threads: Thread[], sourceLabel: string): SafeHtml {
+function treeList(
+  nodes: TreeNode[],
+  threads: Thread[],
+  sourceLabel: string,
+  diffs: Diffs,
+): SafeHtml {
   if (nodes.length === 0) return raw('')
 
   return html`<ul class="tree">
@@ -301,15 +350,20 @@ function treeList(nodes: TreeNode[], threads: Thread[], sourceLabel: string): Sa
         html`<li>
           ${
             node.kind === 'directory'
-              ? treeDirectory(node, threads, sourceLabel)
-              : treeFile(node, threads, sourceLabel)
+              ? treeDirectory(node, threads, sourceLabel, diffs)
+              : treeFile(node, threads, sourceLabel, diffs)
           }
         </li>`,
     )}
   </ul>`
 }
 
-function treeDirectory(node: TreeDirectory, threads: Thread[], sourceLabel: string): SafeHtml {
+function treeDirectory(
+  node: TreeDirectory,
+  threads: Thread[],
+  sourceLabel: string,
+  diffs: Diffs,
+): SafeHtml {
   return html`<details class="dir" open>
     <summary>
       <span class="name">${node.name}</span>
@@ -318,7 +372,7 @@ function treeDirectory(node: TreeDirectory, threads: Thread[], sourceLabel: stri
         ${node.fileCount} file${node.fileCount === 1 ? '' : 's'}
       </span>
     </summary>
-    ${treeList(node.children, threads, sourceLabel)}
+    ${treeList(node.children, threads, sourceLabel, diffs)}
   </details>`
 }
 
@@ -331,7 +385,40 @@ const CHANGE_MARK: Record<string, string> = {
   binary: 'B',
 }
 
-function treeFile(node: TreeFile, threads: Thread[], sourceLabel: string): SafeHtml {
+/**
+ * How big a change is: two numbers, and the shape of the split.
+ *
+ * The numbers say how much. The bar says which way without anyone doing the
+ * arithmetic, so a file that only grew and a file that was rewritten read
+ * differently from across the room. It carries a ratio and not a size, which
+ * is why the numbers stay next to it rather than behind it.
+ *
+ * The bar is left off in the tree rail, where the column is narrow enough that
+ * a filename would be truncated to make room for a decoration.
+ *
+ * A file with no line diff renders nothing. Two zeroes on a binary file are
+ * noise dressed as information.
+ */
+function tally(added: number, removed: number, options: { bar?: boolean } = {}): SafeHtml {
+  if (added === 0 && removed === 0) return raw('')
+
+  const share = Math.round((added / (added + removed)) * 100)
+
+  return html`<span class="tally">
+    <span class="plus" aria-hidden="true">+${added}</span>
+    <span class="minus" aria-hidden="true">&minus;${removed}</span>
+    ${
+      options.bar === false
+        ? raw('')
+        : html`<span class="propbar" aria-hidden="true"
+            ><i class="a" style="width:${share}%"></i><i class="d"></i
+          ></span>`
+    }
+    <span class="visually-hidden">${added} added, ${removed} removed</span>
+  </span>`
+}
+
+function treeFile(node: TreeFile, threads: Thread[], sourceLabel: string, diffs: Diffs): SafeHtml {
   const { file } = node
   const key = foldKey(file.sourceId, file.path)
   const cut = file.path.lastIndexOf('/')
@@ -345,6 +432,7 @@ function treeFile(node: TreeFile, threads: Thread[], sourceLabel: string): SafeH
   ).length
 
   const mark = CHANGE_MARK[file.changeType] ?? '?'
+  const diff = diffs.get(file.changeId) ?? NO_DIFF
 
   return html`<a
     class="leaf"
@@ -357,6 +445,7 @@ function treeFile(node: TreeFile, threads: Thread[], sourceLabel: string): SafeH
     <span class="mark ${file.changeType}" aria-hidden="true">${mark}</span>
     <span class="name">${node.name}</span>
     ${comments > 0 ? html`<span class="count" aria-hidden="true">${comments}</span>` : raw('')}
+    ${tally(diff.added, diff.removed, { bar: false })}
     <span class="visually-hidden">
       ${file.changeType}${comments > 0 ? `, ${comments} comment${comments === 1 ? '' : 's'}` : ''}
     </span>
@@ -506,8 +595,8 @@ function sourceGroup(page: Page, group: SourceGroup, showHeading: boolean): Safe
 }
 
 function fileBlock(page: Page, file: FileView): SafeHtml {
-  const rows = file.isBinary || file.truncated ? [] : buildRows(file.oldText, file.newText)
-  const hunks = toHunks(rows)
+  const diff = page.diffs.get(file.changeId) ?? NO_DIFF
+  const hunks = toHunks(diff.rows)
 
   // Which words moved, worked out over the whole file rather than per hunk: a
   // block of changed lines is an edit whether or not a hunk boundary falls
@@ -544,6 +633,7 @@ function fileBlock(page: Page, file: FileView): SafeHtml {
             >`
           : raw('')
       }
+      ${tally(diff.added, diff.removed)}
     </summary>
     ${
       file.isBinary

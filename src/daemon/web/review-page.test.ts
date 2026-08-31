@@ -142,6 +142,93 @@ describe('file folding', () => {
   })
 })
 
+/**
+ * How big a change is, which the page never said before.
+ *
+ * The numbers carry the meaning and the bar carries the ratio, so the bar is
+ * hidden from a screen reader and the counts are spelled out for one.
+ */
+describe('the size of a change', () => {
+  // Three added against one removed, so no two numbers here are the same and a
+  // test cannot pass by matching the one it did not mean.
+  const grew = (): FileView => ({
+    ...file('src/a.ts'),
+    oldText: 'a\nb\n',
+    newText: 'a\nc\nd\ne\n',
+  })
+
+  it('puts the counts on the file header', () => {
+    const markup = reviewPage(summary(), [grew()], []).value
+
+    expect(markup).toContain('<span class="plus" aria-hidden="true">+3</span>')
+    expect(markup).toContain('<span class="minus" aria-hidden="true">&minus;1</span>')
+  })
+
+  it('adds the files up for the review as a whole', () => {
+    const second = { ...file('src/b.ts'), oldText: 'x\n', newText: 'y\nz\n' }
+
+    const markup = reviewPage(summary(), [grew(), second], []).value
+
+    // 3 + 2 added against 1 + 1 removed, and the total appears once.
+    expect(markup.match(/>\+5</g)).toHaveLength(1)
+    expect(markup.match(/>&minus;2</g)).toHaveLength(1)
+  })
+
+  it('spells the numbers out for a screen reader and hides the bar from one', () => {
+    const markup = reviewPage(summary(), [grew()], []).value
+
+    expect(markup).toContain('3 added, 1 removed')
+    expect(markup).toMatch(/<span class="propbar" aria-hidden="true"/)
+  })
+
+  // A binary file has no line diff, and two zeroes would read as a measurement
+  // rather than as the absence of one.
+  it('says nothing about a file with no line diff', () => {
+    const binary = { ...file('logo.png'), isBinary: true, oldText: '', newText: '' }
+
+    const markup = reviewPage(summary(), [binary], []).value
+
+    expect(markup).not.toContain('class="tally"')
+  })
+
+  // The rail is the narrowest column on the page, and the bar is what a
+  // filename would lose room to.
+  it('leaves the bar off in the file rail', () => {
+    const markup = reviewPage(summary(), [grew()], []).value
+
+    const leaf = markup.match(/<a\s[^>]*class="leaf"[\s\S]*?<\/a>/)?.[0] ?? ''
+    expect(leaf).toContain('class="tally"')
+    expect(leaf).not.toContain('propbar')
+  })
+
+  it('draws the bar in proportion to what changed', () => {
+    const markup = reviewPage(summary(), [grew()], []).value
+
+    expect(markup).toContain('style="width:75%"')
+  })
+
+  // Sizes in the rail are read down the column rather than one at a time, and
+  // a file carrying a comment badge used to push its numbers left of the row
+  // above it. Each half holds a slot instead, so the digits line up whatever
+  // else is on the row.
+  it('gives each number in the rail a fixed slot to right-align in', () => {
+    const markup = reviewPage(summary(), [grew()], []).value
+
+    expect(markup).toMatch(/\.scope a\.leaf \.tally \.plus,\s*\.scope a\.leaf \.tally \.minus \{/)
+    expect(markup).toMatch(/min-width: 4ch; text-align: right;/)
+  })
+
+  // Left in source order the size landed in a run of four things pressed
+  // together, where a number reads as one more badge. Both rows that carry a
+  // tally push it to their own far edge instead.
+  it('sends the size to the far edge of a file header and of a rail row', () => {
+    const markup = reviewPage(summary(), [grew()], []).value
+
+    expect(markup).toMatch(/details\.file > summary \.tally \{ margin-left: auto; \}/)
+    expect(markup).toMatch(/\.scope a\.leaf \.tally \{[^}]*margin-left: auto;/)
+  })
+})
+
 // A blank half carries `empty`, and the page-level "nothing here" message used
 // to carry the same name. The generic rule's 2.5rem of padding then landed on
 // every added and removed line, which is invisible stacked and triples the row
