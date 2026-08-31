@@ -72,12 +72,23 @@ whether the plugin matches the binary.
 npm install -g reviewd@latest
 ```
 
-That is the whole upgrade. The plugin is a separate artifact that Claude Code
-holds a copy of, so it would otherwise need a second command: the MCP server
-notices the mismatch on its next start and reinstalls, and the new copy loads
-the session after. `reviewd init` does the same thing on demand, and `reviewd
-doctor` says whether the two are lined up. Nothing here asks you to run
-`claude plugin` yourself.
+The plugin is a separate artifact that Claude Code holds a copy of, so it would
+otherwise need a second command: the MCP server notices the mismatch on its next
+start and updates, and the new copy loads the session after. `reviewd init` does
+the same thing on demand, and `reviewd doctor` says whether the two are lined
+up. Nothing here asks you to run `claude plugin` yourself.
+
+A daemon in a container is the one piece npm cannot reach, because the image
+carries its own copy of reviewd:
+
+```sh
+docker compose up -d --build
+```
+
+Everything a reviewer looks at is served by the daemon, so a container left on
+the old image keeps showing the old review page however current the binary is.
+`reviewd doctor` reports where the daemon answers and not which version
+answered, so it will not catch this for you.
 
 ### Running the daemon
 

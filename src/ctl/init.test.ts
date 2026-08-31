@@ -46,6 +46,9 @@ const listing = (source: string) => `Configured marketplaces:
     Source: ${source}
 `
 
+const installed = (version: string): string =>
+  `Installed plugins:\n\n  \u276f reviewd@bamsammich\n    Version: ${version}\n`
+
 const onGitHub = listing('GitHub (bamsammich/reviewd)')
 const onACheckout = listing('/Users/t/ghq/github.com/bamsammich/reviewd')
 
@@ -94,15 +97,42 @@ describe('initPlugin', () => {
     expect(claude.calls.some((c) => c[2] === 'update')).toBe(false)
   })
 
-  /** Installing every time is what makes re-running the upgrade path. */
-  it('installs the plugin on every run', async () => {
+  it('installs the plugin when Claude Code does not have it', async () => {
     const claude = fakeClaude({ marketplaces: onGitHub })
+    const backups = fakeBackups()
+
+    const result = await init(claude.run, backups.backup)
+
+    expect(result.plugin).toBe('installed')
+    expect(claude.calls).toContainEqual(['plugin', 'install', 'reviewd@bamsammich', '--yes'])
+  })
+
+  /**
+   * `plugin install` declines to touch a plugin that is already there: it
+   * prints "already installed" and exits 0. Every upgrade was therefore a
+   * no-op that reported success, and the registration kept pointing at the old
+   * version and the old path while the cache filled with the new one.
+   */
+  it('updates the plugin when one is already installed', async () => {
+    const claude = fakeClaude({ marketplaces: onGitHub, list: installed('0.1.0') })
+    const backups = fakeBackups()
+
+    const result = await init(claude.run, backups.backup)
+
+    expect(result.plugin).toBe('updated')
+    expect(claude.calls).toContainEqual(['plugin', 'update', 'reviewd@bamsammich', '--yes'])
+    expect(claude.calls.some((c) => c[1] === 'install')).toBe(false)
+  })
+
+  /** Upgrading is the reason to run init twice, so it has to reach update. */
+  it('updates again on a second run', async () => {
+    const claude = fakeClaude({ marketplaces: onGitHub, list: installed('0.1.0') })
     const backups = fakeBackups()
 
     await init(claude.run, backups.backup)
     await init(claude.run, backups.backup)
 
-    expect(claude.calls.filter((c) => c[1] === 'install')).toHaveLength(2)
+    expect(claude.calls.filter((c) => c[1] === 'update')).toHaveLength(2)
   })
 
   it('says so when claude is not on PATH, rather than failing at the marketplace', async () => {
