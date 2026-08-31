@@ -164,6 +164,35 @@ ul.reviews .roots {
 .badge.approved { border-color: var(--add-ink); color: var(--add-ink); }
 .badge.draft { border-color: var(--warn-ink); color: var(--warn-ink); }
 
+/* ---------- how big a change is ---------- */
+
+/* Monospaced and tabular so a column of these lines up, which is the whole
+   point of putting one on every file in the rail. No shell around it: the two
+   grounds a badge could take, --add-bg and --del-bg, already mean "this line
+   was added" one row further down the page. */
+.tally {
+  display: inline-flex; align-items: center; gap: .35rem;
+  font-family: var(--mono); font-size: .74rem;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.tally .plus { color: var(--add-ink); }
+.tally .minus { color: var(--del-ink); }
+
+/* The ratio, not the size. A four-line file and a four-hundred-line one draw
+   the same bar, which is why the numbers stay beside it. */
+.propbar {
+  display: inline-flex; width: 2.6rem; height: 5px;
+  border-radius: 999px; overflow: hidden; flex: 0 0 auto;
+}
+.propbar i { display: block; height: 100%; }
+.propbar .a { background: var(--add-ink); }
+.propbar .d { background: var(--del-ink); flex: 1; }
+
+/* Its own margin rather than the title's. Wide enough for the app bar to show
+   the title, the h1 above this is taken out of flow and its margin goes with
+   it, leaving the size as the first thing in the rail. */
+.rail > .tally { margin: 0 0 .9rem; }
+
 /* ---------- scope: what is under review ---------- */
 
 .scope { margin: 0 0 .9rem; }
@@ -256,7 +285,25 @@ ul.reviews .roots {
   text-decoration: none; color: inherit;
 }
 .scope a.leaf:hover { background: var(--surface-2); }
-.scope a.leaf .name { font-weight: 400; font-size: .78rem; flex: 1 1 auto; }
+
+/* The name gives way before the size does. A rail wide enough for both shows
+   both; narrower than that, a truncated filename still identifies the file,
+   while a wrapped row costs a line on every entry in the list. */
+.scope a.leaf .name {
+  font-weight: 400; font-size: .78rem;
+  flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* A column, not a trailing decoration.
+   Sizes are read down the rail rather than one at a time, and a row where a
+   file carries a comment badge pushed its numbers left of the row above it.
+   Each half gets a slot wide enough for three digits and right-aligns inside
+   it, so +39 sits under +105 and −1 under −15. A fourth digit widens that
+   row's slot rather than truncating, which loses the column on the one file
+   large enough to have earned attention anyway. */
+.scope a.leaf .tally { flex: 0 0 auto; font-size: .7rem; margin-left: auto; }
+.scope a.leaf .tally .plus,
+.scope a.leaf .tally .minus { min-width: 4ch; text-align: right; }
 
 /* A letter as well as a colour, so the change type survives being unable to
    tell them apart. */
@@ -424,6 +471,12 @@ details.file > summary h3 {
   font-family: var(--mono); font-size: .84rem; font-weight: 600;
   margin: 0; overflow-wrap: anywhere; min-width: 0;
 }
+
+/* The size goes to the far edge, away from the path and the badges.
+   Left in source order it landed in a run of four things pressed together,
+   where a number reads as one more badge. Against the right edge it is the
+   only thing there, and the same distance from the path on every file. */
+details.file > summary .tally { margin-left: auto; }
 
 /* ---------- diff ---------- */
 
