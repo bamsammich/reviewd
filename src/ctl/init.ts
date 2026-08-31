@@ -72,7 +72,8 @@ export interface InitPlan {
 
 export interface InitResult {
   marketplace: MarketplaceAction
-  plugin: 'installed'
+  /** Which of the two commands ran, since only one of them can upgrade. */
+  plugin: 'installed' | 'updated'
   /** Files copied before anything ran, as `original -> backup`. */
   backups: [string, string][]
   paths: string[]
@@ -199,6 +200,8 @@ export async function planInit(run: Runner = runClaude, version = ownVersion()):
  * Idempotent by design. Re-running after `npm install -g reviewd@latest` is how
  * the plugin catches up, and it is what the MCP server calls for itself when it
  * notices the installed plugin is a different version than the binary running.
+ * Catching up means `plugin update`, because `plugin install` declines to touch
+ * a plugin that is already there.
  *
  * Non-interactive on purpose: catchUpPlugin calls it mid-session, where there
  * is nobody to answer a prompt. Asking belongs to initCommand.
@@ -226,11 +229,27 @@ export async function initPlugin(
     await run(['plugin', 'marketplace', 'add', plan.marketplace.source])
   }
 
-  // --yes because init is run from a shell that may not be a terminal, and the
-  // confirmation prompt has nothing to ask a script.
-  await run(['plugin', 'install', `${PLUGIN}@${MARKETPLACE_NAME}`, '--yes'])
+  // `plugin install` refuses to upgrade. On a plugin already installed it
+  // prints "already installed" and exits 0, so init reported success while the
+  // registration stayed on the old version and the old path. Every upgrade
+  // since the mechanism was added was a no-op, including the automatic one in
+  // catchUpPlugin, and `doctor` kept advising a command that could not help.
+  //
+  // `update` is safe on a current plugin: it prints "already at the latest
+  // version" and exits 0.
+  const plugin = plan.plugin.installed === undefined ? 'installed' : 'updated'
 
-  return { marketplace: plan.marketplace.action, plugin: 'installed', backups, paths: plan.paths }
+  // --yes on both because init is run from a shell that may not be a terminal,
+  // and the confirmation prompt has nothing to ask a script. `plugin update`
+  // documents the same requirement `install` does: required when stdin or
+  // stdout is not a TTY.
+  if (plugin === 'installed') {
+    await run(['plugin', 'install', `${PLUGIN}@${MARKETPLACE_NAME}`, '--yes'])
+  } else {
+    await run(['plugin', 'update', `${PLUGIN}@${MARKETPLACE_NAME}`, '--yes'])
+  }
+
+  return { marketplace: plan.marketplace.action, plugin, backups, paths: plan.paths }
 }
 
 /**

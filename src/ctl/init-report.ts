@@ -53,7 +53,7 @@ function marketplaceLine(plan: InitPlan): string {
 export function renderResult(result: InitResult): string {
   const where = installLocations()
   const lines = [
-    `reviewd init: marketplace ${result.marketplace}, plugin installed.`,
+    `reviewd init: marketplace ${result.marketplace}, plugin ${result.plugin}.`,
     '',
     'Touched:',
     ...result.paths.map((path) => `  ${path}`),
