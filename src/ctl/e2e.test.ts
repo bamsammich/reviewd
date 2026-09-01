@@ -3,7 +3,7 @@ import { configSchema, resolve } from '../daemon/config.js'
 import { tempDatabase, type TempDatabase } from '../daemon/db/testing.js'
 import { createApp, type App } from '../daemon/http/app.js'
 import { Client } from './client.js'
-import { fingerprint } from './diff.js'
+import { diffCommitRange, fingerprint, pushRange } from './diff.js'
 import { pushSnapshot } from './push.js'
 import { tempRepo, type TempRepo } from './testing.js'
 
@@ -283,5 +283,110 @@ describe('one review across two repositories', () => {
     expect(woke.wokeOn).toBe('submission')
     expect(woke.verdict).toBe('changes_requested')
     expect(woke.threadsAwaitingAgent).toBe(3)
+  })
+})
+
+/**
+ * Push gating, from the repository to the verdict.
+ *
+ * The unit tests each cover one seam: the range diff knows which commits are
+ * unpushed, the daemon knows what a root gates on, and the hook knows which
+ * verbs a command carries. None of them answers the question the feature rests
+ * on, which is whether the fingerprint the reviewer approved is the one the
+ * gate later asks about. Nothing but the whole loop can say that.
+ */
+describe('gating a push rather than every commit', () => {
+  /** A daemon that holds pushes for one repository and commits for the rest. */
+  function daemonGating(root: string): Client {
+    const config = resolve(
+      configSchema.parse({
+        public_url: 'https://mac.tailnet-name.ts.net',
+        gate: { scope: 'commit', roots: { [root]: 'push' } },
+      }),
+      { configPath: '/tmp/reviewd-e2e.json', bindPublic: false },
+    )
+
+    const gating = createApp({ config, db: ctx.db, local: true })
+
+    return new Client('http://127.0.0.1:7777', (input, init) =>
+      gating.request(String(input).replace('http://127.0.0.1:7777', ''), {
+        ...init,
+        headers: { ...(init?.headers as Record<string, string>), host: '127.0.0.1:7777' },
+      }),
+    )
+  }
+
+  /** Marks everything up to HEAD as already on a remote. */
+  function published(repo: TempRepo): void {
+    repo.run('update-ref', 'refs/remotes/origin/main', 'HEAD')
+  }
+
+  it('reports what each repository holds', async () => {
+    const gating = daemonGating(repoA.root)
+
+    expect(await gating.gateScope(repoA.root)).toBe('push')
+    expect(await gating.gateScope(repoB.root)).toBe('commit')
+  })
+
+  it('denies a push nobody has read, then allows the one they approved', async () => {
+    const gating = daemonGating(repoA.root)
+    published(repoA)
+
+    repoA.write('src/app.ts', 'const a = 1\nconst b = 99\nconst c = 3\n')
+    repoA.commit('bump b')
+    repoA.write('src/app.ts', 'const a = 1\nconst b = 99\nconst c = 300\n')
+    repoA.commit('bump c too')
+
+    const range = (await pushRange(repoA.root))!
+    expect(range.commits).toHaveLength(2)
+
+    // The review comes first, because the manifest names the source id the
+    // daemon assigned and a change set built without one is rejected.
+    const review = await gating.createReview({
+      title: 'two commits about to leave',
+      sources: [{ path: repoA.root, base: range.base }],
+      createdBy: 'e2e',
+      notify: false,
+    })
+
+    const reading = await diffCommitRange(
+      { id: review.sources[0]!.id, rootPath: repoA.root },
+      range,
+    )
+
+    // Nobody has looked at it yet.
+    const before = await gating.gate(repoA.root, reading.fingerprint)
+    expect(before.decision).toBe('deny')
+    expect(before.scope).toBe('push')
+
+    for (const [id, bytes] of reading.blobs) await gating.putBlob(id, bytes)
+    await gating.snapshot(review.reviewId, { files: reading.files })
+    await reviewerSubmits(review.reviewId, 'approved')
+
+    // The question the whole feature rests on: the fingerprint the reviewer
+    // approved is the one the gate is asked about.
+    const after = await gating.gate(repoA.root, reading.fingerprint)
+    expect(after.decision).toBe('allow')
+  })
+
+  // An edit on disk is not being pushed, so it cannot move the verdict on the
+  // commits that are.
+  it('holds its approval across an uncommitted edit', async () => {
+    published(repoA)
+
+    repoA.write('src/app.ts', 'const a = 1\nconst b = 99\nconst c = 3\n')
+    repoA.commit('bump b')
+
+    const range = (await pushRange(repoA.root))!
+    const before = await diffCommitRange({ id: '', rootPath: repoA.root }, range)
+
+    repoA.write('src/app.ts', 'const a = 1\nconst b = 99\nconst c = 3\nconst d = 4\n')
+
+    const after = await diffCommitRange(
+      { id: '', rootPath: repoA.root },
+      (await pushRange(repoA.root))!,
+    )
+
+    expect(after.fingerprint).toBe(before.fingerprint)
   })
 })

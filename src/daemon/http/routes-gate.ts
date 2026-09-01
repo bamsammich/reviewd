@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
-import { gateRequest, observeRequest, releaseRequest } from '../../protocol.js'
+import { gateRequest, gateScopeRequest, observeRequest, releaseRequest } from '../../protocol.js'
+import { gateScopeFor } from '../config.js'
 import { gate, observe, release } from '../gate.js'
 import { ReviewError, type Deps } from '../reviews.js'
 
@@ -23,6 +24,19 @@ export function gateRoutes(deps: Deps): Hono {
     }
 
     return c.json(await gate(deps, parsed.data))
+  })
+
+  // What a repository holds, with no verdict and no stamp. Separate from the
+  // gate because a verdict needs a fingerprint, and computing one means diffing
+  // a whole repository to answer a question that may not need asking: under
+  // push gating a commit is not the gate's business at all.
+  routes.post('/api/gate/scope', async (c) => {
+    const body: unknown = await c.req.json().catch(() => ({}))
+    const parsed = gateScopeRequest.safeParse(body)
+
+    if (!parsed.success) return c.json({ error: 'root is required' }, 400)
+
+    return c.json({ scope: gateScopeFor(deps.config, parsed.data.root) })
   })
 
   // Reads only, and writes nothing, so a GET would be safe here. It stays a

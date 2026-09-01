@@ -10,6 +10,8 @@ import {
   runMcp,
   waitForSubmission,
 } from './ctl/commands.js'
+import { z } from 'zod'
+import { gateScope, type GateScope } from './protocol.js'
 import { runServe } from './daemon/serve.js'
 
 /**
@@ -26,6 +28,28 @@ import { runServe } from './daemon/serve.js'
  * enforced the labels. Declaring a flag on the command that reads the flag is
  * the enforcement, and generated help retires the USAGE constant.
  */
+
+/**
+ * The verbs the hook saw, which can be more than one.
+ *
+ * `git commit -m x && git push` is one Bash command and reaches the hook as
+ * one string. Reporting only the first gated verb in it would let the other
+ * through: under push gating the commit is waved past, and a push the hook
+ * never mentioned goes with it.
+ */
+function parseGateVerbs(value: string): GateScope[] {
+  const verbs = value
+    .split(',')
+    .map((verb) => verb.trim())
+    .filter((verb) => verb.length > 0)
+
+  const parsed = z.array(gateScope).safeParse(verbs)
+  if (!parsed.success || parsed.data.length === 0) {
+    throw new InvalidArgumentError('must be commit, push, or both separated by a comma')
+  }
+
+  return parsed.data
+}
 
 /** What each command does, injected so the tests never reach the daemon. */
 export interface Handlers {
@@ -128,11 +152,20 @@ export function buildProgram(handlers: Handlers = realHandlers): Command {
 
   program
     .command('gate')
-    .description('Ask whether a commit in this repository is approved')
+    .description('Ask whether a commit or push from this repository is approved')
     .argument('[path]', 'Repository to ask about', process.cwd())
     .option('--json', 'Machine-readable output', false)
-    .action(async (path: string, options: { json: boolean }) => {
-      await handlers.gate(path, options.json)
+    // Defaults to commit so a hook from an older plugin keeps working. What a
+    // repository actually holds is the daemon's answer; this only says which
+    // command the hook saw.
+    .option(
+      '--for <verbs>',
+      'What the hook saw: commit, push, or both separated by a comma',
+      parseGateVerbs,
+      ['commit'],
+    )
+    .action(async (path: string, options: { json: boolean; for: GateScope[] }) => {
+      await handlers.gate(path, options.json, options.for)
     })
 
   program

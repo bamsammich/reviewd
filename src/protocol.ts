@@ -321,6 +321,20 @@ export type ObserveResponse = z.infer<typeof observeResponse>
 export const gateScope = z.enum(['commit', 'push'])
 export type GateScope = z.infer<typeof gateScope>
 
+/**
+ * Asking what a repository's gate holds, without asking for a verdict.
+ *
+ * A verdict needs a fingerprint, and computing one means diffing the whole
+ * repository. Under push gating a `git commit` needs no verdict at all, so
+ * asking first is what keeps the gate from reading a working tree to answer a
+ * question it was never going to act on.
+ */
+export const gateScopeRequest = z.object({ root: z.string().min(1) })
+export type GateScopeRequest = z.infer<typeof gateScopeRequest>
+
+export const gateScopeResponse = z.object({ scope: gateScope })
+export type GateScopeResponse = z.infer<typeof gateScopeResponse>
+
 export const gateResponse = z.object({
   decision: z.enum(['allow', 'deny']),
   reason: z.string(),

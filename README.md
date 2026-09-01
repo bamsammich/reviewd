@@ -220,7 +220,18 @@ rides back on a call that was happening anyway. A committed file would put a
 gate setting into a pull request, and an environment variable would let a gate
 loosen because of something exported in one shell.
 
-Nothing reads `push` yet. The hook that holds a `git push` is the next piece.
+Under `push`, a commit runs free and the gate holds the push instead. What a
+push carries is every commit no remote has yet, so a branch of five commits is
+one approval rather than five, and the working tree is not part of it: an
+uncommitted edit is not being pushed.
+
+A rebase that changed no file keeps its approval, because what is approved is
+the change set rather than the commit ids. A rebase that resolved a conflict
+changed a file, so the gate asks again.
+
+One gap worth knowing: any remote counts as published, so a branch pushed to a
+fork and then to upstream produces an empty range the second time and sails
+through.
 
 ### On a harness that is not Claude Code
 

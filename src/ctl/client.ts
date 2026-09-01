@@ -1,6 +1,8 @@
 import {
   blobCheckResponse,
   gateResponse,
+  gateScopeResponse,
+  type GateScope,
   observeResponse,
   releaseResult,
   reviewSummary,
@@ -156,6 +158,12 @@ export class Client {
     head: string | null = null,
   ): Promise<GateResponse> {
     return this.json('POST', '/api/gate', gateResponse, { root, fingerprint, tree, head })
+  }
+
+  /** What this repository's gate holds, asked before anything is computed. */
+  async gateScope(root: string): Promise<GateScope> {
+    const { scope } = await this.json('POST', '/api/gate/scope', gateScopeResponse, { root })
+    return scope
   }
 
   observe(root: string, head: string, tree: string): Promise<ObserveResponse> {
