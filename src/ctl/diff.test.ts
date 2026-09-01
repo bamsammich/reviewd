@@ -3,9 +3,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  diffCommitRange,
   diffFileSet,
   diffGitSource,
   diffSource,
+  pushRange,
+  unpushedCommits,
   looksBinary,
   parseRawDiff,
   sha256,
@@ -416,5 +419,109 @@ describe('sha256', () => {
     expect(sha256(new TextEncoder().encode('hello'))).toBe(
       '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
     )
+  })
+})
+
+/**
+ * What a push would carry.
+ *
+ * A remote ref is created by hand rather than by pushing anywhere: what
+ * decides the range is which commits a `refs/remotes/*` ref reaches, and a
+ * real remote adds network and a second repository without changing the
+ * question.
+ */
+describe('the range a push would carry', () => {
+  /** Marks everything up to HEAD as already on a remote. */
+  const published = () => repo.run('update-ref', 'refs/remotes/origin/main', 'HEAD')
+
+  it('lists the commits no remote has yet, newest first', async () => {
+    published()
+    repo.write('src/a.ts', 'const a = 2\n')
+    repo.commit('second')
+    repo.write('src/a.ts', 'const a = 3\n')
+    repo.commit('third')
+
+    const commits = await unpushedCommits(repo.root)
+    const messages = commits.map((sha) => repo.run('log', '-1', '--format=%s', sha).trim())
+
+    expect(messages).toEqual(['third', 'second'])
+  })
+
+  it('has nothing to carry when a remote already has HEAD', async () => {
+    published()
+
+    expect(await pushRange(repo.root)).toBeNull()
+  })
+
+  // The first push of a repository nobody has pushed: every commit is new, and
+  // the range starts before the first one rather than failing to find a parent.
+  it('covers every commit when no remote has anything', async () => {
+    const range = await pushRange(repo.root)
+    const diff = await diffCommitRange(source(repo.root), range!)
+
+    expect(range?.commits).toHaveLength(1)
+    expect(diff.files.map((file) => file.path).sort()).toEqual(['src/a.ts', 'src/b.ts'])
+    expect(diff.files.every((file) => file.changeType === 'added')).toBe(true)
+  })
+
+  it('describes the net change across several commits, not each one', async () => {
+    published()
+    repo.write('src/a.ts', 'const a = 2\n')
+    repo.commit('second')
+    repo.write('src/a.ts', 'const a = 3\n')
+    repo.write('src/c.ts', 'const c = 1\n')
+    repo.commit('third')
+
+    const range = await pushRange(repo.root)
+    const diff = await diffCommitRange(source(repo.root), range!)
+
+    expect(diff.files.map((file) => file.path).sort()).toEqual(['src/a.ts', 'src/c.ts'])
+    expect(diff.files.find((file) => file.path === 'src/c.ts')?.changeType).toBe('added')
+  })
+
+  // Touched and put back, so the push carries nothing about it and neither
+  // should the review.
+  it('leaves out a file a later commit restored', async () => {
+    published()
+    repo.write('src/a.ts', 'const a = 999\n')
+    repo.commit('break it')
+    repo.write('src/a.ts', 'const a = 1\n')
+    repo.commit('put it back')
+
+    const range = await pushRange(repo.root)
+    const diff = await diffCommitRange(source(repo.root), range!)
+
+    expect(diff.files).toEqual([])
+  })
+
+  /**
+   * The difference from diffGitSource, and the reason this is a separate
+   * function rather than a flag on that one: a push carries commits, and an
+   * edit sitting in the working tree is not being pushed.
+   */
+  it('ignores an uncommitted edit, which no push would carry', async () => {
+    published()
+    repo.write('src/a.ts', 'const a = 2\n')
+    repo.commit('second')
+    repo.write('src/b.ts', 'not committed\n')
+
+    const range = await pushRange(repo.root)
+    const diff = await diffCommitRange(source(repo.root), range!)
+
+    expect(diff.files.map((file) => file.path)).toEqual(['src/a.ts'])
+  })
+
+  // Same bytes, same approval. A rebase that changed no file produces the same
+  // change set, so an approval already given still covers the push.
+  it('gives a rebase that changed nothing the same fingerprint', async () => {
+    published()
+    repo.write('src/a.ts', 'const a = 2\n')
+    repo.commit('second')
+
+    const before = await diffCommitRange(source(repo.root), (await pushRange(repo.root))!)
+    repo.run('commit', '--amend', '--no-edit', '--date=Wed Feb 16 14:00 2028 +0100')
+    const after = await diffCommitRange(source(repo.root), (await pushRange(repo.root))!)
+
+    expect(after.fingerprint).toBe(before.fingerprint)
   })
 })

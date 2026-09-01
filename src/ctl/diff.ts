@@ -468,3 +468,88 @@ export async function diffSource(
 export function relativeTo(root: string, path: string): string {
   return relative(root, path).split(sep).join('/')
 }
+
+/**
+ * The commits on HEAD that no remote has yet, newest first.
+ *
+ * `--not --remotes` rather than `@{upstream}..HEAD`, because the obvious range
+ * breaks on the first push of a new branch, which is exactly when a review
+ * matters most. Excluding every remote ref also keeps commits somebody else
+ * wrote out of the range: a merge brings in work a remote already has, and an
+ * approval should cover what you wrote rather than what you pulled.
+ *
+ * Known gap, filed rather than solved: any remote counts as published, so a
+ * branch pushed to a fork and then to upstream produces an empty range the
+ * second time.
+ */
+export async function unpushedCommits(root: string): Promise<string[]> {
+  const out = await git(root, ['rev-list', 'HEAD', '--not', '--remotes'])
+  return out.split('\n').filter((line) => line.length > 0)
+}
+
+/** What a push would carry: the two ends of the range, or null when nothing would go. */
+export async function pushRange(
+  root: string,
+): Promise<{ base: string; head: string; commits: string[] } | null> {
+  const commits = await unpushedCommits(root)
+  if (commits.length === 0) return null
+
+  const oldest = commits[commits.length - 1] as string
+  const head = (await git(root, ['rev-parse', 'HEAD'])).trim()
+
+  // The parent of the oldest unpushed commit is the last state a remote saw.
+  // A first commit on a repository has no parent, so the range starts from the
+  // empty tree and every file reads as an addition.
+  let base: string
+  try {
+    base = (await git(root, ['rev-parse', '--verify', `${oldest}^`])).trim()
+  } catch {
+    base = (await git(root, ['hash-object', '-t', 'tree', '/dev/null'])).trim()
+  }
+
+  return { base, head, commits }
+}
+
+/**
+ * The change set between two commits, with no working tree involved.
+ *
+ * diffGitSource builds a scratch index from the files on disk, because what it
+ * describes is what a commit would carry. A push carries commits that already
+ * exist, so both sides here are trees git already holds and the working tree
+ * is not part of the question. Uncommitted edits are therefore invisible to a
+ * push review, which is correct: they are not being pushed.
+ */
+export async function diffCommitRange(
+  source: SourceInput,
+  range: { base: string; head: string },
+  limits: DiffLimits = DEFAULT_LIMITS,
+): Promise<SourceDiff> {
+  const root = source.rootPath
+  const env: NodeJS.ProcessEnv = {}
+
+  const raw = await git(root, ['diff', '--raw', '-z', '--abbrev=40', '-M', range.base, range.head])
+  const changes = parseRawDiff(raw)
+
+  if (changes.length > limits.maxFilesPerSnapshot) {
+    throw new Error(
+      `${root} changes ${changes.length} files across the commits being pushed, ` +
+        `over the ${limits.maxFilesPerSnapshot} limit`,
+    )
+  }
+
+  const files: FileChangeSpec[] = []
+  const blobs = new Map<string, Uint8Array>()
+
+  for (const change of changes) {
+    files.push(await toFileChange(root, source.id, change, env, blobs, limits))
+  }
+
+  return {
+    sourceId: source.id,
+    fingerprint: manifestFingerprint(files),
+    files,
+    blobs,
+    // The tree the range ends at, which is what a push would publish.
+    tree: (await git(root, ['rev-parse', `${range.head}^{tree}`])).trim(),
+  }
+}
