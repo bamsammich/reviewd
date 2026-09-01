@@ -372,7 +372,6 @@ describe('gating a push rather than every commit', () => {
   // An edit on disk is not being pushed, so it cannot move the verdict on the
   // commits that are.
   it('holds its approval across an uncommitted edit', async () => {
-    const gating = daemonGating(repoA.root)
     published(repoA)
 
     repoA.write('src/app.ts', 'const a = 1\nconst b = 99\nconst c = 3\n')
