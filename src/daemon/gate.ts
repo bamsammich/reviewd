@@ -1,5 +1,6 @@
 import type { Kysely } from 'kysely'
 import type { GateResponse, ObserveResponse, ReleaseResult } from '../protocol.js'
+import { gateScopeFor } from './config.js'
 import { now } from './db/ids.js'
 import type { Database } from './db/types.js'
 import { reviewUrl, ReviewError, type Deps } from './reviews.js'
@@ -34,6 +35,11 @@ export interface GateQuery {
 
 export async function gate(deps: Deps, query: GateQuery): Promise<GateResponse> {
   const { db, config } = deps
+
+  // Stamped here rather than at each return, because it describes the
+  // repository and not the verdict: a denial has to carry it too, or the hook
+  // learns which commands to hold only on the commits it was going to allow.
+  const scope = gateScopeFor(config, query.root)
 
   const approval = await db
     .selectFrom('approval')
@@ -74,10 +80,11 @@ export async function gate(deps: Deps, query: GateQuery): Promise<GateResponse> 
       reviewUrl: reviewUrl(config, approval.review_id),
       warnings,
       openThreads,
+      scope,
     }
   }
 
-  return deny(deps, query)
+  return { ...(await deny(deps, query)), scope }
 }
 
 export interface ObserveQuery {
@@ -168,7 +175,7 @@ export async function observe(deps: Deps, query: ObserveQuery): Promise<ObserveR
   }
 }
 
-async function deny(deps: Deps, query: GateQuery): Promise<GateResponse> {
+async function deny(deps: Deps, query: GateQuery): Promise<Omit<GateResponse, 'scope'>> {
   const { db, config } = deps
 
   const sources = await db
