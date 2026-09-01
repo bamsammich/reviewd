@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
+import { gateScope, type GateScope } from '../protocol.js'
 
 /**
  * Configuration lives at $XDG_CONFIG_HOME/reviewd/config.json and holds no
@@ -40,9 +41,43 @@ export const configSchema = z.object({
       template: z.string().nullable().default(null),
     })
     .default({ webhook_url: null, template: null }),
+
+  /**
+   * What the commit gate holds: every commit, or every push.
+   *
+   * Here rather than in a file beside the code, because the hook already sends
+   * the repository root and already waits for an answer, so the scope rides
+   * back on a call that was happening anyway. A committed file would put a
+   * gate setting into a pull request, and an environment variable would let a
+   * gate loosen because of something exported in one shell.
+   *
+   * `commit` is the default and stays the default. An upgrade that quietly
+   * stopped denying commits would be the failure reviewd exists to prevent,
+   * arriving through reviewd's own release, so push gating is something a
+   * person turns on for a repository they named.
+   */
+  gate: z
+    .object({
+      /** `commit` or `push`, defined with the rest of the protocol's enums. */
+      scope: gateScope.default('commit'),
+      /** Keyed by absolute repository root, which is what the hook sends. */
+      roots: z.record(z.string(), gateScope).default({}),
+    })
+    .default({ scope: 'commit', roots: {} }),
 })
 
 export type Config = z.infer<typeof configSchema>
+
+/**
+ * What a repository gates on: its own entry, or the default.
+ *
+ * Matched on the exact root the hook sends, which is the canonical path the
+ * client computed. A prefix match would be friendlier and wrong: a repository
+ * nested inside another would silently inherit a setting nobody chose for it.
+ */
+export function gateScopeFor(config: Config, root: string): GateScope {
+  return config.gate.roots[root] ?? config.gate.scope
+}
 
 /** Config plus everything derived from it, so nothing recomputes a base URL. */
 export interface ResolvedConfig extends Config {

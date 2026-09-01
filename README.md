@@ -193,6 +193,35 @@ To take one repository out of the gate:
 touch "$(git rev-parse --absolute-git-dir)/reviewd-gate-off"
 ```
 
+### What the gate holds
+
+Every commit, which is the default and what a fresh install does. A branch built
+out of five small commits therefore takes five approvals.
+
+The daemon's `config.json` decides, per repository:
+
+```json
+{
+  "gate": {
+    "scope": "commit",
+    "roots": { "/Users/you/code/scratch": "push" }
+  }
+}
+```
+
+`scope` is what a repository gets when it has no entry of its own, and `roots`
+names the exceptions by absolute path. Matching is exact: a repository nested
+inside a named one keeps the default rather than inheriting a setting nobody
+chose for it.
+
+The setting lives with the daemon rather than beside the code, because the hook
+already sends the repository root and already waits for an answer, so the scope
+rides back on a call that was happening anyway. A committed file would put a
+gate setting into a pull request, and an environment variable would let a gate
+loosen because of something exported in one shell.
+
+Nothing reads `push` yet. The hook that holds a `git push` is the next piece.
+
 ### On a harness that is not Claude Code
 
 Nothing about reviewd is Claude-specific; the plugin is packaging. The two

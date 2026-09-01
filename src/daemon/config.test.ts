@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   assertBindAllowed,
   configSchema,
+  gateScopeFor,
   isLoopbackHost,
   loadConfig,
   resolve,
@@ -149,5 +150,50 @@ describe('allowed hosts', () => {
     expect(config.allowedHosts.has('localhost')).toBe(true)
     expect(config.allowedHosts.has('mac.tailnet-name.ts.net')).toBe(true)
     expect(config.allowedHosts.has('evil.example.com')).toBe(false)
+  })
+})
+
+/**
+ * What a repository's commit gate holds.
+ *
+ * The default is the one setting here whose wrong answer is silent: an upgrade
+ * that quietly stopped denying commits would be the failure reviewd exists to
+ * prevent, arriving through reviewd's own release.
+ */
+describe('gate scope', () => {
+  const parse = (raw: unknown) => configSchema.parse(raw)
+
+  it('gates on commit when nothing says otherwise', () => {
+    const config = parse({})
+
+    expect(config.gate.scope).toBe('commit')
+    expect(gateScopeFor(config, '/repo')).toBe('commit')
+  })
+
+  it('lets one repository gate on push while the rest do not', () => {
+    const config = parse({ gate: { roots: { '/repo/loose': 'push' } } })
+
+    expect(gateScopeFor(config, '/repo/loose')).toBe('push')
+    expect(gateScopeFor(config, '/repo/strict')).toBe('commit')
+  })
+
+  it('lets a repository gate on commit while the default is push', () => {
+    const config = parse({ gate: { scope: 'push', roots: { '/repo/strict': 'commit' } } })
+
+    expect(gateScopeFor(config, '/repo/strict')).toBe('commit')
+    expect(gateScopeFor(config, '/repo/anything-else')).toBe('push')
+  })
+
+  // A nested repository would otherwise inherit a setting nobody chose for it,
+  // which is the wrong direction for a gate to be wrong in.
+  it('matches a root exactly rather than by prefix', () => {
+    const config = parse({ gate: { roots: { '/repo': 'push' } } })
+
+    expect(gateScopeFor(config, '/repo/vendor/inner')).toBe('commit')
+  })
+
+  it('refuses a scope it does not recognise rather than falling back', () => {
+    expect(() => parse({ gate: { scope: 'never' } })).toThrow()
+    expect(() => parse({ gate: { roots: { '/repo': 'sometimes' } } })).toThrow()
   })
 })

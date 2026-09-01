@@ -311,12 +311,24 @@ export const observeResponse = z.object({
 })
 export type ObserveResponse = z.infer<typeof observeResponse>
 
+/**
+ * What a repository's gate holds: every commit, or every push.
+ *
+ * The daemon decides this and the hook asks. Keeping the answer on the verdict
+ * means the hook makes one call rather than reading a config file of its own,
+ * and there is one place to look when a gate behaves unexpectedly.
+ */
+export const gateScope = z.enum(['commit', 'push'])
+export type GateScope = z.infer<typeof gateScope>
+
 export const gateResponse = z.object({
   decision: z.enum(['allow', 'deny']),
   reason: z.string(),
   reviewUrl: z.string().nullable(),
   warnings: z.array(z.string()),
   openThreads: z.array(gateOpenThread),
+  /** What this root gates on, so the hook knows which commands to hold. */
+  scope: gateScope,
 })
 export type GateResponse = z.infer<typeof gateResponse>
 

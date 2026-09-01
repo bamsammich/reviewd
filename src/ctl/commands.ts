@@ -202,6 +202,12 @@ export async function checkGate(path: string, json: boolean): Promise<void> {
       reviewUrl: null,
       warnings: [],
       openThreads: [],
+      // Both refusals this function makes on its own are commit-scope
+      // decisions: they compare the index against the working tree, which is a
+      // question only a commit asks. A repository gating on push reaches them
+      // differently, and the hook change that gates a push is what restructures
+      // this. Nothing reads scope yet.
+      scope: 'commit',
     }
 
     return report(result, json)
@@ -222,6 +228,7 @@ export async function checkGate(path: string, json: boolean): Promise<void> {
         decision: 'allow',
         reason: `${root} has no changes against HEAD, so there is nothing to review.`,
         reviewUrl: null,
+        scope: 'commit',
         warnings: [],
         openThreads: [],
       },

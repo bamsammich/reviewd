@@ -363,3 +363,57 @@ describe('observe', () => {
     expect(result.finding).toBe('clean')
   })
 })
+
+/**
+ * The scope rides back on the verdict.
+ *
+ * A denial carries it as well as an allow. Reporting it only on an allow would
+ * tell the hook which commands to hold exactly on the commits it was going to
+ * let through anyway.
+ */
+describe('what a root gates on', () => {
+  function depsGating(scope: 'commit' | 'push', roots: Record<string, string> = {}) {
+    const config = resolve(configSchema.parse({ gate: { scope, roots } }), {
+      configPath: '/tmp/reviewd-test.json',
+      bindPublic: false,
+    })
+
+    return { db: ctx.db, config }
+  }
+
+  it('says commit when nothing has been configured', async () => {
+    const result = await gate(deps, { root: '/tmp/untouched', fingerprint: 'fp' })
+
+    expect(result.decision).toBe('deny')
+    expect(result.scope).toBe('commit')
+  })
+
+  it('reports the scope on a denial, not only on an allow', async () => {
+    const result = await gate(depsGating('push'), { root: '/tmp/untouched', fingerprint: 'fp' })
+
+    expect(result.decision).toBe('deny')
+    expect(result.scope).toBe('push')
+  })
+
+  it('reports the scope on an allow', async () => {
+    const review = await reviewAt('/tmp/repo', 'fp-scope')
+    await submitReview(deps, review.reviewId, 'approved')
+
+    const result = await gate(depsGating('push'), {
+      root: '/tmp/repo',
+      fingerprint: fingerprintFor('fp-scope'),
+    })
+
+    expect(result.decision).toBe('allow')
+    expect(result.scope).toBe('push')
+  })
+
+  it('gives one root its own answer without moving the others', async () => {
+    const configured = depsGating('commit', { '/tmp/loose': 'push' })
+
+    expect((await gate(configured, { root: '/tmp/loose', fingerprint: 'fp' })).scope).toBe('push')
+    expect((await gate(configured, { root: '/tmp/strict', fingerprint: 'fp' })).scope).toBe(
+      'commit',
+    )
+  })
+})
