@@ -74,6 +74,27 @@ export function samePlace(one: Position, other: Position): boolean {
 }
 
 /**
+ * The line a comment is drawn below: the last one it covers, not the first.
+ *
+ * A note about lines 40 to 44 drawn under line 40 splits the block it is
+ * about, so the reader meets the note before four of the five lines it
+ * discusses and has to read past it to reach them. Under line 44 the block
+ * stays whole above the note, which is the order the sentence was written in.
+ *
+ * Separate from samePlace, which answers where a comment starts. Both
+ * questions are real: the start is where a comment is anchored and re-anchored
+ * across snapshots, and this is only where it is drawn.
+ */
+export function anchorLine(position: Position): number {
+  return position.endLine ?? position.line
+}
+
+/** Whether a comment is drawn directly below this row. */
+export function hangsBelow(comment: Position, row: Position): boolean {
+  return inSameFile(comment, row) && anchorLine(comment) === row.line
+}
+
+/**
  * Whether a range takes in a point.
  *
  * A position with no end covers only itself, which is what makes a one-line

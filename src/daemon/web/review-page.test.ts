@@ -229,6 +229,83 @@ describe('the size of a change', () => {
   })
 })
 
+/**
+ * Where a block comment is drawn.
+ *
+ * Reported from a real review: dragging down the gutter to cover several lines
+ * and leaving a note put the note after the FIRST line of the selection, so
+ * four of the five lines it was about sat below the sentence about them.
+ */
+describe('a comment covering a block of lines', () => {
+  const fiveLines = (): FileView => ({
+    ...file('src/a.ts'),
+    oldText: 'one\ntwo\nthree\nfour\nfive\n',
+    newText: 'one\nTWO\nTHREE\nFOUR\nfive\n',
+  })
+
+  const block = () =>
+    thread({
+      line: 2,
+      endLine: 4,
+      messages: [
+        {
+          id: 'm-1',
+          seq: 1,
+          author: 'human',
+          body: 'this whole block',
+          createdAt: 0,
+          submittedAt: 1,
+        },
+      ],
+    })
+
+  /** Where a rendered line number sits in the markup. */
+  const rowAt = (markup: string, line: number) => markup.indexOf(`<span class="n">${line}</span>`)
+
+  // The rail lists every open comment above the diff, so the first occurrence
+  // of a comment's text is its index entry rather than where it is drawn.
+  const drawnAt = (markup: string, body: string) => markup.lastIndexOf(body)
+
+  it('draws the comment after the last line it covers', () => {
+    const markup = reviewPage(summary(), [fiveLines()], [block()]).value
+    const comment = drawnAt(markup, 'this whole block')
+
+    expect(comment).toBeGreaterThan(rowAt(markup, 4))
+  })
+
+  it('leaves the block it covers whole above it', () => {
+    const markup = reviewPage(summary(), [fiveLines()], [block()]).value
+    const comment = drawnAt(markup, 'this whole block')
+
+    // Every line of the selection comes before the note, and the line after
+    // the selection comes after it.
+    for (const line of [2, 3, 4]) expect(rowAt(markup, line)).toBeLessThan(comment)
+    expect(rowAt(markup, 5)).toBeGreaterThan(comment)
+  })
+
+  it('draws a one-line comment under its own line, as it always did', () => {
+    const single = thread({
+      line: 3,
+      endLine: null,
+      messages: [
+        {
+          id: 'm-1',
+          seq: 1,
+          author: 'human',
+          body: 'just this line',
+          createdAt: 0,
+          submittedAt: 1,
+        },
+      ],
+    })
+    const markup = reviewPage(summary(), [fiveLines()], [single]).value
+    const comment = drawnAt(markup, 'just this line')
+
+    expect(comment).toBeGreaterThan(rowAt(markup, 3))
+    expect(comment).toBeLessThan(rowAt(markup, 4))
+  })
+})
+
 // A blank half carries `empty`, and the page-level "nothing here" message used
 // to carry the same name. The generic rule's 2.5rem of padding then landed on
 // every added and removed line, which is invisible stacked and triples the row

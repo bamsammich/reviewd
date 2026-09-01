@@ -9,6 +9,8 @@ import {
   positionAt,
   positionKey,
   positionOfThread,
+  anchorLine,
+  hangsBelow,
   samePlace,
   type Position,
 } from './position.js'
@@ -41,6 +43,38 @@ describe('the same place', () => {
 
   it('ignores how far a range reaches', () => {
     expect(samePlace(at({ endLine: 9 }), at())).toBe(true)
+  })
+})
+
+/**
+ * Where a comment is drawn, which is not where it starts.
+ *
+ * Reported from a real review: dragging down the gutter to cover a block and
+ * leaving a note put the note after the first line of the selection, so the
+ * lines it was about sat below it.
+ */
+describe('the line a comment hangs below', () => {
+  it('is the last line of a range, not the first', () => {
+    expect(anchorLine(at({ line: 4, endLine: 8 }))).toBe(8)
+  })
+
+  it('is its own line when a comment covers one', () => {
+    expect(anchorLine(at({ line: 4 }))).toBe(4)
+  })
+
+  it('draws a block comment under the end of the block', () => {
+    const comment = at({ line: 4, endLine: 8 })
+
+    expect(hangsBelow(comment, at({ line: 8 }))).toBe(true)
+    expect(hangsBelow(comment, at({ line: 4 }))).toBe(false)
+    expect(hangsBelow(comment, at({ line: 6 }))).toBe(false)
+  })
+
+  it('keeps a comment out of the other side and the other file', () => {
+    const comment = at({ line: 4, endLine: 8 })
+
+    expect(hangsBelow(comment, at({ line: 8, side: 'old' }))).toBe(false)
+    expect(hangsBelow(comment, at({ line: 8, path: 'src/b.ts' }))).toBe(false)
   })
 })
 

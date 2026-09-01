@@ -18,7 +18,7 @@ import {
   positionAt,
   positionKey,
   positionOfThread,
-  samePlace,
+  hangsBelow,
   type Position,
 } from './position.js'
 
@@ -692,13 +692,17 @@ function threadsAt(file: FileView, threads: Thread[], side: Half): Thread[] {
   return threads.filter((thread) => {
     if (thread.state === 'outdated') return false
     const position = positionOfThread(thread)
-    return position !== undefined && samePlace(position, here)
+    return position !== undefined && hangsBelow(position, here)
   })
 }
 
 function isOpenOn(open: OpenBox | undefined, file: FileView, side: Half): boolean {
   const here = positionAt(file, side)
-  return open !== undefined && here !== undefined && samePlace(open, here)
+
+  // The box being typed into follows the same rule as the comment it becomes,
+  // so a reviewer who drags across five lines does not watch the box appear in
+  // one place and the saved note land in another.
+  return open !== undefined && here !== undefined && hangsBelow(open, here)
 }
 
 function half(
