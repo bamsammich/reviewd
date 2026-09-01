@@ -40,10 +40,21 @@ case $1 in
   # root back, so a test can assert which repository the gate decided this
   # commit was for and not merely that it denied.
   gate)
-    if [ -z "$(git -C "$2" status --porcelain 2>/dev/null)" ]; then
-      printf '{"decision":"allow","reason":"%s has no changes against HEAD","warnings":[]}\n' "$2"
+    # --for carries the verbs the hook saw, echoed back so a test can assert
+    # which doors this command was read as opening.
+    # Read before the loop below shifts it away.
+    root=$2
+    verbs=''
+    while [ $# -gt 0 ]; do
+      case $1 in --for) verbs=$2; shift ;; esac
+      shift
+    done
+
+    if [ -z "$(git -C "$root" status --porcelain 2>/dev/null)" ]; then
+      printf '{"decision":"allow","reason":"%s has no changes against HEAD","warnings":[]}\n' "$root"
     else
-      printf '{"decision":"deny","reason":"stubbed for %s","reviewUrl":"http://example/r/1"}\n' "$2"
+      printf '{"decision":"deny","reason":"stubbed for %s verbs=%s","reviewUrl":"http://example/r/1"}\n' \
+        "$root" "$verbs"
     fi
     ;;
 esac
@@ -85,7 +96,7 @@ check_root() {
   out=$(jq -nc --arg c "$command" --arg d "$cwd" '{tool_input:{command:$c},cwd:$d}' | "$HOOK")
   got=$(printf '%s' "$out" |
     jq -r '.hookSpecificOutput.permissionDecisionReason // ""' |
-    sed -nE 's/.*stubbed for (.*)/\1/p')
+    sed -nE 's/.*stubbed for ([^ ]*).*/\1/p')
 
   if [ "$got" = "$want" ]; then
     pass=$((pass + 1))
@@ -94,6 +105,24 @@ check_root() {
     fail=$((fail + 1))
     printf '  FAIL %s\n    wanted root %s, got %s\n    command: %s\n    cwd: %s\n' \
       "$name" "$want" "${got:-<none>}" "$command" "$cwd"
+  fi
+}
+
+# Which verbs the hook reported, read back out of the stub's denial.
+check_verbs() {
+  local name=$1 want=$2 command=$3 cwd=$4 out got
+  out=$(jq -nc --arg c "$command" --arg d "$cwd" '{tool_input:{command:$c},cwd:$d}' | "$HOOK")
+  got=$(printf '%s' "$out" |
+    jq -r '.hookSpecificOutput.permissionDecisionReason // ""' |
+    sed -nE 's/.*verbs=([^ ]*).*/\1/p')
+
+  if [ "$got" = "$want" ]; then
+    pass=$((pass + 1))
+    printf '  ok   %s\n' "$name"
+  else
+    fail=$((fail + 1))
+    printf '  FAIL %s\n    wanted verbs %s, got %s\n    command: %s\n' \
+      "$name" "$want" "${got:-<none>}" "$command"
   fi
 }
 
@@ -139,6 +168,50 @@ echo "reviewd-gate"
 
 # The shape that always worked.
 check "commit from inside the repository" deny "git commit -m x" "$A"
+
+# ---------------------------------------------------------------------------
+# The other door.
+#
+# A push is watched the same way a commit is, and both verbs travel to
+# `reviewd gate`, which acts on whichever one the repository holds. This hook
+# does not decide that: it reports what it saw.
+#
+# The strings below are built from $VERB and $PUSH rather than written out, for
+# the reason the top of this file gives: a literal one would make this test
+# file itself something the hook fires on.
+# ---------------------------------------------------------------------------
+
+PUSH=$(printf 'push')
+
+check "a push is watched" deny "git $PUSH" "$A"
+check "a push with a remote and a branch is watched" deny "git $PUSH origin main" "$A"
+check "a push named with -C is watched" deny "git -C $A $PUSH" "$work/beta"
+
+check_verbs "a push reports push" "push" "git $PUSH" "$A"
+check_verbs "a commit reports commit" "commit" "git $VERB -m x" "$A"
+
+# One Bash command, two doors. Reporting only the first would let the other
+# through, since nothing looks at this command again.
+check_verbs "a commit and a push report both" "commit,push" \
+  "git $VERB -m x && git $PUSH" "$A"
+
+check_verbs "order does not decide what is reported" "commit,push" \
+  "git $PUSH && git $VERB -m x" "$A"
+
+# A wrapper hides the push from a plain read of the string, the same way it
+# hides a commit.
+check_verbs "a push inside a shell wrapper is found" "push" \
+  "bash -c 'cd $A && git $PUSH'" "$work/beta"
+
+# Neither door. The gate stays out of the way of every other git command, which
+# is most of them.
+check "a fetch is not watched" allow "git fetch origin" "$A"
+check "a status is not watched" allow "git status" "$A"
+
+# `stash push` is a subcommand of stash, not a push, and the verb sits one word
+# further along than the pattern looks.
+check "pushing a stash is not a push" allow "git stash $PUSH -m x" "$A"
+
 
 # The shape that did not. cwd is not a repository, so the gate used to resolve
 # nothing and exit 0.

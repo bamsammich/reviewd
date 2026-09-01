@@ -2,10 +2,10 @@ import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { EMPTY_FINGERPRINT, manifestFingerprint } from '../fingerprint.js'
-import { WAIT_EXIT, type GateResponse } from '../protocol.js'
+import { WAIT_EXIT, type GateResponse, type GateScope } from '../protocol.js'
 import { Client } from './client.js'
 import { loadClientConfig } from './config.js'
-import { diffSource } from './diff.js'
+import { diffCommitRange, diffSource, pushRange } from './diff.js'
 import { ensureDaemon, logPath } from './ensure.js'
 import { git, repoRoot, stagedDivergence } from './git.js'
 import { initPlugin, installedPluginVersion, noClaudeMessage, planInit } from './init.js'
@@ -176,41 +176,81 @@ export async function printFingerprint(path: string, json: boolean): Promise<voi
 }
 
 /**
- * Answers the commit hook.
+ * Answers the gate hook.
  *
  * The reason and the review URL go to stdout so the hook can hand them
  * straight to the agent, and the exit code carries the verdict so a shell
  * script needs no parsing.
+ *
+ * `verb` is what the hook saw. What a repository holds is the daemon's answer,
+ * and asking for it first is what keeps this from diffing a whole repository
+ * to decide a question it was never going to act on: under push gating a
+ * commit is not the gate's business, and the reverse holds too.
  */
-export async function checkGate(path: string, json: boolean): Promise<void> {
+export async function checkGate(
+  path: string,
+  json: boolean,
+  verbs: GateScope[] = ['commit'],
+): Promise<void> {
   const root = await requireRepo(path)
   if (!root) return
 
+  const baseUrl = loadClientConfig().base_url
+  await ensureDaemon(baseUrl)
+  const client = new Client(baseUrl)
+
+  const scope = await client.gateScope(root)
+
+  if (!verbs.includes(scope)) {
+    return report(
+      {
+        decision: 'allow',
+        reason:
+          `${root} gates on ${scope}, and this command ` +
+          `${verbs.length === 1 ? `is a ${verbs[0]}` : `carries no ${scope}`}.`,
+        reviewUrl: null,
+        warnings: [],
+        openThreads: [],
+        scope,
+      },
+      json,
+    )
+  }
+
+  return scope === 'push' ? gatePush(client, root, json) : gateCommit(client, root, scope, json)
+}
+
+async function gateCommit(
+  client: Client,
+  root: string,
+  scope: GateScope,
+  json: boolean,
+): Promise<void> {
   // Asked before the daemon, because the daemon cannot see it. An approval
   // covers the working tree; a commit writes the index. Where those two hold
   // different content, no approval means anything about what is about to land,
   // so this is a refusal rather than a question.
+  //
+  // Inside the commit branch rather than above it, which is what stops it
+  // firing on a repository that gates on push: the index against the working
+  // tree is a question only a commit asks.
   const diverged = await stagedDivergence(root)
   if (diverged.length > 0) {
-    const result: GateResponse = {
-      decision: 'deny',
-      reason:
-        `${diverged.length} file${diverged.length === 1 ? ' has' : 's have'} staged content ` +
-        `that differs from the working tree, so committing would carry code the review never ` +
-        `showed:\n  ${diverged.slice(0, 10).join('\n  ')}\n\n` +
-        `Stage the rest with \`git add -A\`, or unstage with \`git reset\`, then commit again.`,
-      reviewUrl: null,
-      warnings: [],
-      openThreads: [],
-      // Both refusals this function makes on its own are commit-scope
-      // decisions: they compare the index against the working tree, which is a
-      // question only a commit asks. A repository gating on push reaches them
-      // differently, and the hook change that gates a push is what restructures
-      // this. Nothing reads scope yet.
-      scope: 'commit',
-    }
-
-    return report(result, json)
+    return report(
+      {
+        decision: 'deny',
+        reason:
+          `${diverged.length} file${diverged.length === 1 ? ' has' : 's have'} staged content ` +
+          `that differs from the working tree, so committing would carry code the review never ` +
+          `showed:\n  ${diverged.slice(0, 10).join('\n  ')}\n\n` +
+          `Stage the rest with \`git add -A\`, or unstage with \`git reset\`, then commit again.`,
+        reviewUrl: null,
+        warnings: [],
+        openThreads: [],
+        scope,
+      },
+      json,
+    )
   }
 
   // Read once and keep both halves. The tree is what a commit of this reading
@@ -228,7 +268,7 @@ export async function checkGate(path: string, json: boolean): Promise<void> {
         decision: 'allow',
         reason: `${root} has no changes against HEAD, so there is nothing to review.`,
         reviewUrl: null,
-        scope: 'commit',
+        scope,
         warnings: [],
         openThreads: [],
       },
@@ -236,12 +276,68 @@ export async function checkGate(path: string, json: boolean): Promise<void> {
     )
   }
 
-  const baseUrl = loadClientConfig().base_url
-  await ensureDaemon(baseUrl)
-
-  const client = new Client(baseUrl)
   const head = await headSha(root)
   return report(await client.gate(root, value, reading.tree, head), json)
+}
+
+/**
+ * The verdict on the commits a push would carry.
+ *
+ * The working tree is not part of the question here. A push carries commits
+ * that already exist, so an uncommitted edit is neither reviewed nor gated,
+ * which is right: it is not going anywhere.
+ */
+async function gatePush(client: Client, root: string, json: boolean): Promise<void> {
+  const range = await pushRange(root)
+
+  if (range === null) {
+    return report(
+      {
+        decision: 'allow',
+        reason: `Every commit on this branch is already on a remote, so this push carries nothing.`,
+        reviewUrl: null,
+        warnings: [],
+        openThreads: [],
+        scope: 'push',
+      },
+      json,
+    )
+  }
+
+  const reading = await diffCommitRange({ id: '', rootPath: root }, range)
+  const result = await client.gate(root, reading.fingerprint, reading.tree, range.head)
+
+  return report(result.decision === 'allow' ? result : withCommits(result, root, range), json)
+}
+
+/**
+ * Names what is about to leave the machine, on a denial.
+ *
+ * The daemon composes the reason and knows nothing about commits, so the list
+ * is added here. Capped, because a branch of thirty commits produces a wall of
+ * text where the first line is the part that matters.
+ */
+const COMMITS_SHOWN = 5
+
+function withCommits(
+  result: GateResponse,
+  root: string,
+  range: { commits: string[] },
+): GateResponse {
+  const count = range.commits.length
+  const shown = range.commits.slice(0, COMMITS_SHOWN)
+  const rest = count - shown.length
+
+  const lines = shown.map((sha) => `  ${sha.slice(0, 8)}`)
+  if (rest > 0) lines.push(`  and ${rest} more`)
+
+  return {
+    ...result,
+    reason:
+      `${result.reason}\n\n` +
+      `This push would carry ${count} commit${count === 1 ? '' : 's'} from ${root}:\n` +
+      lines.join('\n'),
+  }
 }
 
 /**

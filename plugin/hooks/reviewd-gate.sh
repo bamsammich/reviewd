@@ -44,14 +44,17 @@ deny() {
 # passes an existence check and still answers nothing. Asking it a question with
 # a known answer covers both.
 if [ "$(printf '{"probe":"ok"}' | jq -r '.probe' 2>/dev/null)" != "ok" ]; then
-  deny "reviewd gate: jq is missing or not working, so this commit cannot be checked.
+  deny "reviewd gate: jq is missing or not working, so this command cannot be checked.
 
 Check it with:
   printf '{\"probe\":\"ok\"}' | jq -r .probe
 
-Install it (brew install jq) or fix what is shadowing it, then commit again.
+Install it (brew install jq) or fix what is shadowing it, then try again.
 
-Override this one commit only if the user explicitly asks: prefix the command
+This message says "command" where the rest say "commit" or "push": jq is what
+reads the command, so nothing here knows yet which one it was.
+
+Override this one command only if the user explicitly asks: prefix the command
 with REVIEWD_SKIP=1."
 fi
 
@@ -73,7 +76,7 @@ cwd=$(printf '%s' "$payload" | jq -r '.cwd // empty')
 # Quoted text is data. Splitting through it denied `gh pr create --body` for
 # naming a repository it never touched.
 #
-# Safe only with the recursion in is_commit: a wrapper's argument now survives
+# Safe only with the recursion in runs_git: a wrapper's argument now survives
 # whole, so it is re-read rather than tested as a single command.
 
 # command_head strips leading whitespace, so without this every segment after
@@ -171,17 +174,30 @@ command_head() {
 # bought nothing, which is the trade the paragraph above refuses to make.
 COMMIT_VERBS='commit|merge|rebase|cherry-pick|revert|am|commit-tree|update-ref'
 
+# The other door, watched only where a repository asks for it.
+#
+# A push is the point where code leaves the machine, which is what makes it
+# worth gating instead of every commit on the way there. Whether this
+# repository holds commits or pushes is the daemon's answer, not this script's:
+# both verbs are reported and `reviewd gate` acts on whichever one applies.
+PUSH_VERBS='push'
+
+# Both sets, for the walk that works out which repository a command acts on.
+# That walk cares only that a git command is being gated, since a push carries
+# `-C` exactly the way a commit does.
+GATED_VERBS="${COMMIT_VERBS}|${PUSH_VERBS}"
+
 # Flags and their arguments may sit between git and the subcommand, which is
 # what makes `git -C path commit` a commit and `git -C path show` not.
 #
 # Quoting inside the subcommand is stripped too: `git "commit"` and `git com""mit`
 # are the same command to the shell and were two different strings to the regex.
-is_commit_head() {
+head_runs() {
   local head
   head=$(printf '%s' "$1" | tr -d '"'"'"'')
 
   printf '%s' "$head" |
-    grep -Eq "^git([[:space:]]+-[^[:space:]]+([[:space:]]+[^-][^[:space:]]*)?)*[[:space:]]+(${COMMIT_VERBS})([[:space:]]|$)"
+    grep -Eq "^git([[:space:]]+-[^[:space:]]+([[:space:]]+[^-][^[:space:]]*)?)*[[:space:]]+(${2})([[:space:]]|$)"
 }
 
 # Recursive because segments() keeps a quoted argument whole. command_head
@@ -190,8 +206,8 @@ is_commit_head() {
 #
 # Only a head command_head changed is worth recursing on; anything else is the
 # same string and would not terminate.
-is_commit() {
-  local segment head depth=${2:-0}
+runs_git() {
+  local segment head depth=${3:-0}
   local IFS=$'\n'
 
   [ "$depth" -gt 8 ] && return 1
@@ -199,14 +215,32 @@ is_commit() {
   for segment in $(segments "$1"); do
     segment=$(trim "$segment")
     head=$(command_head "$segment")
-    is_commit_head "$head" && return 0
-    [ "$head" != "$segment" ] && is_commit "$head" $((depth + 1)) && return 0
+    head_runs "$head" "$2" && return 0
+    [ "$head" != "$segment" ] && runs_git "$head" "$2" $((depth + 1)) && return 0
   done
 
   return 1
 }
 
-is_commit "$cmd" || exit 0
+# Every gated verb this command carries, not the first one found.
+#
+# `git commit -m x && git push` is one command and reaches this hook as one
+# string. Reporting only the commit would let the push through on a repository
+# that gates pushes, since nothing else looks at this command again.
+verbs=''
+runs_git "$cmd" "$COMMIT_VERBS" && verbs='commit'
+runs_git "$cmd" "$PUSH_VERBS" && verbs="${verbs:+$verbs,}push"
+
+[ -n "$verbs" ] || exit 0
+
+# What to call this in a message a person reads. A denial that says "commit"
+# about a push describes something that did not happen, which is the fastest
+# way to teach someone the gate does not understand what they are doing.
+case $verbs in
+  commit) noun='commit' ;;
+  push) noun='push' ;;
+  *) noun='commit and push' ;;
+esac
 
 # Escape hatch, for the user to ask for by name.
 #
@@ -258,7 +292,7 @@ resolve_dir() {
 }
 
 # Prints the directory this line's first commit runs in, failing when it holds
-# no commit. Recursive for is_commit's reason: a wrapper's argument is walked
+# no commit. Recursive for runs_git's reason: a wrapper's argument is walked
 # rather than read as one command, so an inner -C still decides the repository.
 #
 # A `cd` inside a wrapper does not carry out to the caller, since a subshell
@@ -273,7 +307,7 @@ walk_to_commit() {
     segment=$(trim "$segment")
     head=$(command_head "$segment")
 
-    if is_commit_head "$head"; then
+    if head_runs "$head" "$GATED_VERBS"; then
       # -C decides the repository for this one invocation without moving the
       # shell, so it wins over wherever the walk had reached.
       path=$(printf '%s' "$head" | sed -nE 's/.*[[:space:]]-C[[:space:]]+([^[:space:]]+).*/\1/p')
@@ -324,7 +358,7 @@ unexpanded_path() {
     head=$(command_head "$segment")
     path=''
 
-    if is_commit_head "$head"; then
+    if head_runs "$head" "$GATED_VERBS"; then
       path=$(printf '%s' "$head" | sed -nE 's/.*[[:space:]]-C[[:space:]]+([^[:space:]]+).*/\1/p')
     else
       case $head in
@@ -343,7 +377,7 @@ unexpanded_path() {
         ;;
     esac
 
-    is_commit_head "$head" && return
+    head_runs "$head" "$GATED_VERBS" && return
   done
 }
 
@@ -354,7 +388,7 @@ if [ -z "$root" ]; then
   variable=$(unexpanded_path)
 
   if [ -n "$variable" ]; then
-    deny "reviewd gate: this is a commit, but the repository is named with a shell
+    deny "reviewd gate: this is a $noun, but the repository is named with a shell
 variable this hook cannot expand: $variable
 
 The hook reads the command as text, before the shell runs it, so $variable is
@@ -365,27 +399,27 @@ Write the path out, either way round:
   git -C /path/to/repo commit ...
   cd /path/to/repo && git commit ...
 
-Override this one commit only if the user explicitly asks: prefix the command
+Override this one $noun only if the user explicitly asks: prefix the command
 with REVIEWD_SKIP=1."
   fi
 
-  deny "reviewd gate: this is a commit, but no git repository could be identified
+  deny "reviewd gate: this is a $noun, but no git repository could be identified
 for it, so it cannot be checked.
 
 Run it from inside the repository, or name the repository explicitly:
   git -C /path/to/repo commit ...
 
-Override this one commit only if the user explicitly asks: prefix the command
+Override this one $noun only if the user explicitly asks: prefix the command
 with REVIEWD_SKIP=1."
 fi
 
 # Not knowing where the git directory is means not knowing whether the gate is
 # off for this repository, and that is a reason to stop rather than to continue.
 if ! gitdir=$(git -C "$root" rev-parse --absolute-git-dir 2>/dev/null); then
-  deny "reviewd gate: $root has no git directory this hook can read, so the commit
+  deny "reviewd gate: $root has no git directory this hook can read, so the $noun
 cannot be checked.
 
-Override this one commit only if the user explicitly asks: prefix the command
+Override this one $noun only if the user explicitly asks: prefix the command
 with REVIEWD_SKIP=1."
 fi
 
@@ -396,7 +430,7 @@ fi
 # visible: a gate that is off says so on every commit, so a transcript shows
 # when it was turned off and by whom, rather than showing nothing at all.
 if [ -f "$gitdir/reviewd-gate-off" ]; then
-  printf 'reviewd gate: OFF for %s (%s exists). Commits are not being checked.\n' \
+  printf 'reviewd gate: OFF for %s (%s exists). Nothing here is being checked.\n' \
     "$root" "$gitdir/reviewd-gate-off" >&2
   exit 0
 fi
@@ -406,11 +440,11 @@ fi
 # rename was enough to open the gate silently. The daemon-down branch below has
 # always denied; this now matches it.
 if ! command -v "$REVIEWD" >/dev/null 2>&1 && [ ! -x "$REVIEWD" ]; then
-  deny "reviewd gate: \"$REVIEWD\" is not on PATH, so this commit cannot be checked.
+  deny "reviewd gate: \"$REVIEWD\" is not on PATH, so this $noun cannot be checked.
 
 Install it, or point REVIEWD_BIN at it.
 
-Override this one commit only if the user explicitly asks: prefix the command
+Override this one $noun only if the user explicitly asks: prefix the command
 with REVIEWD_SKIP=1."
 fi
 
@@ -419,13 +453,13 @@ fi
 # change and restoring the file produces exactly that appearance. Deciding it
 # is `reviewd gate`'s job now, because it is the only side that also checks
 # what the index is holding.
-answer=$("$REVIEWD" gate "$root" --json 2>/dev/null)
+answer=$("$REVIEWD" gate "$root" --json --for "$verbs" 2>/dev/null)
 
 if [ -z "$answer" ]; then
   # A daemon that is down denies rather than waves everything through, because
   # the point of the gate is that unreviewed code does not get committed. The
   # message carries both ways out.
-  deny "reviewd is not answering, so this commit cannot be checked.
+  deny "reviewd is not answering, so this $noun cannot be checked.
 
 It normally starts on first use, so something stopped it from coming up. The
 log says what:
@@ -438,7 +472,7 @@ systemd unit, or the container. Then commit again.
 To turn the gate off for this repository only:
   touch \"$gitdir/reviewd-gate-off\"
 
-Override this one commit only if the user explicitly asks: prefix the command
+Override this one $noun only if the user explicitly asks: prefix the command
 with REVIEWD_SKIP=1."
 fi
 
@@ -469,7 +503,7 @@ Open a review with the reviewd MCP tools (review_create, then review_snapshot
 after edits), and wait for a verdict with:
   reviewd wait --review <id>
 
-Override this one commit only if the user explicitly asks: prefix the command
+Override this one $noun only if the user explicitly asks: prefix the command
 with REVIEWD_SKIP=1."
 
 deny "$message"
