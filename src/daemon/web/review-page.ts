@@ -188,7 +188,9 @@ export function reviewPage(
 
   const body = html` ${topBar(
     review.title,
-    html`${diffControls(review, view, rail)}<span class="rev">rev ${review.snapshotSeq}</span>`,
+    html`${wholeChangeTally(diffs)}${diffControls(review, view, rail)}<span class="rev"
+        >rev ${review.snapshotSeq}</span
+      >`,
   )}
     <main
       id="main"
@@ -220,10 +222,6 @@ export function reviewPage(
         <h1 class="page-title">${review.title}</h1>
         ${scopeList(grouped, threads, diffs, review, view)}
         ${coaching(threads.length, drafts, awaitingYou)} ${commentIndex(threads)}
-        ${tally(
-          [...diffs.values()].reduce((sum, diff) => sum + diff.added, 0),
-          [...diffs.values()].reduce((sum, diff) => sum + diff.removed, 0),
-        )}
       </div>
 
       <div class="files">
@@ -1093,6 +1091,31 @@ function outdatedBlock(page: Page, outdated: Thread[]): SafeHtml {
  * that cannot be honored is worse than no option. The stylesheet stacks the
  * halves there whatever the stored preference says.
  */
+/**
+ * How big the whole change is, in the bar rather than under the file tree.
+ *
+ * The number describes the review, and the tree is one column of it. Put at the
+ * end of the rail, it was read after everything that column exists for, and it
+ * left with the drawer: closing the files to read a wide diff took the only
+ * copy of the size off the page. The bar is the one part the drawer cannot
+ * hide, and it is sticky, so the size stays legible through a review that is
+ * tens of thousands of pixels tall.
+ *
+ * Every file's own tally is unchanged and still in the rail. What moves is the
+ * one number that belongs to no file.
+ */
+function wholeChangeTally(diffs: Diffs): SafeHtml {
+  let added = 0
+  let removed = 0
+
+  for (const diff of diffs.values()) {
+    added += diff.added
+    removed += diff.removed
+  }
+
+  return html`<span class="wholechange">${tally(added, removed)}</span>`
+}
+
 /**
  * The diff controls, in the bar that stays.
  *

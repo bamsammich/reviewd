@@ -197,13 +197,6 @@ ul.reviews .roots {
 .propbar .a { background: var(--add-ink); }
 .propbar .d { background: var(--del-ink); flex: 1; }
 
-/* Its own margin rather than the title's. Wide enough for the app bar to show
-   the title, the h1 above this is taken out of flow and its margin goes with
-   it, leaving the size as the first thing in the rail. */
-/* Last in the column, under the tree and the comments, so the size of the
-   whole change is the thing a reader scrolls past rather than through. */
-.rail > .tally { margin: .9rem 0 0; }
-
 /* ---------- scope: what is under review ---------- */
 
 .scope { margin: 0 0 .9rem; }
@@ -690,6 +683,16 @@ a.addnote.extend { color: var(--accent); opacity: 1; }
 header.top .barcontrols { display: flex; align-items: center; gap: .4rem; flex: 0 0 auto; }
 header.top .barcontrols .viewmode { display: none; }
 
+/* The size of the whole change, at the end of the bar the drawer cannot hide.
+ *
+ * Narrow screens keep the numbers and drop the proportion bar. Measured at
+ * 375px, the numbers and the bar together take 82 pixels out of the title,
+ * which is the review's only name on the page: the h1 in the rail is hidden
+ * because this bar already carries it. The bar is the half that can go, since
+ * it says a ratio the two numbers beside it already state exactly. */
+header.top .wholechange { flex: 0 0 auto; display: inline-flex; }
+header.top .wholechange .propbar { display: none; }
+
 /* Closed: the diff takes the whole width and the tree is gone rather than
    emptied, so nothing keeps a column it is not using. */
 main.review.rail-closed > .rail { display: none; }
@@ -951,6 +954,17 @@ header.top .keeping-up .dismiss:focus-visible { outline: 2px solid currentColor;
 @media (max-width: 30rem) {
   header.top .keeping-up .what { display: none; }
   header.top .keeping-up { padding-left: .35rem; }
+
+  /* Four things want this strip on a phone and three of them fit: the title,
+     the way back to the files, and the size of what is being read. Measured at
+     375px with the drawer closed, keeping the revision as well left the title
+     showing four characters.
+
+     The revision is the one to drop because it is reference rather than
+     something a reader acts on mid-scroll, and because the page announces the
+     part that matters: a new revision arrives as the banner above, which is
+     what a stale number would have been warning about. */
+  header.top .rev { display: none; }
 }
 
 /* ---------- desktop ---------- */
@@ -959,6 +973,9 @@ header.top .keeping-up .dismiss:focus-visible { outline: 2px solid currentColor;
   main { padding: 1.25rem 1.5rem; }
 
   header.top .barcontrols .viewmode { display: inline-flex; }
+
+  /* Room for the ratio as well as the numbers. */
+  header.top .wholechange .propbar { display: inline-flex; }
 
   /* Split needs a diff column wide enough to carry two readable halves, and
      what decides that is the diff column, not the window. Measured at 1024px
