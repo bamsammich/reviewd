@@ -174,6 +174,71 @@ describe('the size of a change', () => {
     expect(markup.match(/>&minus;2</g)).toHaveLength(1)
   })
 
+  /**
+   * The one number that belongs to no file, in the bar rather than the rail.
+   *
+   * Under the tree it was read after everything the column exists for, and it
+   * left with the drawer.
+   */
+  it('puts the size of the whole change in the app bar', () => {
+    const second = { ...file('src/b.ts'), oldText: 'x\n', newText: 'y\nz\n' }
+
+    const markup = reviewPage(summary(), [grew(), second], []).value
+    const bar = markup.match(/<header class="top"[\s\S]*?<\/header>/)?.[0] ?? ''
+
+    expect(bar).toContain('class="wholechange"')
+    expect(bar).toContain('>+5<')
+    expect(bar).toContain('>&minus;2<')
+  })
+
+  it('keeps the size on the page when the file drawer is closed', () => {
+    // The drawer takes the whole rail with it, so a total living there went
+    // with it: the reader closes the files to read a wide diff and the size of
+    // what they are reading disappears.
+    const markup = reviewPage(
+      summary(),
+      [grew()],
+      [],
+      undefined,
+      'split',
+      new Set(),
+      'closed',
+    ).value
+
+    expect(markup).toContain('class="wholechange"')
+    expect(markup).toContain('rail-closed')
+  })
+
+  it('leaves the rail ending at the comment index', () => {
+    const markup = reviewPage(summary(), [grew()], []).value
+    const rail = markup.match(/<div class="rail">[\s\S]*?<div class="files">/)?.[0] ?? ''
+
+    expect(rail).toContain('class="leaf"')
+    expect(rail).not.toContain('class="wholechange"')
+  })
+
+  // 82 pixels measured at 375px, taken out of a title that is the review's
+  // only name on the page once the rail hides its own copy.
+  it('drops the ratio bar from the app bar until there is room for it', () => {
+    const markup = reviewPage(summary(), [grew()], []).value
+
+    expect(markup).toMatch(/header\.top \.wholechange \.propbar \{ display: none; \}/)
+    expect(markup).toMatch(
+      /@media \(min-width: 1024px\)[\s\S]*?header\.top \.wholechange \.propbar \{ display: inline-flex; \}/,
+    )
+  })
+
+  // Four things want the bar on a phone and three of them fit. Measured at
+  // 375px with the drawer closed, keeping all four left the title showing four
+  // characters.
+  it('drops the revision from a phone bar rather than the title or the size', () => {
+    const markup = reviewPage(summary(), [grew()], []).value
+
+    expect(markup).toMatch(
+      /@media \(max-width: 30rem\)[\s\S]*?header\.top \.rev \{ display: none; \}/,
+    )
+  })
+
   it('spells the numbers out for a screen reader and hides the bar from one', () => {
     const markup = reviewPage(summary(), [grew()], []).value
 
