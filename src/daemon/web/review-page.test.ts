@@ -1126,6 +1126,42 @@ describe('hiding the file tree', () => {
     expect(withRail('closed')).toContain('?rail=open')
   })
 
+  /**
+   * One control, one place.
+   *
+   * The half that hid the drawer used to sit inside the drawer, so pressing it
+   * removed the thing pressed and its replacement appeared somewhere else.
+   * GitHub keeps both halves in a single file-tree-toggle; these assert the
+   * same property, that the control never moves.
+   */
+  it('draws the control in the app bar whichever way it points', () => {
+    for (const rail of ['open', 'closed'] as const) {
+      const markup = withRail(rail)
+      const bar = markup.match(/<header class="top"[\s\S]*?<\/header>/)?.[0] ?? ''
+      const controls = bar.match(/<div class="barcontrols">[\s\S]*?<\/div>/)?.[0] ?? ''
+
+      expect(controls).toContain('class="btn quiet drawertoggle"')
+      expect(controls).toContain(rail === 'open' ? 'Hide files' : 'Show files')
+    }
+  })
+
+  it('leaves no way to hide the files inside the files', () => {
+    const markup = withRail('open')
+    const head = markup.match(/<div class="scopehead">[\s\S]*?<\/h2>/)?.[0] ?? ''
+
+    expect(head).not.toContain('rail=closed')
+    expect(markup).not.toContain('hidefiles')
+  })
+
+  // Two of them would be two answers to one question, which is the state this
+  // replaced.
+  it('draws exactly one of them', () => {
+    for (const rail of ['open', 'closed'] as const) {
+      // The class attribute, not the word: the stylesheet names it too.
+      expect(withRail(rail).match(/class="btn quiet drawertoggle"/g)).toHaveLength(1)
+    }
+  })
+
   it('still renders the tree markup so the state is only visual', () => {
     // Closed hides the rail in CSS rather than dropping it, which keeps the
     // page one document and the toggle instant.

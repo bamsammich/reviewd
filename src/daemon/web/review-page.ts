@@ -220,7 +220,7 @@ export function reviewPage(
       -->
       <div class="rail">
         <h1 class="page-title">${review.title}</h1>
-        ${scopeList(grouped, threads, diffs, review, view)}
+        ${scopeList(grouped, threads, diffs)}
         ${coaching(threads.length, drafts, awaitingYou)} ${commentIndex(threads)}
       </div>
 
@@ -287,13 +287,7 @@ function groupBySource(sources: SourceSummary[], files: FileView[]): SourceGroup
  * JavaScript except the marker for the file you are currently reading, which
  * is the one thing the server cannot know.
  */
-function scopeList(
-  groups: SourceGroup[],
-  threads: Thread[],
-  diffs: Diffs,
-  review: ReviewSummary,
-  view: ViewMode,
-): SafeHtml {
+function scopeList(groups: SourceGroup[], threads: Thread[], diffs: Diffs): SafeHtml {
   if (groups.length === 0) return raw('')
 
   const files = groups.reduce((total, group) => total + group.files.length, 0)
@@ -304,7 +298,6 @@ function scopeList(
         ${files} file${files === 1 ? '' : 's'} in
         ${groups.length === 1 ? '1 place' : `${groups.length} places`}
       </h2>
-      ${hideDrawer(review, view)}
       <!--
         Hidden until the script unhides it. A filter box that does nothing is
         worse than no filter box, and the filtering is the script's job.
@@ -1123,27 +1116,12 @@ function wholeChangeTally(diffs: Diffs): SafeHtml {
  * on the page and scrolled it away the moment anyone started reading. The bar
  * is already sticky, so a reader who has scrolled four files down can still
  * change how the fifth is drawn.
- *
- * The drawer control appears here only while the drawer is closed. Its other
- * half lives inside the drawer, next to the list it hides, which is where a
- * control that hides something belongs. Closing the drawer would take that
- * control with it, so the way back has to survive somewhere the drawer cannot
- * hide, and this bar is the one place on the page that is always drawn.
  */
 function diffControls(review: ReviewSummary, view: ViewMode, rail: RailState): SafeHtml {
   const other: ViewMode = view === 'split' ? 'unified' : 'split'
 
   return html`<div class="barcontrols">
-    ${
-      rail === 'closed'
-        ? html`<a
-            class="btn quiet"
-            href="/r/${review.reviewId}?rail=open&view=${view}"
-            aria-expanded="false"
-            >Show files</a
-          >`
-        : raw('')
-    }
+    ${drawerToggle(review, view, rail)}
     <a class="btn quiet viewmode" href="/r/${review.reviewId}?view=${other}&rail=${rail}">
       ${other === 'split' ? 'Show side by side' : 'Show unified'}
     </a>
@@ -1151,20 +1129,34 @@ function diffControls(review: ReviewSummary, view: ViewMode, rail: RailState): S
 }
 
 /**
- * The other half of the drawer control, inside the drawer it closes.
+ * One control for the file drawer, in one place, whichever way it is pointing.
  *
- * An icon, the way GitHub draws the same control. The heading beside it
- * already says how many files are in here, so a button repeating the word
- * would spend a third of a narrow column restating its own neighbour. The
- * label carries the words for anyone who cannot see the shape.
+ * The hiding half used to live inside the drawer, on the argument that a
+ * control belongs to the thing it closes. The half of that argument which
+ * holds is the way back: it has to survive somewhere the drawer cannot hide.
+ * The other half cost a reader the click, because the button they pressed was
+ * the first thing to disappear and its replacement was somewhere else.
+ *
+ * GitHub keeps both halves in one slot: `show-file-tree-button` and
+ * `hide-file-tree-button` are siblings in a single `file-tree-toggle`, one
+ * drawn at a time, neither moving. Same idea here, in the bar rather than in a
+ * strip above the files, because this page moved its diff controls into the
+ * bar and a second toolbar beneath the first is two rows saying one thing.
+ *
+ * An anchor rather than a button: the state travels in the URL and a cookie,
+ * so the control works with the script unloaded, and `aria-expanded` says
+ * which way it points for anyone who cannot see the shape.
  */
-function hideDrawer(review: ReviewSummary, view: ViewMode): SafeHtml {
+function drawerToggle(review: ReviewSummary, view: ViewMode, rail: RailState): SafeHtml {
+  const open = rail === 'open'
+  const label = open ? 'Hide files' : 'Show files'
+
   return html`<a
-    class="btn quiet hidefiles"
-    href="/r/${review.reviewId}?rail=closed&view=${view}"
-    aria-expanded="true"
-    aria-label="Hide files"
-    title="Hide files"
+    class="btn quiet drawertoggle"
+    href="/r/${review.reviewId}?rail=${open ? 'closed' : 'open'}&view=${view}"
+    aria-expanded="${open ? 'true' : 'false'}"
+    aria-label="${label}"
+    title="${label}"
     >${SIDEBAR_ICON}</a
   >`
 }
