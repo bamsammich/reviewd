@@ -1,6 +1,12 @@
-import type { SnapshotManifest, SnapshotResult } from '../protocol.js'
+import type { CommitSpec, FileChangeSpec, SnapshotManifest, SnapshotResult } from '../protocol.js'
 import type { Client } from './client.js'
-import { diffSource, DEFAULT_LIMITS, type DiffLimits, type SourceInput } from './diff.js'
+import {
+  diffPushRange,
+  diffSource,
+  DEFAULT_LIMITS,
+  type DiffLimits,
+  type SourceInput,
+} from './diff.js'
 
 /**
  * Computing every root's change set and pushing it.
@@ -18,15 +24,24 @@ export async function pushSnapshot(
   // No fingerprint travels with this. The daemon derives it from the rows
   // below, so what an approval covers is what the review page rendered rather
   // than a number this process asserted about it.
-  const manifest: SnapshotManifest = { files: [] }
+  const files: FileChangeSpec[] = []
+  const commits: CommitSpec[] = []
   const blobs = new Map<string, Uint8Array>()
 
   for (const source of sources) {
-    const diff = await diffSource(source, limits)
+    const gatedOnPush = (await scopeOf(client, source.rootPath)) === 'push'
+    const push = gatedOnPush ? await diffPushRange(source, limits) : null
 
-    manifest.files.push(...diff.files)
+    // A root with nothing to push falls back to the working tree, which is
+    // what a reviewer opening the page before committing expects to read.
+    const diff = push?.diff ?? (await diffSource(source, limits))
+
+    files.push(...diff.files)
+    if (push) commits.push(...push.commits)
     for (const [id, bytes] of diff.blobs) blobs.set(id, bytes)
   }
+
+  const manifest: SnapshotManifest = { files, commits }
 
   // Ask before sending. Revision N+1 of a 200-file review usually has a
   // handful of new blobs and the daemon already holds the rest.
@@ -39,4 +54,27 @@ export async function pushSnapshot(
   }
 
   return client.snapshot(reviewId, manifest)
+}
+
+/**
+ * How this root is gated, which decides what a revision of it describes.
+ *
+ * Under commit gating the question is the working tree against HEAD, because
+ * that is what a commit would record. Under push gating it is the commits an
+ * upstream has not seen, and the working tree is not part of it.
+ *
+ * The daemon answers rather than the caller deciding, so the change set the
+ * reviewer approves is the one the gate will ask about. A review computed the
+ * other way holds an approval the gate can never match, and a reviewer who
+ * said yes finds the commit refused anyway.
+ *
+ * Asked once per revision rather than remembered for the life of the process,
+ * so editing the config takes effect on the next snapshot instead of on the
+ * next restart of an agent that may run for days.
+ */
+async function scopeOf(client: Client, root: string): Promise<string> {
+  // A daemon that cannot answer is not a reason to refuse a revision, so an
+  // older one, or one briefly unreachable, reads as commit gating: what every
+  // review did before push gating existed.
+  return client.gateScope(root).catch(() => 'commit')
 }

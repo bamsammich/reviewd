@@ -136,14 +136,46 @@ export const fileChangeSpec = z.object({
 export type FileChangeSpec = z.infer<typeof fileChangeSpec>
 
 /**
+ * One commit of a push, and what that commit alone changed.
+ *
+ * The daemon cannot ask git for any of this, so the client reads it and sends
+ * it. `files` here is the commit's own change set against its parent, which is
+ * a different set from the combined one: a file taken from 1 to 2 to 3 across
+ * two commits has one row in the combined diff and one in each commit.
+ */
+export const commitSpec = z.object({
+  sourceId: z.string(),
+  sha: z.string().min(1),
+  subject: z.string(),
+  author: z.string(),
+  committedAt: z.number().int(),
+  files: z.array(fileChangeSpec),
+})
+export type CommitSpec = z.infer<typeof commitSpec>
+
+/**
  * No fingerprint on the wire.
  *
  * The daemon derives it from these rows, because a fingerprint the client sends
  * is a claim about bytes rather than a fact about them: a client could upload
  * one change set for the reviewer to read and name the hash of a different one.
+ *
+ * It derives that from `files` alone, and has to: the gate asks about a push
+ * by diffing its two ends, a reading with no commits in it. A fingerprint fed
+ * by commits could never match the number the gate arrives with, so every
+ * approval would be refused.
  */
 export const snapshotManifest = z.object({
   files: z.array(fileChangeSpec),
+  /**
+   * Oldest first, the order they were written and the order the page lists
+   * them in. `git rev-list` answers the other way round, so the client turns
+   * it over once rather than leaving two orders in the system.
+   *
+   * Optional rather than defaulted, so a revision with no commits and a client
+   * too old to have heard of them arrive as the same thing.
+   */
+  commits: z.array(commitSpec).optional(),
 })
 export type SnapshotManifest = z.infer<typeof snapshotManifest>
 

@@ -6,6 +6,7 @@ import {
   commitInfo,
   diffCommitRange,
   diffOneCommit,
+  diffPushRange,
   diffFileSet,
   diffGitSource,
   diffSource,
@@ -646,5 +647,83 @@ describe('what one commit changed', () => {
     const diff = await diffOneCommit(source(repo.root), head)
 
     expect(diff.files.map((f) => f.path)).toEqual(['src/c.ts'])
+  })
+})
+
+describe('reading a push as its commits', () => {
+  const published = () => repo.run('update-ref', 'refs/remotes/origin/main', 'HEAD')
+
+  it('gives the combined change set and the commits it divides into', async () => {
+    published()
+    repo.write('src/a.ts', 'const a = 2\n')
+    repo.commit('to two')
+    repo.write('src/a.ts', 'const a = 3\n')
+    repo.commit('to three')
+
+    const push = (await diffPushRange(source(repo.root)))!
+
+    // Oldest first, which is the order they were written and the order the
+    // ordinal the daemon assigns has to mean.
+    expect(push.commits.map((c) => c.subject)).toEqual(['to two', 'to three'])
+    expect(push.commits.every((c) => c.sourceId === 'source-1')).toBe(true)
+
+    // One file in the combined reading, at its final state; each commit holds
+    // the state it left behind.
+    expect(push.diff.files.map((f) => f.path)).toEqual(['src/a.ts'])
+    const combined = push.diff.files[0]!.newBlobId as string
+    const first = push.commits[0]!.files[0]!.newBlobId as string
+    expect(first).not.toBe(combined)
+    expect(text(push.diff.blobs.get(first))).toBe('const a = 2\n')
+  })
+
+  it('carries the bytes of a state no combined diff holds', async () => {
+    // The blobs the caller uploads come from one map, so a commit's own sides
+    // travel with the push rather than being asked for later.
+    published()
+    repo.write('src/a.ts', 'const a = 2\n')
+    repo.commit('to two')
+    repo.write('src/a.ts', 'const a = 3\n')
+    repo.commit('to three')
+
+    const push = (await diffPushRange(source(repo.root)))!
+    const sides = push.commits.flatMap((c) =>
+      c.files.flatMap((f) => [f.oldBlobId, f.newBlobId].filter((id) => id !== null)),
+    )
+
+    expect(sides.length).toBeGreaterThan(0)
+    for (const id of sides) expect(push.diff.blobs.has(id as string)).toBe(true)
+  })
+
+  it('says nothing when every commit is already on a remote', async () => {
+    published()
+    expect(await diffPushRange(source(repo.root))).toBeNull()
+  })
+
+  it('says nothing about a directory that is not a repository', async () => {
+    const plain = mkdtempSync(join(tmpdir(), 'reviewd-plain-'))
+    writeFileSync(join(plain, 'notes.md'), 'nothing to push\n')
+
+    try {
+      expect(await diffPushRange(source(plain))).toBeNull()
+    } finally {
+      rmSync(plain, { recursive: true, force: true })
+    }
+  })
+
+  it('reads a merge as what it merged in, and the rest as itself', async () => {
+    published()
+    repo.run('checkout', '-q', '-b', 'side')
+    repo.write('src/c.ts', 'const c = 1\n')
+    repo.commit('on the side')
+    repo.run('checkout', '-q', 'main')
+    repo.write('src/a.ts', 'const a = 2\n')
+    repo.commit('on main')
+    repo.run('merge', '--no-ff', '-m', 'merge side', 'side')
+
+    const push = (await diffPushRange(source(repo.root)))!
+    const merge = push.commits.find((c) => c.subject === 'merge side')!
+
+    expect(merge.files.map((f) => f.path)).toEqual(['src/c.ts'])
+    expect(push.diff.files.map((f) => f.path).sort()).toEqual(['src/a.ts', 'src/c.ts'])
   })
 })
