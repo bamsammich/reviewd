@@ -3,7 +3,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  commitInfo,
   diffCommitRange,
+  diffOneCommit,
   diffFileSet,
   diffGitSource,
   diffSource,
@@ -523,5 +525,126 @@ describe('the range a push would carry', () => {
     const after = await diffCommitRange(source(repo.root), (await pushRange(repo.root))!)
 
     expect(after.fingerprint).toBe(before.fingerprint)
+  })
+})
+
+/**
+ * What each commit of a push says about itself, and what each one did.
+ *
+ * The daemon cannot ask git any of this, so the client reads it and uploads
+ * it. These cover the reading.
+ */
+describe('reading the commits of a push', () => {
+  const published = () => repo.run('update-ref', 'refs/remotes/origin/main', 'HEAD')
+
+  it('reads subject, author and date for each commit', async () => {
+    published()
+    repo.write('src/a.ts', 'const a = 2\n')
+    repo.commit('second commit')
+
+    const range = (await pushRange(repo.root))!
+    const [info] = await commitInfo(repo.root, range.commits)
+
+    expect(info?.sha).toBe(range.commits[0])
+    expect(info?.subject).toBe('second commit')
+    expect(info?.author).toBe('test')
+    expect(info?.committedAt).toBeGreaterThan(0)
+  })
+
+  // A subject with a field separator in it cannot happen, but a subject with
+  // the shapes people actually use can: quotes, colons, and a trailing space.
+  it('survives a subject full of punctuation', async () => {
+    published()
+    repo.write('src/a.ts', 'const a = 2\n')
+    repo.commit('fix: "quoted", and a | pipe')
+
+    const range = (await pushRange(repo.root))!
+    const [info] = await commitInfo(repo.root, range.commits)
+
+    expect(info?.subject).toBe('fix: "quoted", and a | pipe')
+  })
+
+  it('reads every commit in one call, oldest last', async () => {
+    published()
+    repo.write('src/a.ts', 'const a = 2\n')
+    repo.commit('older')
+    repo.write('src/a.ts', 'const a = 3\n')
+    repo.commit('newer')
+
+    const range = (await pushRange(repo.root))!
+    const infos = await commitInfo(repo.root, range.commits)
+
+    expect(infos.map((i) => i.subject)).toEqual(['newer', 'older'])
+  })
+
+  it('says nothing about no commits rather than asking git about none', async () => {
+    expect(await commitInfo(repo.root, [])).toEqual([])
+  })
+})
+
+describe('what one commit changed', () => {
+  const published = () => repo.run('update-ref', 'refs/remotes/origin/main', 'HEAD')
+
+  it('describes only that commit, not the range around it', async () => {
+    published()
+    repo.write('src/a.ts', 'const a = 2\n')
+    repo.commit('touch a')
+    repo.write('src/b.ts', 'const b = 2\n')
+    repo.commit('touch b')
+
+    const range = (await pushRange(repo.root))!
+    const newest = range.commits[0] as string
+
+    const diff = await diffOneCommit(source(repo.root), newest)
+
+    expect(diff.files.map((f) => f.path)).toEqual(['src/b.ts'])
+  })
+
+  // The state a file passed through, which the combined diff never shows: the
+  // whole push leaves src/a.ts at 3, and the first commit left it at 2.
+  it('shows the intermediate state a later commit replaced', async () => {
+    published()
+    repo.write('src/a.ts', 'const a = 2\n')
+    repo.commit('to two')
+    repo.write('src/a.ts', 'const a = 3\n')
+    repo.commit('to three')
+
+    const range = (await pushRange(repo.root))!
+    const oldest = range.commits[range.commits.length - 1] as string
+
+    const first = await diffOneCommit(source(repo.root), oldest)
+    const whole = await diffCommitRange(source(repo.root), range)
+
+    expect(first.files).toHaveLength(1)
+    expect(whole.files).toHaveLength(1)
+    expect(first.fingerprint).not.toBe(whole.fingerprint)
+  })
+
+  it('reads a first commit as every file added', async () => {
+    const range = (await pushRange(repo.root))!
+    const only = range.commits[range.commits.length - 1] as string
+
+    const diff = await diffOneCommit(source(repo.root), only)
+
+    expect(diff.files.map((f) => f.path).sort()).toEqual(['src/a.ts', 'src/b.ts'])
+    expect(diff.files.every((f) => f.changeType === 'added')).toBe(true)
+  })
+
+  // A merge is read against its first parent, which is what the other side's
+  // own commits already cover.
+  it('reads a merge against the branch it was merged into', async () => {
+    published()
+    repo.run('checkout', '-q', '-b', 'side')
+    repo.write('src/c.ts', 'const c = 1\n')
+    repo.commit('on the side')
+    repo.run('checkout', '-q', 'main')
+    repo.write('src/a.ts', 'const a = 2\n')
+    repo.commit('on main')
+    repo.run('merge', '--no-ff', '-m', 'merge side', 'side')
+
+    const head = repo.run('rev-parse', 'HEAD').trim()
+    const diff = await diffOneCommit(source(repo.root), head)
+
+    expect(diff.files.map((f) => f.path)).toEqual(['src/c.ts'])
   })
 })

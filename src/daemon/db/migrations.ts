@@ -348,11 +348,71 @@ const reviewLevelThreads: Migration = {
   },
 }
 
+/**
+ * The commits a snapshot covers, and which one each file change belongs to.
+ *
+ * A push carries commits and the review showed their sum, which is the whole
+ * change and none of the author's division of it. Reading commit by commit is
+ * the point of gating late.
+ *
+ * The daemon cannot work any of this out for itself: it never runs git and
+ * cannot see the repository, so a commit and its change set arrive the way
+ * everything else does, computed by the client and uploaded.
+ *
+ * `commit_id` is nullable and the combined change set keeps it null. Rows the
+ * page already draws are untouched, and a review created before this migration
+ * carries no commits and renders exactly as it did.
+ */
+const commitScopes: Migration = {
+  async up(db: MigrationDb): Promise<void> {
+    await db.schema
+      .createTable('commit')
+      .addColumn('id', 'text', (c) => c.primaryKey())
+      .addColumn('snapshot_id', 'text', (c) =>
+        c.notNull().references('snapshot.id').onDelete('cascade'),
+      )
+      .addColumn('source_id', 'text', (c) =>
+        c.notNull().references('source.id').onDelete('cascade'),
+      )
+      .addColumn('sha', 'text', (c) => c.notNull())
+      .addColumn('subject', 'text', (c) => c.notNull())
+      .addColumn('author', 'text', (c) => c.notNull())
+      .addColumn('committed_at', 'integer', (c) => c.notNull())
+      // Oldest first, so the page lists them in the order they were written
+      // rather than in whatever order rev-list returned.
+      .addColumn('ordinal', 'integer', (c) => c.notNull())
+      .execute()
+
+    await db.schema
+      .createIndex('commit_snapshot')
+      .on('commit')
+      .columns(['snapshot_id', 'ordinal'])
+      .execute()
+
+    await db.schema.alterTable('file_change').addColumn('commit_id', 'text').execute()
+
+    // Every read of a commit's files asks this question and only this one.
+    await db.schema
+      .createIndex('file_change_commit')
+      .on('file_change')
+      .columns(['commit_id'])
+      .execute()
+  },
+
+  async down(db: MigrationDb): Promise<void> {
+    await db.schema.dropIndex('file_change_commit').execute()
+    await db.schema.alterTable('file_change').dropColumn('commit_id').execute()
+    await db.schema.dropIndex('commit_snapshot').execute()
+    await db.schema.dropTable('commit').execute()
+  },
+}
+
 export const migrations: Record<string, Migration> = {
   '0001_initial': initial,
   '0002_line_ranges': lineRanges,
   '0003_gated_tree': gatedTree,
   '0004_review_level_threads': reviewLevelThreads,
+  '0005_commit_scopes': commitScopes,
 }
 
 export class CodeMigrationProvider implements MigrationProvider {

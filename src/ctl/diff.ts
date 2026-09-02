@@ -553,3 +553,66 @@ export async function diffCommitRange(
     tree: (await git(root, ['rev-parse', `${range.head}^{tree}`])).trim(),
   }
 }
+
+/**
+ * What a commit says about itself, for a daemon that cannot ask git.
+ *
+ * Fields are separated by a byte no commit subject can contain. Written as an
+ * escape rather than typed, for the reason fingerprint.ts gives about the same
+ * choice: a source file holding a raw control byte reads as binary to anything
+ * inspecting it, reviewd's own looksBinary included, so the file describing
+ * the format becomes the one nobody can review.
+ */
+export interface CommitInfo {
+  sha: string
+  subject: string
+  author: string
+  committedAt: number
+}
+
+const FIELD = '\u001f'
+
+export async function commitInfo(root: string, shas: readonly string[]): Promise<CommitInfo[]> {
+  if (shas.length === 0) return []
+
+  const out = await git(root, [
+    'show',
+    '--no-patch',
+    `--format=%H${FIELD}%s${FIELD}%an${FIELD}%ct`,
+    ...shas,
+  ])
+
+  return out
+    .split('\n')
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const [sha = '', subject = '', author = '', at = '0'] = line.split(FIELD)
+      return { sha, subject, author, committedAt: Number(at) * 1000 }
+    })
+}
+
+/**
+ * What one commit changed, against its own parent.
+ *
+ * A merge is compared against its first parent, which is what `git show` does
+ * and what a reader means by "what this commit did": the other parent's work
+ * arrived through its own commits, and every one of those is already in the
+ * range.
+ */
+export async function diffOneCommit(
+  source: SourceInput,
+  sha: string,
+  limits: DiffLimits = DEFAULT_LIMITS,
+): Promise<SourceDiff> {
+  const root = source.rootPath
+
+  let parent: string
+  try {
+    parent = (await git(root, ['rev-parse', '--verify', `${sha}^1`])).trim()
+  } catch {
+    // A root commit has no parent, so everything in it reads as an addition.
+    parent = (await git(root, ['hash-object', '-t', 'tree', '/dev/null'])).trim()
+  }
+
+  return diffCommitRange(source, { base: parent, head: sha }, limits)
+}
