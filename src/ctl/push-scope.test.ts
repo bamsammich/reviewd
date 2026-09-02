@@ -173,9 +173,18 @@ describe('a revision under commit gating', () => {
  * A base the caller named, under a repository gated on push.
  *
  * Reported as issue 41: the review stored the base it was given and diffed the
- * push range anyway, so the page showed every commit on the branch, marked a
- * file from before the base as added, and left the working tree out. Under
- * push gating that is an approval covering a page the change is not on.
+ * push range anyway, so the page showed every commit on the branch and marked
+ * a file from before the base as added.
+ *
+ * A base answers where a branch begins, which is what stacked work needs. The
+ * pull request below this one is already somebody's review, the base is the
+ * boundary between the two, and the reading is the commits from there to HEAD.
+ * An edit nobody committed stays out, because a push does not carry one.
+ *
+ * Narrowing a review this way hides nothing from the gate, which reads the
+ * push range itself and wants an approval for every commit in it. A commit
+ * left out of the review is a commit left unapproved, and
+ * `push-approval.test.ts` is where that guarantee is held.
  */
 describe('a base the caller named', () => {
   /** Two commits past the base, plus an edit nobody committed. */
@@ -193,7 +202,7 @@ describe('a base the caller named', () => {
     return base
   }
 
-  it('compares against that base rather than the push range', async () => {
+  it('reads from that base rather than from where the push starts', async () => {
     const { client } = daemon('push')
     const review = await reviewOf(client)
     const base = threeCommitsAndAnEdit()
@@ -208,9 +217,9 @@ describe('a base the caller named', () => {
       .where('commit_id', 'is', null)
       .execute()
 
-    // Commit C, and the file nobody committed. Not commit A or B, which are
-    // behind the base the caller named.
-    expect(files.map((f) => f.path).sort()).toEqual(['src/c.ts', 'src/d.ts'])
+    // Commit C alone. Not A or B, which sit behind the base the caller named,
+    // and not the uncommitted file, which no push carries.
+    expect(files.map((f) => f.path).sort()).toEqual(['src/c.ts'])
   })
 
   it('leaves a file from before the base out of the review', async () => {
@@ -230,8 +239,9 @@ describe('a base the caller named', () => {
     expect(paths).not.toContain('src/b.ts')
   })
 
-  // Commits describe a push, and a review of some other range is not one.
-  it('lists no commits, because it is not describing a push', async () => {
+  // The commits are what the reviewer approves one at a time, so a review
+  // narrowed to a base has to list the ones inside it and no others.
+  it('lists the commits inside the base, and none behind it', async () => {
     const { client } = daemon('push')
     const review = await reviewOf(client)
     const base = threeCommitsAndAnEdit()
@@ -240,7 +250,25 @@ describe('a base the caller named', () => {
       { id: review.sources[0]!.id, rootPath: repo.root, baseRef: base },
     ])
 
-    expect(await ctx.db.selectFrom('commit').selectAll().execute()).toEqual([])
+    const commits = await ctx.db.selectFrom('commit').selectAll().orderBy('ordinal').execute()
+    expect(commits.map((c) => c.subject)).toEqual(['commit C'])
+  })
+
+  // A rebase rewrites a sha and leaves the change alone, and the approval has
+  // to survive that or a stack is re-read after every one.
+  it('records what each commit does, so an approval outlives a rebase', async () => {
+    const { client } = daemon('push')
+    const review = await reviewOf(client)
+    const base = threeCommitsAndAnEdit()
+
+    await pushSnapshot(client, review.reviewId, [
+      { id: review.sources[0]!.id, rootPath: repo.root, baseRef: base },
+    ])
+
+    const commit = await ctx.db.selectFrom('commit').selectAll().executeTakeFirstOrThrow()
+
+    expect(commit.patch_id).toMatch(/^[0-9a-f]{40}$/)
+    expect(commit.parent_sha).toBe(base)
   })
 
   it('still reads the push range when no base is named', async () => {

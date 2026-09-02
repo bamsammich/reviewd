@@ -1,6 +1,6 @@
 import type { Kysely } from 'kysely'
 import type { GateResponse, ObserveResponse, ReleaseResult } from '../protocol.js'
-import { gateScopeFor } from './config.js'
+import { approvalFollowsChange, gateScopeFor } from './config.js'
 import { now } from './db/ids.js'
 import type { Database } from './db/types.js'
 import { reviewUrl, ReviewError, type Deps } from './reviews.js'
@@ -25,12 +25,21 @@ import { reviewUrl, ReviewError, type Deps } from './reviews.js'
  */
 const APPROVAL_TTL_MS = 12 * 60 * 60 * 1000
 
+export interface PushCommit {
+  sha: string
+  patchId?: string | null | undefined
+  parentSha?: string | null | undefined
+  subject?: string | undefined
+}
+
 export interface GateQuery {
   root: string
   fingerprint: string
   /** What this reading would commit, recorded so observe can compare. */
   tree?: string | null | undefined
   head?: string | null | undefined
+  /** What a push carries, oldest first. Absent unless the question is a push. */
+  commits?: PushCommit[] | undefined
 }
 
 export async function gate(deps: Deps, query: GateQuery): Promise<GateResponse> {
@@ -84,7 +93,144 @@ export async function gate(deps: Deps, query: GateQuery): Promise<GateResponse> 
     }
   }
 
+  // No approval covers this push as one range, which a stacked branch reaches
+  // constantly: the commits underneath were read in their own review, and the
+  // range moves the moment either branch gains a commit. Asking commit by
+  // commit answers that without asking anybody to read the same code twice.
+  if (query.commits !== undefined && query.commits.length > 0) {
+    const verdict = await gateCommits(deps, query.root, query.commits)
+    if (verdict !== null) return { ...verdict, scope }
+  }
+
   return { ...(await deny(deps, query)), scope }
+}
+
+/**
+ * Whether every commit a push carries was approved, one at a time.
+ *
+ * Null when nothing in this repository has ever been approved per commit,
+ * which is a daemon holding approvals written before commits were the unit.
+ * Falling through to the fingerprint leaves those working rather than denying
+ * a reviewer's yes because the schema moved underneath it.
+ *
+ * A commit counts as approved when its sha was approved. Where
+ * `gate.approval_follows` is `change`, which is the default, a matching patch
+ * id counts too, and that is what carries an approval through a rebase, a
+ * reword, or a cherry-pick onto another branch. The patch id is a weaker claim
+ * on purpose: it says somebody read this change, not that they read it sitting
+ * where it sits now. Where the two disagree the response says so, because a
+ * commit that moved is worth a reader knowing about and is not worth refusing
+ * a push over.
+ *
+ * Setting `gate.approval_follows` to `commit` takes that away, for a
+ * repository where a review is about a state rather than a change: every
+ * rewrite then costs a fresh approval.
+ */
+async function gateCommits(
+  deps: Deps,
+  root: string,
+  commits: PushCommit[],
+): Promise<Omit<GateResponse, 'scope'> | null> {
+  const { db, config } = deps
+
+  const approved = await db
+    .selectFrom('approved_commit')
+    .selectAll()
+    .where('root_path', '=', root)
+    .where('approved_at', '>', now() - APPROVAL_TTL_MS)
+    .execute()
+
+  if (approved.length === 0) return null
+
+  const bySha = new Map(approved.map((row) => [row.sha, row]))
+
+  // Empty where the repository attaches an approval to the commit rather than
+  // to what it does, which leaves every commit answerable by sha alone.
+  const byPatch = approvalFollowsChange(config)
+    ? new Map(
+        approved.filter((row) => row.patch_id !== null).map((row) => [row.patch_id as string, row]),
+      )
+    : new Map<string, (typeof approved)[number]>()
+
+  const missing: PushCommit[] = []
+  const moved: string[] = []
+  const covering: string[] = []
+
+  for (const commit of commits) {
+    const exact = bySha.get(commit.sha)
+    const rebased = commit.patchId != null ? byPatch.get(commit.patchId) : undefined
+    const row = exact ?? rebased
+
+    if (row === undefined) {
+      missing.push(commit)
+      continue
+    }
+
+    covering.push(row.review_id)
+
+    // Approved under a different sha, so the branch was rewritten after it was
+    // read. The change is the one that was approved; where it sits is not.
+    if (exact === undefined) moved.push(commit.sha.slice(0, 12))
+  }
+
+  const reviewId = covering[0]
+  const url = reviewId !== undefined ? reviewUrl(config, reviewId) : null
+
+  if (missing.length > 0) {
+    return {
+      decision: 'deny',
+      reason: denialForCommits(root, missing, commits.length),
+      reviewUrl: url,
+      warnings: [],
+      openThreads: [],
+    }
+  }
+
+  const openThreads = reviewId !== undefined ? await openThreadsFor(db, reviewId) : []
+
+  const warnings =
+    moved.length === 0
+      ? []
+      : [
+          `${moved.length === 1 ? 'Commit' : 'Commits'} ${moved.join(', ')} ${
+            moved.length === 1 ? 'carries' : 'carry'
+          } an approved change under a sha nobody approved, which a rebase, a ` +
+            `reword or a cherry-pick all leave behind. The change was read; where ` +
+            `it now sits was not.`,
+        ]
+
+  return {
+    decision: 'allow',
+    reason: `every commit this push carries in ${root} was approved`,
+    reviewUrl: url,
+    warnings,
+    openThreads,
+  }
+}
+
+/** Named, because a reader cannot act on a count. */
+const COMMITS_NAMED = 5
+
+function denialForCommits(root: string, missing: PushCommit[], total: number): string {
+  const named = missing
+    .slice(0, COMMITS_NAMED)
+    .map((commit) => {
+      const subject = commit.subject !== undefined && commit.subject.length > 0
+      return `  ${commit.sha.slice(0, 12)}${subject ? ` ${commit.subject}` : ''}`
+    })
+    .join('\n')
+
+  const rest = missing.length - Math.min(missing.length, COMMITS_NAMED)
+  const more = rest > 0 ? `\n  and ${rest} more` : ''
+
+  return (
+    `This push carries ${total} ${total === 1 ? 'commit' : 'commits'} in ${root}, and ` +
+    `${missing.length} of them ${missing.length === 1 ? 'has' : 'have'} no approval:\n` +
+    `${named}${more}\n` +
+    `Open a review that reaches back far enough to include ${
+      missing.length === 1 ? 'it' : 'them'
+    }, or push the branch below this one first so its commits stop being part of this push.`
+  )
 }
 
 export interface ObserveQuery {

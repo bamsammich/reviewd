@@ -78,8 +78,33 @@ export const configSchema = z.object({
       scope: gateScope.default('commit'),
       /** Keyed by absolute repository root, which is what the hook sends. */
       roots: z.record(z.string(), gateScope).default({}),
+      /**
+       * Whether an approval is attached to what a commit does or to the commit
+       * itself.
+       *
+       * A push is approved commit by commit, and plenty of ordinary git gives
+       * a commit a new sha while leaving its change alone. Under `change`, a
+       * commit whose sha has moved is recognised by `git patch-id --stable`,
+       * and the gate reports the move rather than refusing it.
+       *
+       * Not only rebase, which is why the setting is not named after one
+       * command. Measured against git: a rebase, a `commit --amend` that only
+       * rewords, and a `cherry-pick` onto another branch all keep a commit's
+       * patch id, while squashing two commits into one changes it.
+       *
+       * `commit` is the stricter reading, for a repository where a review is
+       * about a state rather than a change: the same patch on a different
+       * parent can behave differently, and nobody read it sitting there. Every
+       * rewrite then costs a fresh approval, which is the point.
+       *
+       * `change` is the default because refusing was the older behaviour's
+       * accident rather than its intent. A range fingerprint moved on rebase
+       * because it hashed a range, not because anybody decided a rewrite
+       * should throw a reading away.
+       */
+      approval_follows: z.enum(['change', 'commit']).default('change'),
     })
-    .default({ scope: 'commit', roots: {} }),
+    .default({ scope: 'commit', roots: {}, approval_follows: 'change' }),
 })
 
 export type Config = z.infer<typeof configSchema>
@@ -93,6 +118,11 @@ export type Config = z.infer<typeof configSchema>
  */
 export function gateScopeFor(config: Config, root: string): GateScope {
   return config.gate.roots[root] ?? config.gate.scope
+}
+
+/** Whether a commit approved under one sha still counts under another. */
+export function approvalFollowsChange(config: Config): boolean {
+  return config.gate.approval_follows === 'change'
 }
 
 /** Config plus everything derived from it, so nothing recomputes a base URL. */

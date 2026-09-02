@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -576,6 +576,14 @@ export interface CommitInfo {
   subject: string
   author: string
   committedAt: number
+  /**
+   * The first parent, or null for a root commit.
+   *
+   * First rather than every parent, because it is the one a merge was built on
+   * and the one `diffOneCommit` compares against, so a reader and the gate
+   * both mean the same thing by what a commit sat on.
+   */
+  parentSha: string | null
 }
 
 const FIELD = '\u001f'
@@ -586,7 +594,7 @@ export async function commitInfo(root: string, shas: readonly string[]): Promise
   const out = await git(root, [
     'show',
     '--no-patch',
-    `--format=%H${FIELD}%s${FIELD}%an${FIELD}%ct`,
+    `--format=%H${FIELD}%s${FIELD}%an${FIELD}%ct${FIELD}%P`,
     ...shas,
   ])
 
@@ -594,9 +602,76 @@ export async function commitInfo(root: string, shas: readonly string[]): Promise
     .split('\n')
     .filter((line) => line.length > 0)
     .map((line) => {
-      const [sha = '', subject = '', author = '', at = '0'] = line.split(FIELD)
-      return { sha, subject, author, committedAt: Number(at) * 1000 }
+      const [sha = '', subject = '', author = '', at = '0', parents = ''] = line.split(FIELD)
+      const first = parents.trim().split(' ')[0] ?? ''
+
+      return {
+        sha,
+        subject,
+        author,
+        committedAt: Number(at) * 1000,
+        parentSha: first.length > 0 ? first : null,
+      }
     })
+}
+
+/**
+ * What each commit does, hashed from its diff rather than from its history.
+ *
+ * A rebase rewrites every sha it touches and leaves the patches alone, so a
+ * sha answers "is this the commit somebody read" with no whenever the branch
+ * has moved underneath. `git patch-id --stable` answers the question the push
+ * gate is actually asking, which is whether the change was read, and it keeps
+ * an approved stack alive across the rebases that stacked work runs on.
+ *
+ * Two commits can share an id. A merge's first-parent diff is the change the
+ * merged branch made, so merging an approved branch produces a merge covered
+ * by the same reading, which is the answer a reviewer asked about it would
+ * give.
+ *
+ * A commit git cannot describe is absent from the map rather than present with
+ * an empty value, which leaves the gate matching it on sha alone.
+ */
+export async function patchIds(
+  root: string,
+  shas: readonly string[],
+): Promise<Map<string, string>> {
+  const ids = new Map<string, string>()
+  if (shas.length === 0) return ids
+
+  // Two processes rather than one, because the pipeline git documents for this
+  // has no spelling as a single command. `--no-walk` reads exactly the commits
+  // named instead of their ancestors, and `--first-parent` is what gives a
+  // merge a patch at all: git prints nothing for one by default.
+  const log = spawn('git', [
+    '-C',
+    root,
+    'log',
+    '--no-walk',
+    '--first-parent',
+    '-p',
+    '--no-color',
+    ...shas,
+  ])
+  const patch = spawn('git', ['patch-id', '--stable'])
+
+  log.stdout.pipe(patch.stdin)
+
+  const chunks: Buffer[] = []
+  patch.stdout.on('data', (chunk: Buffer) => chunks.push(chunk))
+
+  const out = await new Promise<string>((done, fail) => {
+    log.on('error', fail)
+    patch.on('error', fail)
+    patch.on('close', () => done(Buffer.concat(chunks).toString('utf8')))
+  })
+
+  for (const line of out.split('\n')) {
+    const [id = '', sha = ''] = line.trim().split(' ')
+    if (id.length > 0 && sha.length > 0) ids.set(sha, id)
+  }
+
+  return ids
 }
 
 /**
@@ -643,11 +718,63 @@ export async function diffPushRange(
   const range = await pushRange(source.rootPath)
   if (range === null) return null
 
+  return diffRange(source, range, limits)
+}
+
+/**
+ * What a push would carry if it started where somebody said it starts.
+ *
+ * Under push gating a base answers "where does this branch begin", which is
+ * the question stacked work makes worth asking: the pull request below this
+ * one is already somebody else's review, and the base is the boundary between
+ * the two. The reading is the commits from that base to HEAD rather than the
+ * working tree against it, because a push carries commits and an uncommitted
+ * edit is not going anywhere.
+ *
+ * Narrowing the review this way hides nothing from the gate. The gate reads
+ * `git rev-list HEAD --not --remotes` itself and demands an approval for every
+ * commit it finds, so a base that leaves a commit out of the review leaves it
+ * unapproved, and the push is refused naming it.
+ *
+ * Null when the base names no commit this repository holds, which is a typo
+ * rather than a state worth guessing at.
+ */
+export async function diffFromBase(
+  source: SourceInput,
+  base: string,
+  limits: DiffLimits = DEFAULT_LIMITS,
+): Promise<{ diff: SourceDiff; commits: CommitSpec[] } | null> {
+  const root = source.rootPath
+  if ((await repoRoot(root)) === null) return null
+
+  const resolved = (
+    await git(root, ['rev-parse', '--verify', `${base}^{commit}`]).catch(() => '')
+  ).trim()
+  if (resolved.length === 0) return null
+
+  const head = (await git(root, ['rev-parse', 'HEAD'])).trim()
+  const out = await git(root, ['rev-list', `${resolved}..${head}`])
+  const commits = out.split('\n').filter((line) => line.length > 0)
+
+  return diffRange(source, { base: resolved, head, commits }, limits)
+}
+
+/** The two readings of one range, which every caller above wants together. */
+async function diffRange(
+  source: SourceInput,
+  range: { base: string; head: string; commits: string[] },
+  limits: DiffLimits,
+): Promise<{ diff: SourceDiff; commits: CommitSpec[] }> {
   const diff = await diffCommitRange(source, range, limits)
 
   // rev-list answers newest first and the wire carries oldest first, which is
   // the order the commits were written and the order the page lists them in.
   const infos = (await commitInfo(source.rootPath, range.commits)).reverse()
+
+  // One pipeline for the whole range rather than one per commit, because the
+  // gate compares against every id and a commit missing from the map falls
+  // back to sha matching, which a rebase then breaks.
+  const ids = await patchIds(source.rootPath, range.commits)
 
   const commits: CommitSpec[] = []
   for (const info of infos) {
@@ -660,6 +787,8 @@ export async function diffPushRange(
       author: info.author,
       committedAt: info.committedAt,
       files: one.files,
+      patchId: ids.get(info.sha) ?? null,
+      parentSha: info.parentSha,
     })
 
     // Into the combined reading's map, because the caller uploads content

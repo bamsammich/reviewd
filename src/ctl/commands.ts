@@ -5,7 +5,7 @@ import { EMPTY_FINGERPRINT, manifestFingerprint } from '../fingerprint.js'
 import { WAIT_EXIT, type GateResponse, type GateScope } from '../protocol.js'
 import { Client } from './client.js'
 import { loadClientConfig } from './config.js'
-import { diffCommitRange, diffSource, pushRange } from './diff.js'
+import { commitInfo, diffCommitRange, diffSource, patchIds, pushRange } from './diff.js'
 import { ensureDaemon, logPath } from './ensure.js'
 import { git, repoRoot, stagedDivergence } from './git.js'
 import { initPlugin, installedPluginVersion, noClaudeMessage, planInit } from './init.js'
@@ -314,7 +314,21 @@ async function gatePush(client: Client, root: string, json: boolean): Promise<vo
   }
 
   const reading = await diffCommitRange({ id: '', rootPath: root }, range)
-  const result = await client.gate(root, reading.fingerprint, reading.tree, range.head)
+
+  // The daemon cannot run git, so what is about to leave the machine is read
+  // here and named on the wire. Oldest first, matching the order a review
+  // lists them in, so a denial reads in the order the commits were written.
+  const infos = (await commitInfo(root, range.commits)).reverse()
+  const ids = await patchIds(root, range.commits)
+
+  const carried = infos.map((info) => ({
+    sha: info.sha,
+    patchId: ids.get(info.sha) ?? null,
+    parentSha: info.parentSha,
+    subject: info.subject,
+  }))
+
+  const result = await client.gate(root, reading.fingerprint, reading.tree, range.head, carried)
 
   return report(result.decision === 'allow' ? result : withCommits(result, root, range), json)
 }

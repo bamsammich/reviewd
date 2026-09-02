@@ -110,6 +110,7 @@ defaults on first start, and every setting below is optional.
 | `public_url` | the address every review link opens, which a tunnel has to say |
 | `ui.font_scale` | how large the pages draw, between `0.75` and `1.5` |
 | `gate.scope` | whether the gate holds every commit or every push |
+| `gate.approval_follows` | whether an approval is attached to what a commit does or to the commit itself |
 | `limits` | the largest file uploaded, and the most files one revision may carry |
 | `sweep.review_idle_days` | how long an untouched review lives |
 | `notify.webhook_url` | where to POST when a review is waiting for you |

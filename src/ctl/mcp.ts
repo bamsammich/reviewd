@@ -82,8 +82,13 @@ export function createMcpServer(client = new Client(loadClientConfig().base_url)
                 .string()
                 .optional()
                 .describe(
-                  'Ref to compare against. Omit and a git repository is compared against HEAD, ' +
-                    'while any other directory is read as a file set',
+                  'Ref to read from. Under commit gating it is what the working tree is ' +
+                    'compared against, and omitting it means HEAD. Under push gating it is ' +
+                    'where the branch begins, so the review holds the commits from it to ' +
+                    'HEAD: name the branch below when this one is stacked on an open review, ' +
+                    'and omit it to read every commit no remote has yet. Narrowing a review ' +
+                    'never narrows the gate, which wants an approval for every commit a push ' +
+                    'carries. A directory that is not a repository is read as a file set.',
                 ),
               label: z.string().optional(),
             }),
