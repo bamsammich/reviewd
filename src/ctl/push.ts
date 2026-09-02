@@ -29,7 +29,17 @@ export async function pushSnapshot(
   const blobs = new Map<string, Uint8Array>()
 
   for (const source of sources) {
-    const gatedOnPush = (await scopeOf(client, source.rootPath)) === 'push'
+    // A caller who named a base named what to compare against, and that wins.
+    // Reading the push range instead showed a reviewer every commit on the
+    // branch and nothing uncommitted, while the review still reported the base
+    // it had been given: a page that does not contain the change under review,
+    // approvable under push gating.
+    //
+    // Omitting the base is how a caller asks for the gate's own reading, which
+    // is what the tool description already says: omit, and a git repository is
+    // compared against HEAD.
+    const named = source.baseRef !== undefined
+    const gatedOnPush = !named && (await scopeOf(client, source.rootPath)) === 'push'
     const push = gatedOnPush ? await diffPushRange(source, limits) : null
 
     // A root with nothing to push falls back to the working tree, which is

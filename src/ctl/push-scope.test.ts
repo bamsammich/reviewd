@@ -8,7 +8,8 @@ import { pushSnapshot } from './push.js'
 import { tempRepo, type TempRepo } from './testing.js'
 
 /**
- * What a revision describes, against how the repository is gated.
+ * What a revision describes, against how the repository is gated and what the
+ * caller asked for.
  *
  * The two have to agree. An approval covers a fingerprint, and the gate
  * arrives with the one it computed itself: under push gating that is the
@@ -80,7 +81,8 @@ describe('a revision under push gating', () => {
     twoCommitsAndAnEdit()
 
     await pushSnapshot(client, review.reviewId, [
-      { id: review.sources[0]!.id, rootPath: repo.root, baseRef: 'HEAD' },
+      // No base, which is how a caller asks for the reading the gate uses.
+      { id: review.sources[0]!.id, rootPath: repo.root },
     ])
 
     const snapshot = await ctx.db.selectFrom('snapshot').selectAll().executeTakeFirstOrThrow()
@@ -113,7 +115,8 @@ describe('a revision under push gating', () => {
     twoCommitsAndAnEdit()
 
     await pushSnapshot(client, review.reviewId, [
-      { id: review.sources[0]!.id, rootPath: repo.root, baseRef: 'HEAD' },
+      // No base, which is how a caller asks for the reading the gate uses.
+      { id: review.sources[0]!.id, rootPath: repo.root },
     ])
 
     const commits = await ctx.db.selectFrom('commit').selectAll().orderBy('ordinal').execute()
@@ -137,7 +140,8 @@ describe('a revision under push gating', () => {
     repo.write('src/c.ts', 'uncommitted\n')
 
     const result = await pushSnapshot(client, review.reviewId, [
-      { id: review.sources[0]!.id, rootPath: repo.root, baseRef: 'HEAD' },
+      // No base, which is how a caller asks for the reading the gate uses.
+      { id: review.sources[0]!.id, rootPath: repo.root },
     ])
 
     expect(result.fileCount).toBe(1)
@@ -152,7 +156,8 @@ describe('a revision under commit gating', () => {
     twoCommitsAndAnEdit()
 
     await pushSnapshot(client, review.reviewId, [
-      { id: review.sources[0]!.id, rootPath: repo.root, baseRef: 'HEAD' },
+      // No base, which is how a caller asks for the reading the gate uses.
+      { id: review.sources[0]!.id, rootPath: repo.root },
     ])
 
     const files = await ctx.db.selectFrom('file_change').selectAll().execute()
@@ -161,5 +166,93 @@ describe('a revision under commit gating', () => {
     // already in HEAD and only the uncommitted file is left.
     expect(files.map((f) => f.path)).toEqual(['src/c.ts'])
     expect(await ctx.db.selectFrom('commit').selectAll().execute()).toEqual([])
+  })
+})
+
+/**
+ * A base the caller named, under a repository gated on push.
+ *
+ * Reported as issue 41: the review stored the base it was given and diffed the
+ * push range anyway, so the page showed every commit on the branch, marked a
+ * file from before the base as added, and left the working tree out. Under
+ * push gating that is an approval covering a page the change is not on.
+ */
+describe('a base the caller named', () => {
+  /** Two commits past the base, plus an edit nobody committed. */
+  function threeCommitsAndAnEdit(): string {
+    repo.write('src/a.ts', 'const a = 2\n')
+    repo.commit('commit A')
+    repo.write('src/b.ts', 'const b = 1\n')
+    repo.commit('commit B')
+    const base = repo.run('rev-parse', 'HEAD').trim()
+
+    repo.write('src/c.ts', 'const c = 1\n')
+    repo.commit('commit C')
+    repo.write('src/d.ts', 'uncommitted\n')
+
+    return base
+  }
+
+  it('compares against that base rather than the push range', async () => {
+    const { client } = daemon('push')
+    const review = await reviewOf(client)
+    const base = threeCommitsAndAnEdit()
+
+    await pushSnapshot(client, review.reviewId, [
+      { id: review.sources[0]!.id, rootPath: repo.root, baseRef: base },
+    ])
+
+    const files = await ctx.db
+      .selectFrom('file_change')
+      .select('path')
+      .where('commit_id', 'is', null)
+      .execute()
+
+    // Commit C, and the file nobody committed. Not commit A or B, which are
+    // behind the base the caller named.
+    expect(files.map((f) => f.path).sort()).toEqual(['src/c.ts', 'src/d.ts'])
+  })
+
+  it('leaves a file from before the base out of the review', async () => {
+    const { client } = daemon('push')
+    const review = await reviewOf(client)
+    const base = threeCommitsAndAnEdit()
+
+    await pushSnapshot(client, review.reviewId, [
+      { id: review.sources[0]!.id, rootPath: repo.root, baseRef: base },
+    ])
+
+    const paths = (
+      await ctx.db.selectFrom('file_change').select('path').where('commit_id', 'is', null).execute()
+    ).map((f) => f.path)
+
+    expect(paths).not.toContain('src/a.ts')
+    expect(paths).not.toContain('src/b.ts')
+  })
+
+  // Commits describe a push, and a review of some other range is not one.
+  it('lists no commits, because it is not describing a push', async () => {
+    const { client } = daemon('push')
+    const review = await reviewOf(client)
+    const base = threeCommitsAndAnEdit()
+
+    await pushSnapshot(client, review.reviewId, [
+      { id: review.sources[0]!.id, rootPath: repo.root, baseRef: base },
+    ])
+
+    expect(await ctx.db.selectFrom('commit').selectAll().execute()).toEqual([])
+  })
+
+  it('still reads the push range when no base is named', async () => {
+    const { client } = daemon('push')
+    const review = await reviewOf(client)
+    threeCommitsAndAnEdit()
+
+    await pushSnapshot(client, review.reviewId, [
+      { id: review.sources[0]!.id, rootPath: repo.root },
+    ])
+
+    const commits = await ctx.db.selectFrom('commit').selectAll().orderBy('ordinal').execute()
+    expect(commits.map((c) => c.subject)).toEqual(['commit A', 'commit B', 'commit C'])
   })
 })
