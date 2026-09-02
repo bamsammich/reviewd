@@ -56,3 +56,13 @@ export const COMMENT_ICON = load('chat-teardrop-dots', 'ico', 13)
 
 /** Pull a comment already being written down as far as this line. */
 export const EXTEND_ICON = load('arrow-line-down', 'ico', 13)
+
+/**
+ * Close the drawer holding the file tree.
+ *
+ * An icon rather than the words, which is what GitHub does with the same
+ * control: the drawer already says what it holds in the heading beside this,
+ * so repeating "files" in the button spends a third of a narrow column
+ * restating the line above it. The accessible name carries the words.
+ */
+export const SIDEBAR_ICON = load('sidebar-simple', 'ico', 16)

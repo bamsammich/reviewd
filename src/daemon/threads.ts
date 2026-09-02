@@ -687,3 +687,98 @@ async function onlySource(db: Kysely<Database>, reviewId: string, path: string):
 
   return first.source_id
 }
+
+/**
+ * Rewrites a comment the reviewer has not sent yet.
+ *
+ * Sent is the boundary and it is hard. Once a verdict carries a comment to the
+ * agent, the agent has read it and may have acted on it, so changing the words
+ * afterwards would leave it working from something the page no longer says.
+ * An edited draft carries no trace of the edit, because nobody has seen the
+ * version being replaced.
+ *
+ * The refusal after sending names the reason rather than reporting a missing
+ * message, since a reviewer who reaches for it will otherwise read a 404 as a
+ * broken button.
+ */
+export async function editDraft(deps: Deps, messageId: string, body: string): Promise<void> {
+  const { db } = deps
+  const message = await draftOr409(db, messageId, 'edited')
+
+  const t = now()
+  await db.transaction().execute(async (tx) => {
+    await tx
+      .updateTable('message')
+      .set({ body, updated_at: t })
+      .where('id', '=', messageId)
+      .execute()
+    await tx
+      .updateTable('thread')
+      .set({ updated_at: t })
+      .where('id', '=', message.thread_id)
+      .execute()
+  })
+}
+
+/**
+ * Drops a comment the reviewer has not sent yet.
+ *
+ * A thread whose last message goes with it is deleted too. A thread with no
+ * messages is not something the page can draw: it would render as an empty box
+ * anchored to a line, and the reviewer who deleted their only comment did not
+ * mean to leave a marker behind.
+ */
+export async function deleteDraft(deps: Deps, messageId: string): Promise<void> {
+  const { db } = deps
+  const message = await draftOr409(db, messageId, 'deleted')
+
+  const t = now()
+  await db.transaction().execute(async (tx) => {
+    await tx.deleteFrom('message').where('id', '=', messageId).execute()
+
+    const left = await tx
+      .selectFrom('message')
+      .select('id')
+      .where('thread_id', '=', message.thread_id)
+      .executeTakeFirst()
+
+    if (left) {
+      await tx
+        .updateTable('thread')
+        .set({ updated_at: t })
+        .where('id', '=', message.thread_id)
+        .execute()
+    } else {
+      await tx.deleteFrom('thread').where('id', '=', message.thread_id).execute()
+    }
+  })
+}
+
+/** The message, if it is still a draft. Anything else is a 404 or a 409. */
+async function draftOr409(
+  db: Deps['db'],
+  messageId: string,
+  verb: 'edited' | 'deleted',
+): Promise<{ thread_id: string }> {
+  const message = await db
+    .selectFrom('message')
+    .select(['thread_id', 'submitted_at', 'author'])
+    .where('id', '=', messageId)
+    .executeTakeFirst()
+
+  if (!message) throw new ReviewError(`no message ${messageId}`, 404)
+
+  if (message.author !== 'human') {
+    throw new ReviewError(`a comment from the agent cannot be ${verb}`, 409)
+  }
+
+  if (message.submitted_at !== null) {
+    throw new ReviewError(
+      `this comment has been sent, so it cannot be ${verb}. ` +
+        `The agent has read it, and may have acted on it already.`,
+      409,
+    )
+  }
+
+  return message
+}

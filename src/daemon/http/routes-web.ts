@@ -6,6 +6,8 @@ import { listReviews, ReviewError, summarize, type Deps } from '../reviews.js'
 import { touchReview } from '../sweep.js'
 import {
   createThread,
+  deleteDraft,
+  editDraft,
   listThreads,
   replyToThread,
   setThreadState,
@@ -50,19 +52,29 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
         listThreads(deps, reviewId, { includeDrafts: true }),
       ])
 
-      // The preference lives in a cookie so a reload keeps it and the URL
+      // The preferences live in cookies so a reload keeps them and the URL
       // stays shareable without carrying one person's display choice.
-      const asked = c.req.query('view')
-      if (asked === 'split' || asked === 'unified') {
-        setCookie(c, 'reviewd_view', asked)
-        return c.redirect(`/r/${reviewId}`, 303)
+      //
+      // Both are read before redirecting. Each used to redirect on its own,
+      // which was fine while every link carried one of them and silently wrong
+      // the moment a link carried both: the first won, the second was dropped,
+      // and a control that named the state it was preserving did not preserve
+      // it.
+      const askedView = c.req.query('view')
+      const askedRail = c.req.query('rail')
+      let asked = false
+
+      if (askedView === 'split' || askedView === 'unified') {
+        setCookie(c, 'reviewd_view', askedView)
+        asked = true
       }
 
-      const rails = c.req.query('rail')
-      if (rails === 'open' || rails === 'closed') {
-        setCookie(c, 'reviewd_rail', rails)
-        return c.redirect(`/r/${reviewId}`, 303)
+      if (askedRail === 'open' || askedRail === 'closed') {
+        setCookie(c, 'reviewd_rail', askedRail)
+        asked = true
       }
+
+      if (asked) return c.redirect(`/r/${reviewId}`, 303)
 
       const view = parseViewMode(cookie(c, 'reviewd_view'))
       const rail = parseRail(cookie(c, 'reviewd_rail'))
@@ -218,6 +230,30 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
     return back(c, c.req.param('id'), c.req.param('threadId'))
   })
 
+  // Editing and deleting reach a message rather than a thread, because what
+  // can still change is one comment and not the conversation around it.
+  routes.post('/r/:id/messages/:messageId', async (c) => {
+    const form = await c.req.parseBody()
+    requireToken(c.req.param('id'), form['token'])
+    const threadId = await requireMessageIn(c.req.param('id'), c.req.param('messageId'))
+
+    const body = String(form['body'] ?? '').trim()
+    if (body) await editDraft(deps, c.req.param('messageId'), body)
+
+    return back(c, c.req.param('id'), threadId)
+  })
+
+  routes.post('/r/:id/messages/:messageId/delete', async (c) => {
+    requireToken(c.req.param('id'), (await c.req.parseBody())['token'])
+    await requireMessageIn(c.req.param('id'), c.req.param('messageId'))
+    await deleteDraft(deps, c.req.param('messageId'))
+
+    // Back to the review rather than to the thread: deleting the last comment
+    // takes the thread with it, and a fragment pointing at something gone
+    // leaves the reader at the top of the page wondering what happened.
+    return back(c, c.req.param('id'))
+  })
+
   // One submission sends every draft at once, which is what makes a waiting
   // agent wake when the reviewer is finished rather than mid-sentence.
   routes.post('/r/:id/submit', async (c) => {
@@ -286,6 +322,22 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
    * it. Authorship follows the route, which only means something if the route
    * is about the review it names.
    */
+  /** The thread a message belongs to, once this review is known to own it. */
+  async function requireMessageIn(reviewId: string, messageId: string): Promise<string> {
+    const found = await deps.db
+      .selectFrom('message')
+      .innerJoin('thread', 'thread.id', 'message.thread_id')
+      .select(['thread.id as thread_id', 'thread.review_id'])
+      .where('message.id', '=', messageId)
+      .executeTakeFirst()
+
+    if (found?.review_id !== reviewId) {
+      throw new ReviewError('That comment is not part of this review.', 403)
+    }
+
+    return found.thread_id
+  }
+
   async function requireThreadIn(reviewId: string, threadId: string): Promise<void> {
     const thread = await deps.db
       .selectFrom('thread')
@@ -386,10 +438,18 @@ function cookie(c: Context, name: string): string | undefined {
   return undefined
 }
 
+/**
+ * Appended rather than set, because a response can carry more than one cookie.
+ *
+ * `c.header` replaces by default, so writing two cookies wrote one: the second
+ * silently took the first one's place. Nothing noticed while each control sent
+ * a single preference.
+ */
 function setCookie(c: Context, name: string, value: string): void {
   c.header(
     'set-cookie',
     `${name}=${encodeURIComponent(value)}; Path=/; Max-Age=31536000; SameSite=Lax`,
+    { append: true },
   )
 }
 

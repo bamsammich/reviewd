@@ -267,3 +267,31 @@ describe('what may be served from a cache', () => {
     expect(res.headers.get('cache-control')).toBe('no-store')
   })
 })
+
+/**
+ * Two display preferences arriving on one link.
+ *
+ * Each used to redirect on its own, which was fine while every control carried
+ * one of them. Moving the diff controls apart gave each link the other's
+ * value to preserve, and the first won: the drawer's own reopen link set the
+ * view and dropped the rail, so the drawer could not be reopened at all.
+ */
+describe('display preferences on one link', () => {
+  it('keeps both when a link carries both', async () => {
+    const response = await app.request(`/r/${reviewId}?rail=closed&view=unified`, {
+      headers: HOST,
+    })
+    const cookies = response.headers.getSetCookie().join(' ')
+
+    expect(response.status).toBe(303)
+    expect(cookies).toContain('reviewd_rail=closed')
+    expect(cookies).toContain('reviewd_view=unified')
+  })
+
+  it('still keeps one when a link carries one', async () => {
+    const response = await app.request(`/r/${reviewId}?rail=closed`, { headers: HOST })
+
+    expect(response.status).toBe(303)
+    expect(response.headers.getSetCookie().join(' ')).toContain('reviewd_rail=closed')
+  })
+})

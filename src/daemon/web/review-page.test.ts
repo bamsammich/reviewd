@@ -942,6 +942,98 @@ describe('the file tree in the rail', () => {
   })
 })
 
+/**
+ * Fixing a comment before anyone has read it.
+ *
+ * Sent is the boundary. A comment a verdict has carried to the agent may have
+ * been acted on already, so the controls do not appear on it and the routes
+ * refuse it.
+ */
+describe('a comment that has not been sent', () => {
+  const draft = () =>
+    thread({
+      messages: [
+        {
+          id: 'm-draft',
+          seq: 1,
+          author: 'human',
+          body: 'wrong line, sorry',
+          createdAt: 0,
+          submittedAt: null,
+        },
+      ],
+    })
+
+  const sent = () =>
+    thread({
+      messages: [
+        {
+          id: 'm-sent',
+          seq: 1,
+          author: 'human',
+          body: 'already read',
+          createdAt: 0,
+          submittedAt: 1,
+        },
+      ],
+    })
+
+  it('offers a way to edit it', () => {
+    const markup = reviewPage(summary(), [file('src/a.ts')], [draft()]).value
+
+    expect(markup).toContain('class="msgmenu"')
+    expect(markup).toContain('/messages/m-draft"')
+    expect(markup).toContain('/messages/m-draft/delete"')
+  })
+
+  it('puts the current text in the box, so editing starts from what is there', () => {
+    const markup = reviewPage(summary(), [file('src/a.ts')], [draft()]).value
+
+    expect(markup).toContain('wrong line, sorry</textarea>')
+  })
+
+  it('offers nothing on a comment the agent has already read', () => {
+    const markup = reviewPage(summary(), [file('src/a.ts')], [sent()]).value
+
+    expect(markup).not.toContain('class="msgmenu"')
+    expect(markup).not.toContain('/messages/m-sent')
+  })
+
+  // The agent's own comments are not the reviewer's to rewrite.
+  it('offers nothing on a comment the agent wrote', () => {
+    const fromAgent = thread({
+      origin: 'agent',
+      messages: [
+        {
+          id: 'm-agent',
+          seq: 1,
+          author: 'agent',
+          body: 'a judgment call',
+          createdAt: 0,
+          submittedAt: 1,
+        },
+      ],
+    })
+
+    const markup = reviewPage(summary(), [file('src/a.ts')], [fromAgent]).value
+
+    expect(markup).not.toContain('/messages/m-agent')
+  })
+
+  // Forms, like every other control here, so a phone with no script running
+  // can still fix a typo.
+  it('uses forms rather than script', () => {
+    const markup = reviewPage(summary(), [file('src/a.ts')], [draft()]).value
+    const menu = markup.slice(
+      markup.indexOf('class="msgmenu"'),
+      markup.indexOf('</details>', markup.indexOf('class="msgmenu"')),
+    )
+
+    expect(menu).toContain('method="post"')
+    expect(menu).toContain('name="token"')
+  })
+})
+
 describe('hiding the file tree', () => {
   const withRail = (rail: 'open' | 'closed') =>
     reviewPage(summary(), [file('src/a.ts')], [], undefined, 'split', new Set(), rail).value

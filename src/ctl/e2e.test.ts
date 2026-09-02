@@ -295,6 +295,106 @@ describe('one review across two repositories', () => {
  * on, which is whether the fingerprint the reviewer approved is the one the
  * gate later asks about. Nothing but the whole loop can say that.
  */
+
+/**
+ * Fixing a comment, and the boundary that stops it.
+ *
+ * The page hides the controls once a comment is sent, and a hidden control is
+ * not a refusal: anyone can post the form again. What makes sent immutable is
+ * the route saying no.
+ */
+describe('editing a comment before it is sent', () => {
+  async function draftOn(reviewId: string, sourceId: string): Promise<string> {
+    await reviewerComments(reviewId, { sourceId, path: 'src/app.ts', line: 2, body: 'first go' })
+
+    const threads = await client.listThreads(reviewId, { drafts: true })
+    const message = threads[0]!.messages[0]!
+
+    return message.id
+  }
+
+  it('rewrites a draft, and the new text is what a verdict sends', async () => {
+    repoA.write('src/app.ts', 'const a = 1\nconst b = 99\nconst c = 3\n')
+
+    const review = await client.createReview({
+      title: 'a change to comment on',
+      sources: [{ path: repoA.root, base: 'HEAD' }],
+      createdBy: 'e2e',
+      notify: false,
+    })
+    await pushSnapshot(client, review.reviewId, [
+      { id: review.sources[0]!.id, rootPath: repoA.root, baseRef: 'HEAD' },
+    ])
+
+    const messageId = await draftOn(review.reviewId, review.sources[0]!.id)
+
+    const edited = await form(`/r/${review.reviewId}/messages/${messageId}`, {
+      token: await pageToken(review.reviewId),
+      body: 'second go, and this is the one that should travel',
+    })
+    expect(edited.status).toBe(303)
+
+    await reviewerSubmits(review.reviewId, 'comment')
+
+    const [thread] = await client.listThreads(review.reviewId)
+    expect(thread!.messages[0]!.body).toContain('second go')
+    expect(thread!.messages[0]!.body).not.toContain('first go')
+  })
+
+  it('refuses to rewrite one the agent has read, and says why', async () => {
+    repoA.write('src/app.ts', 'const a = 1\nconst b = 99\nconst c = 3\n')
+
+    const review = await client.createReview({
+      title: 'a change to comment on',
+      sources: [{ path: repoA.root, base: 'HEAD' }],
+      createdBy: 'e2e',
+      notify: false,
+    })
+    await pushSnapshot(client, review.reviewId, [
+      { id: review.sources[0]!.id, rootPath: repoA.root, baseRef: 'HEAD' },
+    ])
+
+    const messageId = await draftOn(review.reviewId, review.sources[0]!.id)
+    await reviewerSubmits(review.reviewId, 'comment')
+
+    const refused = await form(`/r/${review.reviewId}/messages/${messageId}`, {
+      token: await pageToken(review.reviewId),
+      body: 'too late',
+    })
+
+    expect(refused.status).toBe(409)
+    expect(await refused.text()).toContain('has been sent')
+
+    const [thread] = await client.listThreads(review.reviewId)
+    expect(thread!.messages[0]!.body).toContain('first go')
+  })
+
+  // A thread with no messages would render as an empty box anchored to a line,
+  // which is not what deleting your only comment means.
+  it('takes the thread with the last comment in it', async () => {
+    repoA.write('src/app.ts', 'const a = 1\nconst b = 99\nconst c = 3\n')
+
+    const review = await client.createReview({
+      title: 'a change to comment on',
+      sources: [{ path: repoA.root, base: 'HEAD' }],
+      createdBy: 'e2e',
+      notify: false,
+    })
+    await pushSnapshot(client, review.reviewId, [
+      { id: review.sources[0]!.id, rootPath: repoA.root, baseRef: 'HEAD' },
+    ])
+
+    const messageId = await draftOn(review.reviewId, review.sources[0]!.id)
+
+    const deleted = await form(`/r/${review.reviewId}/messages/${messageId}/delete`, {
+      token: await pageToken(review.reviewId),
+    })
+    expect(deleted.status).toBe(303)
+
+    expect(await client.listThreads(review.reviewId, { drafts: true })).toHaveLength(0)
+  })
+})
+
 describe('gating a push rather than every commit', () => {
   /** A daemon that holds pushes for one repository and commits for the rest. */
   function daemonGating(root: string): Client {
