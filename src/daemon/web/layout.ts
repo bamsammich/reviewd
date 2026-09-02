@@ -47,10 +47,17 @@ const STYLE = `
   --tap: 44px;
 
   /* How far down the page anything sticky has to start, so the app bar does
-     not sit on top of it. Declared once because three things need to agree:
-     the bar's own height, where a pinned file header parks, and where a
-     fragment scrolls its target to. */
-  --top-bar: 3.35rem;
+     not sit on top of it. Declared once because four things need to agree: the
+     bar's own height, where the file rail parks, where a pinned file header
+     parks, and where a fragment scrolls its target to.
+
+     Built from what the bar is made of rather than picked to look about right.
+     A hand-chosen 3.35rem was 48px at a 0.9 font scale while the bar drew 59,
+     because the bar holds a 44px control with a half-rem of padding either side
+     and a rule under it; everything parking against the smaller number tucked
+     eleven pixels beneath the bar. The tap target is a fixed 44px and the
+     padding is relative, so this stays true at any font scale. */
+  --top-bar: calc(var(--tap) + 1rem + 1px);
 }
 
 @media (prefers-color-scheme: dark) {
