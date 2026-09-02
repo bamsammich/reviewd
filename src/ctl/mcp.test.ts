@@ -62,6 +62,19 @@ async function call(name: string, args: Record<string, unknown>): Promise<Record
   return JSON.parse(text) as Record<string, unknown>
 }
 
+/** The same call, for a tool that answers with an array. */
+async function callList(name: string, args: Record<string, unknown>): Promise<unknown[]> {
+  const result = (await mcp.callTool({ name, arguments: args })) as {
+    content: { text: string }[]
+    isError?: boolean
+  }
+
+  const text = result.content[0]?.text ?? ''
+  if (result.isError) throw new Error(text)
+
+  return JSON.parse(text) as unknown[]
+}
+
 describe('the tool surface', () => {
   it('exposes exactly the tools the spec names', async () => {
     const { tools } = await mcp.listTools()
@@ -197,5 +210,78 @@ describe('the tool surface', () => {
 
   it('reports a failure as a tool error rather than a crash', async () => {
     await expect(call('review_get', { reviewId: 'does-not-exist' })).rejects.toThrow(/no review/)
+  })
+})
+
+/**
+ * A key a tool does not name.
+ *
+ * The default was to drop it and answer as though the call was fine, which is
+ * the worst of both: an agent that misremembers a parameter gets a success and
+ * a result missing whatever it asked for. Every summary written into
+ * review_create before it took one was discarded this way, and nothing said so
+ * on either side.
+ */
+describe('arguments a tool does not name', () => {
+  it('refuses one rather than dropping it', async () => {
+    await expect(
+      call('review_create', {
+        title: 'a change',
+        sources: [{ path: repo.root, base: 'HEAD' }],
+        summry: 'a key spelled wrong',
+      }),
+    ).rejects.toThrow(/summry/)
+  })
+
+  it('says which key, so the next call can be right', async () => {
+    await expect(call('review_get', { reviewId: 'x', includeThreads: true })).rejects.toThrow(
+      /includeThreads/,
+    )
+  })
+
+  it('still takes the arguments it does name', async () => {
+    const created = await call('review_create', {
+      title: 'a change',
+      sources: [{ path: repo.root, base: 'HEAD' }],
+    })
+
+    expect(created['reviewId']).toBeTruthy()
+  })
+})
+
+/**
+ * What the review is about, said where the reviewer reads it.
+ *
+ * A review had a title and a diff and nowhere to say why. The workaround was
+ * thread_create with no path, which is exactly what this does, so the note
+ * lands as a comment on the change as a whole.
+ */
+describe('a summary on review_create', () => {
+  it('opens a comment on the change as a whole', async () => {
+    const created = await call('review_create', {
+      title: 'a change',
+      summary: 'The interesting part is the second commit, which reverses the first.',
+      sources: [{ path: repo.root, base: 'HEAD' }],
+    })
+
+    // threads_list answers with the array itself, not an object wrapping one.
+    const threads = (await callList('threads_list', {
+      reviewId: created['reviewId'],
+    })) as Record<string, unknown>[]
+
+    expect(threads).toHaveLength(1)
+    expect(threads[0]?.['path']).toBeNull()
+    expect(JSON.stringify(threads[0])).toContain('reverses the first')
+  })
+
+  it('opens nothing when there is no summary', async () => {
+    const created = await call('review_create', {
+      title: 'a change',
+      sources: [{ path: repo.root, base: 'HEAD' }],
+    })
+
+    const threads = await callList('threads_list', { reviewId: created['reviewId'] })
+
+    expect(threads).toHaveLength(0)
   })
 })

@@ -35,6 +35,22 @@ function fail(error: unknown): ToolResult {
   return { content: [{ type: 'text', text: message }], isError: true }
 }
 
+/**
+ * A tool's arguments, with anything it does not name refused.
+ *
+ * The default is to drop an unknown key and answer as though the call was
+ * fine, which is the worst of both: an agent that misremembers a parameter
+ * gets a success and a result missing whatever it asked for. Every summary
+ * written into `review_create` before it took one was discarded this way, and
+ * nothing said so, on either side.
+ *
+ * Strict turns that into a message the agent can read and fix on its next
+ * call, which is the only version of this that ends.
+ */
+function strict<T extends z.ZodRawShape>(shape: T) {
+  return z.object(shape).strict()
+}
+
 export function createMcpServer(client = new Client(loadClientConfig().base_url)): McpServer {
   // Read rather than hardcoded, because a version string maintained by hand is
   // a version string that is wrong. Every MCP client is told this at handshake.
@@ -49,8 +65,15 @@ export function createMcpServer(client = new Client(loadClientConfig().base_url)
         'Opens a review over one or more directories and pushes the current changes. ' +
         'Returns a URL to hand the reviewer. Several roots in one review is ordinary: ' +
         'pass every directory the change touches.',
-      inputSchema: {
+      inputSchema: strict({
         title: z.string().describe('What this change does, in a few words'),
+        summary: z
+          .string()
+          .optional()
+          .describe(
+            'What the reviewer should know before reading: what changed, what to argue with, ' +
+              'what you decided and why. Opens a comment on the change as a whole.',
+          ),
         sources: z
           .array(
             z.object({
@@ -67,9 +90,9 @@ export function createMcpServer(client = new Client(loadClientConfig().base_url)
           )
           .min(1),
         notify: z.boolean().optional().describe('Send the configured push notification'),
-      },
+      }),
     },
-    async ({ title, sources, notify }) => {
+    async ({ title, summary, sources, notify }) => {
       try {
         const review = await client.createReview({
           title,
@@ -95,6 +118,20 @@ export function createMcpServer(client = new Client(loadClientConfig().base_url)
           DEFAULT_LIMITS,
         )
 
+        // After the snapshot, so the note lands on a review that has something
+        // to read. A thread with no path is the review-level comment the page
+        // draws above the diff.
+        if (summary !== undefined && summary.trim().length > 0) {
+          // No path, which is what makes it a comment about the change as a
+          // whole. `side` is required by the wire shape and means nothing
+          // without a line.
+          await client.createThread(review.reviewId, {
+            body: summary,
+            author: 'agent',
+            side: 'new',
+          })
+        }
+
         return ok({
           reviewId: review.reviewId,
           url: review.url,
@@ -114,7 +151,7 @@ export function createMcpServer(client = new Client(loadClientConfig().base_url)
       description:
         'Recomputes every root and pushes a new revision after editing. Comments re-anchor ' +
         'to the code they were written against.',
-      inputSchema: { reviewId: z.string() },
+      inputSchema: strict({ reviewId: z.string() }),
     },
     async ({ reviewId }) => {
       try {
@@ -144,7 +181,7 @@ export function createMcpServer(client = new Client(loadClientConfig().base_url)
       description:
         'Status, current revision, per-source approval, and thread counts by whose turn it is. ' +
         'The one call that works with no live process, so a resumed session asks this first.',
-      inputSchema: { reviewId: z.string() },
+      inputSchema: strict({ reviewId: z.string() }),
     },
     async ({ reviewId }) => {
       try {
@@ -176,10 +213,10 @@ export function createMcpServer(client = new Client(loadClientConfig().base_url)
     {
       title: 'List reviews',
       description: 'Open reviews, optionally narrowed to those covering one directory.',
-      inputSchema: {
+      inputSchema: strict({
         status: z.enum(['open', 'approved']).optional(),
         root: z.string().optional().describe('Only reviews covering this directory'),
-      },
+      }),
     },
     async ({ status, root }) => {
       try {
@@ -212,11 +249,11 @@ export function createMcpServer(client = new Client(loadClientConfig().base_url)
         'Submitted messages only. Unsent drafts stay invisible, so nothing here is a comment ' +
         'the reviewer has not sent yet. Filter by turn "agent" for the only question worth ' +
         'asking: what is owed.',
-      inputSchema: {
+      inputSchema: strict({
         reviewId: z.string(),
         state: z.enum(['active', 'resolved', 'outdated']).optional(),
         turn: z.enum(['human', 'agent']).optional(),
-      },
+      }),
     },
     async ({ reviewId, state, turn }) => {
       try {
@@ -251,7 +288,7 @@ export function createMcpServer(client = new Client(loadClientConfig().base_url)
         'Opens a thread on a line of your own output, anchored where it applies. Use it for a ' +
         'judgment call worth flagging rather than burying the question in chat. Omit path and ' +
         'line together to ask about the change as a whole rather than about one line.',
-      inputSchema: {
+      inputSchema: strict({
         reviewId: z.string(),
         path: z
           .string()
@@ -272,7 +309,7 @@ export function createMcpServer(client = new Client(loadClientConfig().base_url)
         body: z.string(),
         sourceId: z.string().optional().describe('Required when two roots share this path'),
         side: z.enum(['old', 'new']).optional(),
-      },
+      }),
     },
     async ({ reviewId, path, line, endLine, body, sourceId, side }) => {
       try {
@@ -298,7 +335,7 @@ export function createMcpServer(client = new Client(loadClientConfig().base_url)
     {
       title: 'Reply in a thread',
       description: 'Answers the reviewer. Your messages send immediately rather than drafting.',
-      inputSchema: { threadId: z.string(), body: z.string() },
+      inputSchema: strict({ threadId: z.string(), body: z.string() }),
     },
     async ({ threadId, body }) => {
       try {
@@ -316,7 +353,7 @@ export function createMcpServer(client = new Client(loadClientConfig().base_url)
       description:
         'Closes a thread you addressed. The reviewer sees it was closed by an agent and can ' +
         'reopen it in one click.',
-      inputSchema: { threadId: z.string(), note: z.string().optional() },
+      inputSchema: strict({ threadId: z.string(), note: z.string().optional() }),
     },
     async ({ threadId, note }) => {
       try {
@@ -335,7 +372,7 @@ export function createMcpServer(client = new Client(loadClientConfig().base_url)
         'Says you saw the outcome, committed, and need none of the data. Refuses while an ' +
         'approval has not been used by a commit, since releasing first would delete the very ' +
         'approval that clears it. Pass force to abandon a review on purpose.',
-      inputSchema: { reviewId: z.string(), force: z.boolean().optional() },
+      inputSchema: strict({ reviewId: z.string(), force: z.boolean().optional() }),
     },
     async ({ reviewId, force }) => {
       try {
