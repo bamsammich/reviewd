@@ -15,7 +15,7 @@ import { basenameOf } from './paths.js'
  * at the moment they open the page.
  */
 
-export function reviewListPage(reviews: ReviewSummary[]): SafeHtml {
+export function reviewListPage(reviews: ReviewSummary[], fontScale = 1): SafeHtml {
   const waiting = reviews.filter((review) => review.threadsAwaitingHuman > 0).length
 
   const body = html`${topBar(reviews.length === 0 ? 'nothing open' : `${reviews.length} open`)}
@@ -35,7 +35,7 @@ export function reviewListPage(reviews: ReviewSummary[]): SafeHtml {
       }
     </main>`
 
-  return page('reviewd', body)
+  return page('reviewd', body, raw(''), fontScale)
 }
 
 /**
@@ -77,11 +77,13 @@ function reviewCard(review: ReviewSummary): SafeHtml {
 }
 
 /** A page that says why there is nothing to look at. */
-export function messagePage(title: string, message: string): SafeHtml {
+export function messagePage(title: string, message: string, fontScale = 1): SafeHtml {
   return page(
     `${title} · reviewd`,
     html`${topBar(title)}
       <main><p class="emptystate">${message}</p></main>`,
+    raw(''),
+    fontScale,
   )
 }
 
@@ -111,14 +113,83 @@ export function age(seconds: number): string {
   return `${Math.floor(seconds / 86_400)}d`
 }
 
-/** Loads the current revision's files with both sides of their content. */
-export async function loadFiles(db: Kysely<Database>, reviewId: string): Promise<FileView[]> {
-  const snapshot = await db
+/**
+ * One commit of the revision being read.
+ *
+ * `files` counts what the commit changed rather than lines, because a line
+ * tally means loading both sides of every file of every commit to render a
+ * list nobody has clicked yet. The count comes from the rows themselves.
+ */
+export interface CommitView {
+  id: string
+  sha: string
+  subject: string
+  author: string
+  committedAt: number
+  files: number
+}
+
+/** The commits of the current revision, oldest first, or none. */
+export async function loadCommits(db: Kysely<Database>, reviewId: string): Promise<CommitView[]> {
+  const snapshot = await latestSnapshot(db, reviewId)
+  if (!snapshot) return []
+
+  const commits = await db
+    .selectFrom('commit')
+    .selectAll()
+    .where('snapshot_id', '=', snapshot.id)
+    .orderBy('ordinal')
+    .execute()
+
+  if (commits.length === 0) return []
+
+  const counts = await db
+    .selectFrom('file_change')
+    .select(({ fn }) => ['commit_id', fn.countAll<number>().as('n')])
+    .where('snapshot_id', '=', snapshot.id)
+    .where(
+      'commit_id',
+      'in',
+      commits.map((commit) => commit.id),
+    )
+    .groupBy('commit_id')
+    .execute()
+
+  const byCommit = new Map(counts.map((row) => [row.commit_id, row.n]))
+
+  return commits.map((commit) => ({
+    id: commit.id,
+    sha: commit.sha,
+    subject: commit.subject,
+    author: commit.author,
+    committedAt: commit.committed_at,
+    files: byCommit.get(commit.id) ?? 0,
+  }))
+}
+
+async function latestSnapshot(db: Kysely<Database>, reviewId: string) {
+  return db
     .selectFrom('snapshot')
     .selectAll()
     .where('review_id', '=', reviewId)
     .orderBy('seq', 'desc')
     .executeTakeFirst()
+}
+
+/**
+ * Loads the files of the current revision with both sides of their content.
+ *
+ * With a commit id, the files that commit alone changed; without one, the
+ * combined change set. The two are different readings of one push rather than
+ * a subset and its whole: a file taken from 1 to 2 to 3 across two commits is
+ * one row in the combined set and one in each commit, holding different bytes.
+ */
+export async function loadFiles(
+  db: Kysely<Database>,
+  reviewId: string,
+  commitId?: string | undefined,
+): Promise<FileView[]> {
+  const snapshot = await latestSnapshot(db, reviewId)
 
   if (!snapshot) return []
 
@@ -138,9 +209,11 @@ export async function loadFiles(db: Kysely<Database>, reviewId: string): Promise
       'source.ordinal',
     ])
     .where('file_change.snapshot_id', '=', snapshot.id)
-    // The combined change set, which is the page with no commit chosen.
-    // Drawing one commit reads its own rows and is its own piece of work.
-    .where('file_change.commit_id', 'is', null)
+    .where((eb) =>
+      commitId === undefined
+        ? eb('file_change.commit_id', 'is', null)
+        : eb('file_change.commit_id', '=', commitId),
+    )
     .orderBy('source.ordinal')
     .orderBy('file_change.path')
     .execute()

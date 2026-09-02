@@ -43,6 +43,22 @@ export const configSchema = z.object({
     .default({ webhook_url: null, template: null }),
 
   /**
+   * How large the pages draw, as a multiplier on the browser's own text size.
+   *
+   * A review page is read on whatever screen is to hand, and how much of a
+   * diff fits on one is a matter of eyesight and monitor rather than something
+   * the daemon can pick. 0.9 fits about a tenth more of a file on screen;
+   * 1.15 is the same page for someone who would otherwise lean in.
+   *
+   * Bounded because the far ends stop being the same page: below 0.75 the
+   * numbers beside a diff line stop being readable at arm's length, and above
+   * 1.5 the rail takes more of a laptop screen than the code does. Touch
+   * targets stay 44px throughout, so shrinking the text never shrinks a
+   * control below what a thumb can hit.
+   */
+  ui: z.object({ font_scale: z.number().min(0.75).max(1.5).default(1) }).default({ font_scale: 1 }),
+
+  /**
    * What the commit gate holds: every commit, or every push.
    *
    * Here rather than in a file beside the code, because the hook already sends
