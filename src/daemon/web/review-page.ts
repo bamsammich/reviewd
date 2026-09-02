@@ -300,7 +300,7 @@ export function reviewPage(
         ${outdatedBlock(page_, outdated)}
       </div>
     </main>
-    ${submitBar(review, drafts, awaitingYou, owed[0])}`
+    ${submitBar(review, drafts, awaitingYou, owed[0], scope)}`
 
   const highlighting = palette.css()
 
@@ -351,6 +351,7 @@ function commitList(review: ReviewSummary, scope: CommitScope): SafeHtml {
   const count = commits.length
 
   const open = scope.listOpen === true || selected !== undefined
+  const covered = commits.filter((commit) => commit.approved).length
 
   return html`<details class="commits" ${open ? raw('open') : raw('')}>
     <summary>
@@ -360,6 +361,12 @@ function commitList(review: ReviewSummary, scope: CommitScope): SafeHtml {
           ? raw('')
           : html`<span class="badge you">reading ${shortSha(selected.sha)}</span>`
       }
+      <!--
+        Coverage where GitHub puts its viewed count, and said as a fraction
+        rather than as a bare number, because "3 approved" beside "5 commits"
+        reads as two unrelated tallies.
+      -->
+      ${covered === 0 ? raw('') : html`<span class="cov">${covered}/${count}</span>`}
     </summary>
     <ul>
       <!--
@@ -370,7 +377,13 @@ function commitList(review: ReviewSummary, scope: CommitScope): SafeHtml {
         four commits, or one of them.
       -->
       ${commitRow(
-        { label: `All ${count} commit${count === 1 ? '' : 's'}`, href: `/r/${review.reviewId}` },
+        {
+          label: `All ${count} commit${count === 1 ? '' : 's'}`,
+          href: `/r/${review.reviewId}`,
+          // The whole change is covered only when every commit in it is, which
+          // is the same question the submit bar asks.
+          approved: covered === count,
+        },
         selected === undefined,
       )}
       ${commits.map((commit) =>
@@ -380,6 +393,7 @@ function commitList(review: ReviewSummary, scope: CommitScope): SafeHtml {
             href: `/r/${review.reviewId}?commit=${commit.sha}`,
             sha: shortSha(commit.sha),
             files: commit.files,
+            approved: commit.approved,
           },
           commit.sha === selected?.sha,
         ),
@@ -394,6 +408,7 @@ interface CommitRow {
   /** Absent on the entry for the whole change, which is no single commit. */
   sha?: string
   files?: number
+  approved: boolean
 }
 
 function commitRow(row: CommitRow, on: boolean): SafeHtml {
@@ -402,8 +417,16 @@ function commitRow(row: CommitRow, on: boolean): SafeHtml {
       class="crow ${on ? 'on' : ''}"
       href="${raw(row.href)}"
       ${on ? raw('aria-current="true"') : raw('')}
-      title="${row.label}"
+      title="${row.approved ? `${row.label} — approved` : row.label}"
     >
+      <!--
+        A column rather than a mark that appears and disappears, so the shas
+        under it stay in one line whatever is covered. The tick carries a label
+        of its own because colour and shape are the only other things saying
+        it, and neither reaches a screen reader.
+      -->
+      <span class="tick ${row.approved ? 'yes' : ''}" aria-hidden="true">✓</span>
+      ${row.approved ? html`<span class="visually-hidden">approved</span>` : raw('')}
       ${row.sha === undefined ? raw('') : html`<span class="sha">${row.sha}</span>`}
       <span class="subj">${row.label}</span>
       ${
@@ -1514,51 +1537,85 @@ function drawerToggle(review: ReviewSummary, view: ViewMode, rail: RailState): S
 }
 
 /**
- * The submit controls.
+ * The verdict, scoped to whatever reading is on screen.
  *
- * One primary action at a time, and sometimes none. With unsent comments the
- * primary action is requesting changes, because that is what a reviewer who has
- * written something usually means; with nothing unsent and nothing owed it is
- * approving, because that is what a reviewer who has read and is satisfied
- * usually means. With threads still waiting on an answer neither button gets
- * the accent: the next thing to do is read them, not decide. The state line
- * says what approving does, since unblocking a commit is not visible from here.
+ * Approving covers commits rather than a whole review, so the control has to
+ * say which commits it means. It says so in its own label: pressing a button
+ * that reads `Approve this commit` cannot be mistaken for approving five, and
+ * a reader who takes in only buttons is told as much as one who reads the
+ * sentence beside them.
  *
- * Approval is its own state rather than an extra button on the same row. A
- * reviewer who has just approved and gets back a highlighted Approve reads it
- * as a click that did not land, and the two other ways out of approval sitting
- * beside it invite the wrong one. What is left is the one thing still true:
- * the decision is made and the agent has not committed yet.
+ * That costs width, and a phone has none to spare. Measured at 375px the bar
+ * holds 319px of controls, which is two buttons once a label carries a scope.
+ * So Send as notes leaves the row and joins the sentence: it decides nothing
+ * about the code, being the one action of the three that is not a verdict, and
+ * as a submit button in a paragraph it still works with the script unloaded.
  */
 function submitBar(
   review: ReviewSummary,
   drafts: number,
   awaitingYou: number,
   firstOwed: Thread | undefined,
+  scope: CommitScope,
 ): SafeHtml {
-  const approved = review.sources.length > 0 && review.sources.every((source) => source.approved)
+  const commits = scope.commits
+  const one = scope.selected
 
-  const state = approved
-    ? drafts > 0
-      ? html`<strong>Approved, ${drafts} comment${drafts === 1 ? '' : 's'} not sent.</strong>
-          Sending them takes the approval back.`
-      : html`<strong>Approved.</strong> Waiting for the agent to commit.`
-    : drafts > 0
-      ? html`<strong>${drafts} comment${drafts === 1 ? '' : 's'} not sent.</strong> Choose how to
-          send them.`
-      : awaitingYou > 0
-        ? // Not "reply above". A thread sits wherever its code sits, which on a
-          // fifteen-file review measured here was 5,000, 13,000 and 33,600
-          // pixels down a page 34,000 tall, in both directions from wherever
-          // the reader had got to. The bar hands them the nearest one to start
-          // on; the rail lists the rest.
-          html`<strong>${awaitingYou} thread${awaitingYou === 1 ? '' : 's'} waiting on you.</strong>
-            ${
-              firstOwed
-                ? html`<a href="#t-${firstOwed.id}">Go to the first</a>, or decide now.`
-                : raw('Decide now, or read them first.')
-            }`
-        : html`Approving lets the agent commit.`
+  // What this reading needs before the agent can push it.
+  const covered = one === undefined ? commits.filter((c) => c.approved).length : 0
+  const approved =
+    one !== undefined
+      ? one.approved
+      : commits.length > 0
+        ? covered === commits.length
+        : review.sources.length > 0 && review.sources.every((source) => source.approved)
+
+  const noun = one !== undefined ? 'this commit' : commits.length > 0 ? `all ${commits.length}` : ''
+  const verb = (word: string): string => (noun === '' ? word : `${word} ${noun}`)
+
+  // Where the review stands, which is a different sentence for a commit than
+  // for a change made of several.
+  const standing =
+    one !== undefined
+      ? approved
+        ? html`<strong>${shortSha(one.sha)} is approved.</strong> ${countOf(commits)}`
+        : html`<strong>Not approved.</strong> ${countOf(commits)}`
+      : approved
+        ? html`<strong>Approved.</strong> Waiting for the agent to ${
+            commits.length > 0 ? 'push' : 'commit'
+          }.`
+        : commits.length > 0 && covered > 0
+          ? html`<strong>${covered} of ${commits.length} commits approved.</strong> ${
+              commits.length - covered
+            } left.`
+          : awaitingYou > 0
+            ? // Not "reply above". A thread sits wherever its code sits, which
+              // on a fifteen-file review measured here was 5,000, 13,000 and
+              // 33,600 pixels down a page 34,000 tall, in both directions from
+              // wherever the reader had got to. The bar hands them the nearest
+              // one to start on; the rail lists the rest.
+              html`<strong>${awaitingYou} thread${awaitingYou === 1 ? '' : 's'} waiting on you.</strong>
+                ${
+                  firstOwed
+                    ? html`<a href="#t-${firstOwed.id}">Go to the first</a>, or decide now.`
+                    : raw('Decide now, or read them first.')
+                }`
+            : html`Approving lets the agent ${commits.length > 0 ? 'push' : 'commit'}.`
+
+  // Unsent comments outrank everything else the bar could be saying, because
+  // they are the thing that will surprise the reader if it goes unmentioned.
+  const notes = html`<button type="submit" name="verdict" value="comment" class="linkbtn">
+    Send as notes
+  </button>`
+
+  const state =
+    drafts === 0
+      ? standing
+      : approved
+        ? html`<strong>${drafts} comment${drafts === 1 ? '' : 's'} not sent.</strong> ${notes}
+            takes the approval back.`
+        : html`<strong>${drafts} comment${drafts === 1 ? '' : 's'} not sent.</strong> ${notes}, or
+            decide.`
 
   // A verdict carries the same token every other form does, and the route
   // additionally refuses one minted against an older revision.
@@ -1566,52 +1623,44 @@ function submitBar(
 
   return html`<form class="bar" method="post" action="/r/${review.reviewId}/submit">
     <input type="hidden" name="token" value="${token}" />
+    ${one === undefined ? raw('') : html`<input type="hidden" name="commit" value="${one.sha}" />`}
     <div class="row">
       <p class="state" aria-live="polite">${state}</p>
       <div class="verdicts">
         ${
           approved
-            ? html`${
-                drafts > 0
-                  ? html`<button type="submit" name="verdict" value="comment" class="quiet">
-                        Send as notes
-                      </button>`
-                  : raw('')
-              }
+            ? html`<button
+                type="submit"
+                formaction="/r/${review.reviewId}/unapprove"
+                class="primary"
+              >
+                ${verb('Unapprove')}
+              </button>`
+            : // Approve loses the accent while the agent is waiting on an
+              // answer. The bar was saying "3 threads waiting on you" and
+              // putting the loudest control in the room on the one action that
+              // ends the review without reading them.
+              html`<button type="submit" name="verdict" value="changes_requested" class="quiet">
+                  Request changes
+                </button>
                 <button
                   type="submit"
-                  formaction="/r/${review.reviewId}/unapprove"
-                  class="${drafts > 0 ? 'quiet' : 'primary'}"
+                  name="verdict"
+                  value="approved"
+                  class="${awaitingYou > 0 && drafts === 0 ? '' : 'primary'}"
                 >
-                  Unapprove
+                  ${verb('Approve')}
                 </button>`
-            : drafts > 0
-              ? html`<button type="submit" name="verdict" value="comment" class="quiet">
-                    Send as notes
-                  </button>
-                  <button type="submit" name="verdict" value="changes_requested" class="primary">
-                    Request changes
-                  </button>
-                  <button type="submit" name="verdict" value="approved">Approve</button>`
-              : // Approve loses the accent while the agent is waiting on an
-                // answer. The bar was saying "3 threads waiting on you" and
-                // putting the loudest control in the room on the one action
-                // that ends the review without reading them.
-                html`<button type="submit" name="verdict" value="changes_requested" class="quiet">
-                    Request changes
-                  </button>
-                  <button
-                    type="submit"
-                    name="verdict"
-                    value="approved"
-                    class="${awaitingYou > 0 ? '' : 'primary'}"
-                  >
-                    Approve
-                  </button>`
         }
       </div>
     </div>
   </form>`
+}
+
+/** How much of the change is covered, said the same way in every state. */
+function countOf(commits: CommitView[]): SafeHtml {
+  const covered = commits.filter((c) => c.approved).length
+  return html`${covered} of ${commits.length} covered.`
 }
 
 /**

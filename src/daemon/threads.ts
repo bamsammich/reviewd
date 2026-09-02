@@ -541,6 +541,14 @@ export async function submitReview(
   deps: Deps,
   reviewId: string,
   verdict: Verdict,
+  /**
+   * Which commit an approval covers, or every commit when absent.
+   *
+   * The page sends whichever reading the reviewer had open, because approving
+   * while looking at one commit is a claim about that commit and not about the
+   * four they have not opened.
+   */
+  commitSha?: string | undefined,
 ): Promise<SubmissionResult> {
   const { db } = deps
 
@@ -594,7 +602,7 @@ export async function submitReview(
       .execute()
 
     if (verdict === 'approved') {
-      await writeApprovals(tx, reviewId, snapshot.id, t)
+      await writeApprovals(tx, reviewId, snapshot.id, t, commitSha)
     } else {
       // The gate reads approvals, never review.status, so reopening the review
       // without clearing them would leave the agent free to commit code the
@@ -613,10 +621,13 @@ export async function submitReview(
       await tx.deleteFrom('approved_commit').where('review_id', '=', reviewId).execute()
     }
 
+    // Approving one commit leaves the review open, because the reviewer has
+    // not said the rest is good and the status is what a list of reviews reads
+    // to say whether anything is still owed.
     await tx
       .updateTable('review')
       .set({
-        status: verdict === 'approved' ? 'approved' : 'open',
+        status: verdict === 'approved' && commitSha === undefined ? 'approved' : 'open',
         last_activity_at: t,
         updated_at: t,
       })
@@ -638,12 +649,18 @@ export async function submitReview(
  * The gate matches on (root_path, fingerprint) rather than on a review id, so
  * an approval is a claim about a specific set of bytes and cannot let a review
  * of one repository authorize a commit in another.
+ *
+ * A commit named here narrows the whole thing to that commit. No fingerprint
+ * approval is written, because a fingerprint covers the entire reading and the
+ * reviewer has said nothing about the rest of it; the push gate still clears
+ * once every commit has been covered one at a time.
  */
 async function writeApprovals(
   tx: Transaction<Database>,
   reviewId: string,
   snapshotId: string,
   t: number,
+  commitSha?: string | undefined,
 ): Promise<void> {
   const sources = await tx
     .selectFrom('snapshot_source')
@@ -652,9 +669,13 @@ async function writeApprovals(
     .where('snapshot_source.snapshot_id', '=', snapshotId)
     .execute()
 
-  await tx.deleteFrom('approval').where('review_id', '=', reviewId).execute()
-
   if (sources.length === 0) return
+
+  if (commitSha !== undefined) {
+    return writeApprovedCommits(tx, reviewId, snapshotId, sources, t, commitSha)
+  }
+
+  await tx.deleteFrom('approval').where('review_id', '=', reviewId).execute()
 
   await tx
     .insertInto('approval')
@@ -693,20 +714,37 @@ async function writeApprovedCommits(
   snapshotId: string,
   sources: { source_id: string; root_path: string }[],
   t: number,
+  /** One commit, or every commit the revision carries. */
+  only?: string | undefined,
 ): Promise<void> {
   const roots = new Map(sources.map((source) => [source.source_id, source.root_path]))
 
-  const commits = await tx
+  let query = tx
     .selectFrom('commit')
     .select(['source_id', 'sha', 'patch_id', 'parent_sha'])
     .where('snapshot_id', '=', snapshotId)
-    .execute()
 
-  await tx.deleteFrom('approved_commit').where('review_id', '=', reviewId).execute()
+  if (only !== undefined) query = query.where('sha', '=', only)
+
+  const commits = await query.execute()
+
+  // Approving one commit adds to what is covered rather than replacing it,
+  // which is the whole point of approving them one at a time. Approving the
+  // change as a whole still starts over, because it is a statement about every
+  // commit and a stale row would outlive the commit it described.
+  if (only === undefined) {
+    await tx.deleteFrom('approved_commit').where('review_id', '=', reviewId).execute()
+  } else {
+    await tx
+      .deleteFrom('approved_commit')
+      .where('review_id', '=', reviewId)
+      .where('sha', '=', only)
+      .execute()
+  }
 
   // A review of a working tree lists no commits, and there is nothing here to
   // record. Its approval is the fingerprint, which is what commit gating asks
-  // about anyway.
+  // about anyway. A sha naming no commit in this revision lands here too.
   if (commits.length === 0) return
 
   await tx
@@ -726,9 +764,44 @@ async function writeApprovedCommits(
 }
 
 /** Removes an approval inside the window before a commit consumes it. */
-export async function unapprove(deps: Deps, reviewId: string): Promise<{ removed: number }> {
+export async function unapprove(
+  deps: Deps,
+  reviewId: string,
+  /**
+   * Which commit to take back, or the whole review when absent.
+   *
+   * Withdrawing follows the reading the reviewer had open, the way approving
+   * does, so the two controls mean the same thing by "this commit".
+   */
+  commitSha?: string | undefined,
+): Promise<{ removed: number }> {
   const { db } = deps
   const t = now()
+
+  if (commitSha !== undefined) {
+    const one = await db
+      .deleteFrom('approved_commit')
+      .where('review_id', '=', reviewId)
+      .where('sha', '=', commitSha)
+      .executeTakeFirst()
+
+    // The fingerprint approval covers the whole reading, and one commit of it
+    // is no longer approved, so it cannot stand. Taking it out is what stops a
+    // push clearing on a range the reviewer has partly withdrawn.
+    await db
+      .deleteFrom('approval')
+      .where('review_id', '=', reviewId)
+      .where('consumed_at', 'is', null)
+      .execute()
+
+    await db
+      .updateTable('review')
+      .set({ status: 'open', last_activity_at: t, updated_at: t })
+      .where('id', '=', reviewId)
+      .execute()
+
+    return { removed: Number(one.numDeletedRows) }
+  }
 
   const result = await db
     .deleteFrom('approval')
