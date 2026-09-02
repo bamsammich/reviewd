@@ -460,11 +460,26 @@ main.review > .rail > .page-title {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .commits .crow.on .subj { font-weight: 500; }
+/* A column that is always there, holding a tick or holding nothing, so the
+   shas beside it stay in one line however much of the change is covered. */
+.commits .crow .tick {
+  flex: 0 0 auto; width: .85rem; text-align: center;
+  font-size: .72rem; line-height: 1; color: transparent;
+}
+.commits .crow .tick.yes { color: var(--add-ink); }
+.commits .crow.on .tick.yes { color: var(--add-ink); }
+
 /* Right-aligned like the file tallies a few rows down, and in the same column
    whichever entry it belongs to. */
 .commits .crow .n {
   font-family: var(--mono); font-size: .68rem; color: var(--muted);
   flex: 0 0 auto; margin-left: auto;
+}
+
+/* How much of the change is covered, where GitHub puts its viewed count. */
+.commits > summary .cov {
+  font-family: var(--mono); font-size: .68rem; color: var(--add-ink);
+  margin-left: auto; flex: 0 0 auto;
 }
 
 /* What the revision is a reading of. Quiet, because it is orientation rather
@@ -1063,6 +1078,25 @@ main.with-bar { padding-bottom: 7.5rem; }
 .bar .row { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
 .bar .state { font-size: .82rem; color: var(--muted); flex: 1 1 100%; }
 .bar .state strong { color: var(--ink); }
+
+/* An action written into the sentence rather than standing in the button row.
+   Sending comments as notes decides nothing about the code, so it is the one
+   of the three that is not a verdict, and the row has no width for a third
+   button once a label carries its scope: measured at 375px the bar holds
+   319px, and three scoped buttons want 371px.
+
+   A button and not a link, because it submits the same form the buttons do and
+   works with the script unloaded. Underlined, so it does not rely on colour. */
+.bar .state .linkbtn {
+  /* Every property the button rule sets has to come back off, or a control
+     meant to read as a word in a sentence keeps a 2.5rem tap height and sits
+     in the line like a block. */
+  font: inherit; display: inline; vertical-align: baseline;
+  min-height: 0; padding: 0; border: 0; border-radius: 0;
+  background: none; color: var(--accent);
+  text-decoration: underline; cursor: pointer;
+}
+.bar .state .linkbtn:hover { text-decoration-thickness: 2px; border-color: transparent; }
 .bar .verdicts { display: flex; gap: .5rem; flex: 1 1 auto; }
 .bar .verdicts button { flex: 1 1 auto; }
 

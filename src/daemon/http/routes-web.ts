@@ -302,19 +302,37 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
 
     await requireCurrentToken(deps, reviewId, form['token'])
 
-    const parsed = verdictSchema.safeParse(form['verdict'])
-    if (parsed.success) await submitReview(deps, reviewId, parsed.data)
+    // Which commit was on screen when the verdict was given. Approving covers
+    // that commit alone, and the reader goes back to it rather than to the top
+    // of the whole change, so pressing the button does not also navigate.
+    const commit = typeof form['commit'] === 'string' ? form['commit'] : undefined
 
-    return back(c, reviewId)
+    const parsed = verdictSchema.safeParse(form['verdict'])
+
+    // Only an approval is about a commit. Sending notes and requesting changes
+    // are about the review, so they are submitted unscoped whatever is open.
+    if (parsed.success) {
+      await submitReview(
+        deps,
+        reviewId,
+        parsed.data,
+        parsed.data === 'approved' ? commit : undefined,
+      )
+    }
+
+    return back(c, reviewId, undefined, commit)
   })
 
   routes.post('/r/:id/unapprove', async (c) => {
     const reviewId = c.req.param('id')
+    const form = await c.req.parseBody()
 
-    await requireCurrentToken(deps, reviewId, (await c.req.parseBody())['token'])
-    await unapprove(deps, reviewId)
+    await requireCurrentToken(deps, reviewId, form['token'])
 
-    return back(c, reviewId)
+    const commit = typeof form['commit'] === 'string' ? form['commit'] : undefined
+    await unapprove(deps, reviewId, commit)
+
+    return back(c, reviewId, undefined, commit)
   })
 
   /**

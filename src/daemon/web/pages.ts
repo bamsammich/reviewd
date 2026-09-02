@@ -127,6 +127,14 @@ export interface CommitView {
   author: string
   committedAt: number
   files: number
+  /**
+   * Whether an approval covers this commit.
+   *
+   * Read from `approved_commit` rather than from the review's status, because
+   * a review is approved commit by commit and the two answers diverge the
+   * moment somebody approves one commit out of five.
+   */
+  approved: boolean
 }
 
 /** The commits of the current revision, oldest first, or none. */
@@ -157,6 +165,23 @@ export async function loadCommits(db: Kysely<Database>, reviewId: string): Promi
 
   const byCommit = new Map(counts.map((row) => [row.commit_id, row.n]))
 
+  // Matched on sha rather than on a row id, because an approval outlives the
+  // revision that carried the commit and the ids are replaced with it.
+  const covered = new Set(
+    (
+      await db
+        .selectFrom('approved_commit')
+        .select('sha')
+        .where('review_id', '=', reviewId)
+        .where(
+          'sha',
+          'in',
+          commits.map((commit) => commit.sha),
+        )
+        .execute()
+    ).map((row) => row.sha),
+  )
+
   return commits.map((commit) => ({
     id: commit.id,
     sha: commit.sha,
@@ -164,6 +189,7 @@ export async function loadCommits(db: Kysely<Database>, reviewId: string): Promi
     author: commit.author,
     committedAt: commit.committed_at,
     files: byCommit.get(commit.id) ?? 0,
+    approved: covered.has(commit.sha),
   }))
 }
 

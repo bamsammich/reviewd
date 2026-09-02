@@ -1356,7 +1356,7 @@ describe('submit bar after approval', () => {
     })
     const markup = reviewPage(approved(), [file('src/a.ts')], [draft]).value
 
-    expect(markup).toContain('Sending them takes the approval back')
+    expect(markup).toContain('takes the approval back')
     expect(markup).toContain('value="comment"')
   })
 })
@@ -1423,13 +1423,14 @@ describe('commenting on the change as a whole', () => {
  * before, which is every review of a working tree.
  */
 describe('the commits of a push', () => {
-  const commit = (sha: string, subject: string, files = 2): CommitView => ({
+  const commit = (sha: string, subject: string, files = 2, approved = false): CommitView => ({
     id: `id-${sha}`,
     sha,
     subject,
     author: 'test',
     committedAt: 1_700_000_000_000,
     files,
+    approved,
   })
 
   const COMMITS = [commit('aaaaaaa1111', 'to two'), commit('bbbbbbb2222', 'add b', 1)]
@@ -1641,5 +1642,151 @@ describe('the configured font scale', () => {
   it('refuses a scale that would make the page unreadable', () => {
     expect(at(0.1)).toContain('font-size: 75%')
     expect(at(9)).toContain('font-size: 150%')
+  })
+})
+
+/**
+ * Approving covers commits, so the control has to say which ones it means.
+ *
+ * The scope follows the reading on screen, and the button carries it in its
+ * own label rather than leaving it to the sentence beside it: a reader who
+ * takes in only buttons is told as much as one who reads the whole bar.
+ */
+describe('a verdict scoped to the reading on screen', () => {
+  const commit = (sha: string, subject: string, approved = false): CommitView => ({
+    id: `id-${sha}`,
+    sha,
+    subject,
+    author: 'test',
+    committedAt: 1_700_000_000_000,
+    files: 2,
+    approved,
+  })
+
+  const page = (commits: CommitView[], selected?: CommitView, threads: Thread[] = []) =>
+    reviewPage(summary(), [file('src/a.ts')], threads, undefined, 'split', new Set(), 'open', {
+      commits,
+      ...(selected === undefined ? {} : { selected }),
+    }).value
+
+  const THREE = [
+    commit('aaaaaaa1111', 'first', true),
+    commit('bbbbbbb2222', 'second'),
+    commit('ccccccc3333', 'third'),
+  ]
+
+  it('names the whole change in the button while the whole change is showing', () => {
+    expect(page(THREE)).toContain('Approve all 3')
+  })
+
+  it('names the commit in the button while one commit is showing', () => {
+    const markup = page(THREE, THREE[1])
+
+    expect(markup).toContain('Approve this commit')
+    expect(markup).not.toContain('Approve all 3')
+  })
+
+  // Without it the route cannot tell which reading the verdict came from, and
+  // an approval of one commit would silently cover every commit.
+  it('sends the commit along with the verdict', () => {
+    expect(page(THREE, THREE[1])).toContain('name="commit" value="bbbbbbb2222"')
+  })
+
+  it('sends no commit from the whole change', () => {
+    expect(page(THREE)).not.toContain('name="commit"')
+  })
+
+  it('offers to withdraw just this commit once it is covered', () => {
+    const markup = page(THREE, THREE[0])
+
+    expect(markup).toContain('Unapprove this commit')
+    expect(markup).not.toContain('value="approved"')
+  })
+
+  it('still offers to approve the whole change while one commit of it is covered', () => {
+    const markup = page(THREE)
+
+    expect(markup).toContain('Approve all 3')
+    expect(markup).not.toContain('Unapprove')
+  })
+
+  it('says how much of the change is covered', () => {
+    expect(page(THREE)).toContain('1 of 3 commits approved')
+  })
+
+  it('offers to withdraw the whole change once every commit is covered', () => {
+    const all = THREE.map((one) => ({ ...one, approved: true }))
+
+    expect(page(all)).toContain('Unapprove all 3')
+  })
+
+  /**
+   * A review of a working tree has no commits to scope to, so the bar keeps
+   * the wording it has always had.
+   */
+  it('leaves a review with no commits alone', () => {
+    const markup = page([])
+
+    // Trailing whitespace, because the label is written on its own line in the
+    // template. The point is the bare verb with nothing scoped after it.
+    expect(markup).toMatch(/value="approved"[^>]*>\s*Approve\s*</)
+    expect(markup).not.toContain('Approve all')
+    expect(markup).not.toContain('Approve this commit')
+  })
+})
+
+/**
+ * The commit rail, marking what is covered.
+ *
+ * Modelled on GitHub's per-file Viewed checkbox and its count, because a
+ * reviewer working through a stack needs to see where they stopped without
+ * opening each commit to find out.
+ */
+describe('coverage in the commit rail', () => {
+  const commit = (sha: string, subject: string, approved = false): CommitView => ({
+    id: `id-${sha}`,
+    sha,
+    subject,
+    author: 'test',
+    committedAt: 1_700_000_000_000,
+    files: 2,
+    approved,
+  })
+
+  const rail = (commits: CommitView[]) =>
+    reviewPage(summary(), [file('src/a.ts')], [], undefined, 'split', new Set(), 'open', {
+      commits,
+      listOpen: true,
+    }).value
+
+  const TWO = [commit('aaaaaaa1111', 'first', true), commit('bbbbbbb2222', 'second')]
+
+  it('counts what is covered in the summary', () => {
+    expect(rail(TWO)).toContain('<span class="cov">1/2</span>')
+  })
+
+  it('says nothing about coverage before anything is covered', () => {
+    expect(rail(TWO.map((one) => ({ ...one, approved: false })))).not.toContain('class="cov"')
+  })
+
+  it('marks the covered commit and not the others', () => {
+    const markup = rail(TWO)
+
+    expect(markup).toContain('<span class="tick yes"')
+    // One approved commit, so one marked row and one empty column holding its
+    // place, which is what keeps the shas in a line.
+    expect(markup.match(/class="tick yes"/g)).toHaveLength(1)
+  })
+
+  // Colour and a glyph are the only other things carrying it, and a screen
+  // reader gets neither.
+  it('says approved in words as well as in a mark', () => {
+    expect(rail(TWO)).toContain('<span class="visually-hidden">approved</span>')
+  })
+
+  it('marks the whole change only once every commit is covered', () => {
+    const all = TWO.map((one) => ({ ...one, approved: true }))
+
+    expect(rail(all).match(/class="tick yes"/g)).toHaveLength(3)
   })
 })
