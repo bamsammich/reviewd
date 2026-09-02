@@ -837,6 +837,28 @@ tr.threadrow td { padding: 0; background: var(--surface-2); white-space: normal;
   border-left: 3px solid var(--rule-strong); color: var(--muted);
 }
 .thread .body a { color: var(--accent); }
+
+/* A heading inside a comment, sized as emphasis rather than as structure. The
+   page's own headings carry the document; these only separate the parts of one
+   note, so they are the body's weight with more space above than below. */
+.thread .body .ch {
+  font-size: .92rem; font-weight: 600; color: var(--ink);
+  margin: .7rem 0 .2rem; line-height: 1.35;
+}
+.thread .body > .ch:first-child { margin-top: 0; }
+
+/* A table, which arrives whenever a comment compares things. Scrolls inside
+   its own box, because a wide one in a narrow thread would otherwise push the
+   diff sideways. */
+.thread .body table {
+  display: block; width: max-content; max-width: 100%; overflow-x: auto;
+  border-collapse: collapse; margin: .5rem 0; font-size: .88rem;
+}
+.thread .body th, .thread .body td {
+  border: 1px solid var(--rule); padding: .25rem .5rem; text-align: left;
+  vertical-align: top;
+}
+.thread .body th { background: var(--surface-2); font-weight: 600; }
 .thread label { display: block; font-size: .78rem; color: var(--muted); margin-bottom: .25rem; }
 .thread textarea {
   width: 100%; font: inherit; font-size: 16px; padding: .5rem .6rem;

@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { renderMarkdown } from './markdown.js'
 
-const render = (body: string): string => renderMarkdown(body).value
+/**
+ * The rendered body, with the newlines a block parser puts between tags taken
+ * out.
+ *
+ * Whitespace between block elements says nothing to a reader and pinning it
+ * would make every one of these a test of the parser's formatting rather than
+ * of what a comment turns into.
+ */
+const render = (body: string): string => renderMarkdown(body).value.replace(/>\n+</g, '><').trim()
 
 /**
  * The subset a review comment uses, and the escaping that makes it safe.
@@ -145,7 +153,9 @@ describe('the rest of the subset', () => {
   })
 
   it('renders a quote', () => {
-    expect(render('> they said this')).toBe('<blockquote>they said this</blockquote>')
+    // A paragraph inside the quote, which is what the block grammar says a
+    // quoted line is.
+    expect(render('> they said this')).toBe('<blockquote><p>they said this</p></blockquote>')
   })
 
   it('splits paragraphs on a blank line', () => {
@@ -153,7 +163,7 @@ describe('the rest of the subset', () => {
   })
 
   it('keeps a single newline as a break', () => {
-    expect(render('one\ntwo')).toBe('<p>one<br />two</p>')
+    expect(render('one\ntwo')).toBe('<p>one<br>\ntwo</p>')
   })
 
   it('renders plain text as one paragraph', () => {
@@ -162,5 +172,80 @@ describe('the rest of the subset', () => {
 
   it('renders an empty body as nothing', () => {
     expect(render('')).toBe('')
+  })
+})
+
+/**
+ * What the subset could not do.
+ *
+ * Both arrived as their own source text: a heading as its hashes, a table as
+ * rows of pipes. Agent comments explaining a change carry both constantly.
+ */
+describe('what a parser answers that a subset did not', () => {
+  it('renders a heading', () => {
+    expect(render('## Two things')).toContain('Two things</h5>')
+  })
+
+  /**
+   * Under the page's own headings, so a comment cannot outrank the review's
+   * title in the outline a screen reader reads out.
+   */
+  it('puts a comment heading below the page structure', () => {
+    expect(render('# One')).toContain('<h4 class="ch">One</h4>')
+    expect(render('## Two')).toContain('<h5 class="ch">Two</h5>')
+    expect(render('### Three')).toContain('<h6 class="ch">Three</h6>')
+    // Deeper than the page has room for, so they stop rather than keep going.
+    expect(render('#### Four')).toContain('<h6 class="ch">Four</h6>')
+  })
+
+  it('renders a table', () => {
+    const out = render('| option | cost |\n| --- | --- |\n| A | none |')
+
+    expect(out).toContain('<table>')
+    expect(out).toContain('<th>option</th>')
+    expect(out).toContain('<td>none</td>')
+  })
+
+  it('renders markup inside a table cell', () => {
+    const out = render('| what | where |\n| --- | --- |\n| `busyWriting` | **here** |')
+
+    expect(out).toContain('<code>busyWriting</code>')
+    expect(out).toContain('<strong>here</strong>')
+  })
+
+  // A table is the shape most likely to arrive malformed, since a comment is
+  // written in a small box.
+  it('leaves a half-written table as text rather than failing', () => {
+    const out = render('| a | b |\nnot a delimiter row')
+
+    expect(out).toContain('| a | b |')
+    expect(out).not.toContain('<table>')
+  })
+})
+
+describe('what a comment still cannot produce', () => {
+  it('escapes raw html inside a table cell', () => {
+    const out = render('| a |\n| --- |\n| <img src=x onerror=alert(1)> |')
+
+    expect(out).not.toContain('<img')
+    expect(out).toContain('&lt;img')
+  })
+
+  it('escapes raw html inside a heading', () => {
+    expect(render('# <script>alert(1)</script>')).not.toContain('<script>')
+  })
+
+  // A bare URL stays text: a path or a hostname inside a sentence about code
+  // is ordinary here, and linking one nobody asked to link is noise.
+  it('leaves a bare url alone', () => {
+    const out = render('see https://example.com now')
+
+    expect(out).not.toContain('<a ')
+    expect(out).toContain('https://example.com')
+  })
+
+  it('marks an external link and leaves a local one plain', () => {
+    expect(render('[docs](https://example.com)')).toContain('rel="noopener noreferrer nofollow"')
+    expect(render('[here](/r/abc)')).not.toContain('rel=')
   })
 })
