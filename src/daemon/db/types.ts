@@ -44,10 +44,37 @@ export interface SnapshotTable {
   created_at: Millis
 }
 
+/**
+ * One commit of a push, as much of it as the daemon can be told.
+ *
+ * The daemon never runs git and cannot see the repository, so everything here
+ * arrives computed by the client. Ordered oldest first, which is the order the
+ * commits were written in rather than the order rev-list hands them back.
+ */
+export interface CommitTable {
+  id: string
+  snapshot_id: string
+  source_id: string
+  sha: string
+  subject: string
+  author: string
+  committed_at: Millis
+  ordinal: number
+}
+
 export interface FileChangeTable {
   id: string
   snapshot_id: string
   source_id: string
+  /**
+   * The commit this change belongs to, or null for the combined change set.
+   *
+   * Both live in this table at once: the rows with no commit are the sum of
+   * the push, which is what the page has always drawn, and the rows with one
+   * are what a single commit did. A review from before commits were stored has
+   * only the first kind and renders unchanged.
+   */
+  commit_id: string | null
   path: string
   change_type: 'added' | 'modified' | 'deleted' | 'renamed' | 'binary'
   old_path: string | null
@@ -157,6 +184,7 @@ export interface Database {
   snapshot: SnapshotTable
   snapshot_source: SnapshotSourceTable
   file_change: FileChangeTable
+  commit: CommitTable
   blob: BlobTable
   thread: ThreadTable
   message: MessageTable
