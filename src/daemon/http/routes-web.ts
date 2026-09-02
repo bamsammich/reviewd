@@ -14,7 +14,7 @@ import {
   submitReview,
   unapprove,
 } from '../threads.js'
-import { loadFiles, messagePage, reviewListPage } from '../web/pages.js'
+import { loadCommits, loadFiles, messagePage, reviewListPage } from '../web/pages.js'
 import {
   parseFolds,
   parseOpenBox,
@@ -37,7 +37,9 @@ const HEARTBEAT_MS = 25_000
 export function webRoutes(deps: Deps & { bus: Bus }): Hono {
   const routes = new Hono()
 
-  routes.get('/', async (c) => c.html(reviewListPage(await listReviews(deps, {})).value))
+  const fontScale = deps.config.ui.font_scale
+
+  routes.get('/', async (c) => c.html(reviewListPage(await listReviews(deps, {}), fontScale).value))
 
   routes.get('/r/:id', async (c) => {
     const reviewId = c.req.param('id')
@@ -47,8 +49,17 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
       // Reading a review is activity, so opening one keeps the sweep off it.
       await touchReview(deps.db, reviewId)
 
+      // Which commit is being read travels in the URL rather than a cookie.
+      // The cookies below carry display preferences, which belong to one
+      // person and should not ride along on a shared link. The commit is what
+      // the page is about, so a link to it has to carry it.
+      const commits = await loadCommits(deps.db, reviewId)
+      const askedCommit = c.req.query('commit')
+      const commit =
+        askedCommit === undefined ? undefined : commits.find((one) => one.sha === askedCommit)
+
       const [files, threads] = await Promise.all([
-        loadFiles(deps.db, reviewId),
+        loadFiles(deps.db, reviewId, commit?.id),
         listThreads(deps, reviewId, { includeDrafts: true }),
       ])
 
@@ -74,7 +85,13 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
         asked = true
       }
 
-      if (asked) return c.redirect(`/r/${reviewId}`, 303)
+      // The commit rides through the redirect, because it says what the page
+      // is showing rather than how. Changing to unified while reading commit
+      // three should leave you on commit three.
+      if (asked) {
+        const back = commit === undefined ? '' : `?commit=${encodeURIComponent(commit.sha)}`
+        return c.redirect(`/r/${reviewId}${back}`, 303)
+      }
 
       const view = parseViewMode(cookie(c, 'reviewd_view'))
       const rail = parseRail(cookie(c, 'reviewd_rail'))
@@ -91,6 +108,8 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
           view,
           folded,
           rail,
+          { commits, ...(commit === undefined ? {} : { selected: commit }) },
+          fontScale,
         ).value,
       )
     } catch (error) {
@@ -99,6 +118,7 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
           messagePage(
             'Not found',
             'That review is gone. An agent released it, or it was swept after sitting idle.',
+            fontScale,
           ).value,
           404,
         )
@@ -372,7 +392,7 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
 
   routes.onError((error, c) => {
     if (error instanceof ReviewError) {
-      return c.html(messagePage('Cannot do that', error.message).value, error.status)
+      return c.html(messagePage('Cannot do that', error.message, fontScale).value, error.status)
     }
     throw error
   })

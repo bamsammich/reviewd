@@ -1,6 +1,6 @@
 import type { ReviewSummary, Thread } from '../../protocol.js'
 import { describe, expect, it } from 'vitest'
-import type { FileView } from './pages.js'
+import type { CommitView, FileView } from './pages.js'
 import { foldKey, parseFolds, parseOpenBox, parseRail, reviewPage } from './review-page.js'
 
 const SOURCE = 'src-1'
@@ -1299,5 +1299,177 @@ describe('commenting on the change as a whole', () => {
     const compose = section.slice(0, section.indexOf('</section>'))
 
     expect(compose).not.toContain('class="primary"')
+  })
+})
+
+/**
+ * Reading one commit of a push, rather than the sum of them.
+ *
+ * The list is above the files because a commit is picked before a file is.
+ * Everything here holds a review with no commits to exactly what it drew
+ * before, which is every review of a working tree.
+ */
+describe('the commits of a push', () => {
+  const commit = (sha: string, subject: string, files = 2): CommitView => ({
+    id: `id-${sha}`,
+    sha,
+    subject,
+    author: 'test',
+    committedAt: 1_700_000_000_000,
+    files,
+  })
+
+  const COMMITS = [commit('aaaaaaa1111', 'to two'), commit('bbbbbbb2222', 'add b', 1)]
+
+  const withCommits = (selected?: CommitView) =>
+    reviewPage(summary(), [file('src/a.ts')], [], undefined, 'split', new Set(), 'open', {
+      commits: COMMITS,
+      ...(selected === undefined ? {} : { selected }),
+    }).value
+
+  it('says nothing about commits when a revision carries none', () => {
+    const markup = reviewPage(summary(), [file('src/a.ts')], []).value
+
+    // The elements, not the words: the stylesheet names both classes.
+    expect(markup).not.toContain('<details class="commits"')
+    expect(markup).not.toContain('<div class="readingcommit">')
+  })
+
+  it('lists them oldest first, above the files', () => {
+    const markup = withCommits()
+    const rail = markup.match(/<div class="rail">[\s\S]*?<div class="files">/)?.[0] ?? ''
+
+    expect(rail.indexOf('class="commits"')).toBeLessThan(rail.indexOf('class="scope"'))
+    expect(rail.indexOf('to two')).toBeLessThan(rail.indexOf('add b'))
+  })
+
+  // Closed while the whole change is showing: a reader who has not asked for
+  // the list wants the filenames, which is what the column is for.
+  it('stays shut until a commit is being read', () => {
+    expect(withCommits()).toContain('<details class="commits" >')
+    expect(withCommits(COMMITS[1])).toContain('<details class="commits" open>')
+  })
+
+  /**
+   * The way back is an entry in the list, not a title above it.
+   *
+   * Phrased as a count so it reads as one of the same kind of thing as the
+   * rows under it. Asserted on the row's own text rather than on the page,
+   * because prose elsewhere can contain the same words.
+   */
+  it('offers all the commits as the first entry, in the same shape as the rest', () => {
+    const markup = withCommits(COMMITS[0])
+    const rows = [...markup.matchAll(/<a\s+class="crow[^"]*"[\s\S]*?<\/a>/g)].map((m) => m[0])
+
+    expect(rows).toHaveLength(3)
+    expect(rows[0]).toContain('All 2 commits')
+    // No slot held open for an identifier this entry will never have. It reads
+    // as one of the list rather than a title over it because it is phrased as
+    // a count and drawn as a row, not because it lines up with the shas.
+    expect(rows[0]).not.toContain('class="sha"')
+    expect(rows[1]).toContain('<span class="sha">aaaaaaa</span>')
+    expect(rows[1]).toContain('to two')
+  })
+
+  it('marks the one being read for a reader who cannot see the border', () => {
+    const list =
+      withCommits(COMMITS[1]).match(/<details class="commits"[\s\S]*?<\/details>/)?.[0] ?? ''
+    const rows = list.match(/aria-current="true"/g) ?? []
+
+    expect(rows).toHaveLength(1)
+    expect(list).toContain('?commit=bbbbbbb2222')
+  })
+
+  // The rail is a drawer and the drawer closes, so the diff carries its own
+  // copy of what is on screen and its own way back.
+  it('names the commit above the diff, with the way out of it', () => {
+    const markup = withCommits(COMMITS[1])
+    const strip = markup.match(/<div class="readingcommit">[\s\S]*?<\/div>\s*<\/div>/)?.[0] ?? ''
+
+    expect(strip).toContain('add b')
+    expect(strip).toContain('bbbbbbb')
+    expect(strip).toContain('commit\n        2 of 2')
+    expect(strip).toContain(`href="/r/${REVIEW}"`)
+  })
+
+  /**
+   * A comment is filed against the combined change set. A line as one commit
+   * left it may not be in that set at all, so the daemon refuses it, and a
+   * control that always fails is worse than no control.
+   */
+  it('draws no comment control while a commit is being read', () => {
+    expect(withCommits()).toContain('class="addnote"')
+    expect(withCommits(COMMITS[0])).not.toContain('class="addnote"')
+  })
+
+  /**
+   * A grid column defaults to auto, which sizes to max-content: the longest
+   * subject set the width of the list, rows ran past the right edge of the
+   * rail, and the ellipsis on each subject never had a reason to fire.
+   */
+  it('lets a long subject shrink rather than widening the rail', () => {
+    const markup = withCommits()
+
+    expect(markup).toMatch(/\.commits ul \{[^}]*grid-template-columns: minmax\(0, 1fr\)/)
+    expect(markup).toMatch(/\.commits li \{ min-width: 0; \}/)
+    expect(markup).toMatch(/\.commits \.crow \.subj \{[^}]*text-overflow: ellipsis/)
+  })
+
+  // The bar describes the page. Showing the push's size next to one commit's
+  // diff would be a number about something not on screen.
+  it('counts what is drawn, so the bar follows the commit', () => {
+    const whole = withCommits()
+    const one = withCommits(COMMITS[0])
+
+    expect(whole).toContain('class="wholechange"')
+    expect(one).toContain('class="wholechange"')
+    expect(one).toContain('<div class="readingcommit">')
+  })
+
+  it('says why rather than leaving the reader to find out', () => {
+    expect(withCommits(COMMITS[0])).toContain('Comments go on the whole change')
+  })
+})
+
+/**
+ * How large the pages draw, set once in the daemon's config.
+ *
+ * A percentage on the root, because every size on these pages is a rem. Left
+ * out at 1 so the default page is byte for byte what it was.
+ */
+describe('the configured font scale', () => {
+  const at = (scale?: number) =>
+    reviewPage(
+      summary(),
+      [file('src/a.ts')],
+      [],
+      undefined,
+      'split',
+      new Set(),
+      'open',
+      { commits: [] },
+      scale,
+    ).value
+
+  // One html rule is the stylesheet's own. A scale adds a second.
+  const htmlRules = (markup: string) => (markup.match(/html \{/g) ?? []).length
+
+  it('changes nothing when nothing is configured', () => {
+    expect(htmlRules(at())).toBe(1)
+    expect(htmlRules(at(1))).toBe(1)
+    expect(htmlRules(at(0.9))).toBe(2)
+  })
+
+  it('writes one rule for the root, and only that', () => {
+    const markup = at(0.9)
+
+    expect(markup).toMatch(/<style>\s*html \{\s*font-size: 90%;\s*\}\s*<\/style>/)
+  })
+
+  // Two layers clamp it: the schema, which is what a config file passes
+  // through, and the renderer, which is what every other caller passes through.
+  it('refuses a scale that would make the page unreadable', () => {
+    expect(at(0.1)).toContain('font-size: 75%')
+    expect(at(9)).toContain('font-size: 150%')
   })
 })

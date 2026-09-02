@@ -8,7 +8,7 @@ import { renderMarkdown } from './markdown.js'
 // without also needing the file it is in, which is what a position carries.
 import { buildRows, toHunks, toSplitRows, type Half, type Row, type SplitRow } from './hunks.js'
 import { page, topBar } from './layout.js'
-import { age, type FileView } from './pages.js'
+import { age, type CommitView, type FileView } from './pages.js'
 import { basenameOf, displayPath } from './paths.js'
 import { mintPageToken } from './tokens.js'
 import { buildTree, filesOf, type TreeDirectory, type TreeFile, type TreeNode } from './tree.js'
@@ -97,6 +97,17 @@ interface Page {
   folded: ReadonlySet<string>
   palette: Palette
   diffs: Diffs
+  /**
+   * True while one commit is being read rather than the whole change.
+   *
+   * A comment is filed against the combined change set, so a line that exists
+   * only in commit two has nothing to attach to and the daemon refuses it. A
+   * control that cannot work is worse than no control, so the gutter draws
+   * without one here. Anchoring a comment to a commit is its own piece of
+   * work; existing threads still appear wherever their file and line are on
+   * screen.
+   */
+  readOnly: boolean
 }
 
 export { parsePosition as parseOpenBox, positionKey as boxKey } from './position.js'
@@ -163,6 +174,18 @@ export function parseFolds(value: string | undefined, reviewId: string): Set<str
   return folds
 }
 
+/**
+ * The commits of this revision, and which one is being read.
+ *
+ * Empty for a review of a working tree, and for every review taken before
+ * commits were stored, so the page draws exactly as it did.
+ */
+export interface CommitScope {
+  commits: CommitView[]
+  /** Absent while the combined change set is showing. */
+  selected?: CommitView
+}
+
 export function reviewPage(
   review: ReviewSummary,
   files: FileView[],
@@ -171,6 +194,9 @@ export function reviewPage(
   view: ViewMode = 'split',
   folded: ReadonlySet<string> = new Set(),
   rail: RailState = 'open',
+  scope: CommitScope = { commits: [] },
+  /** From the daemon's config, so one reader can shrink the page to fit more. */
+  fontScale = 1,
 ): SafeHtml {
   const drafts = threads.reduce(
     (count, thread) => count + thread.messages.filter((m) => m.submittedAt === null).length,
@@ -184,11 +210,19 @@ export function reviewPage(
   // no others, reaches the stylesheet at the end.
   const palette = new Palette()
   const diffs = diffsFor(files)
-  const page_: Page = { review, threads, open, folded, palette, diffs }
+  const page_: Page = {
+    review,
+    threads,
+    open,
+    folded,
+    palette,
+    diffs,
+    readOnly: scope.selected !== undefined,
+  }
 
   const body = html` ${topBar(
     review.title,
-    html`${wholeChangeTally(diffs)}${diffControls(review, view, rail)}<span class="rev"
+    html`${viewTally(diffs)}${diffControls(review, view, rail)}<span class="rev"
         >rev ${review.snapshotSeq}</span
       >`,
   )}
@@ -220,11 +254,12 @@ export function reviewPage(
       -->
       <div class="rail">
         <h1 class="page-title">${review.title}</h1>
-        ${scopeList(grouped, threads, diffs)}
+        ${commitList(review, scope)} ${scopeList(grouped, threads, diffs)}
         ${coaching(threads.length, drafts, awaitingYou)} ${commentIndex(threads)}
       </div>
 
       <div class="files">
+        ${readingCommit(review, scope)}
         ${
           files.length === 0
             ? html`<p class="emptystate">This revision changed nothing.</p>`
@@ -243,6 +278,7 @@ export function reviewPage(
     `${review.title} · reviewd`,
     body,
     raw(`${highlighting ? `<style>${highlighting}</style>` : ''}<script>${SCRIPT}</script>`),
+    fontScale,
   )
 }
 
@@ -265,6 +301,123 @@ function groupBySource(sources: SourceSummary[], files: FileView[]): SourceGroup
     const tree = buildTree(files.filter((file) => file.sourceId === source.id))
     return { source, tree, files: filesOf(tree) }
   })
+}
+
+/**
+ * The commits this push carries, above the files they changed.
+ *
+ * A disclosure, the shape the comment index already uses, because a commit is
+ * picked before a file and a chosen commit shortens the tree beneath it. Open
+ * while a commit is being read, closed otherwise: a reader on the combined
+ * diff has no use for the list and the files are what the column is for.
+ *
+ * Nothing renders for a review of a working tree, which has no commits, or for
+ * a review taken before commits were stored.
+ */
+function commitList(review: ReviewSummary, scope: CommitScope): SafeHtml {
+  if (scope.commits.length === 0) return raw('')
+
+  const { commits, selected } = scope
+  const count = commits.length
+
+  return html`<details class="commits" ${selected === undefined ? raw('') : raw('open')}>
+    <summary>
+      <span class="what">${count} commit${count === 1 ? '' : 's'}</span>
+      ${
+        selected === undefined
+          ? raw('')
+          : html`<span class="badge you">reading ${shortSha(selected.sha)}</span>`
+      }
+    </summary>
+    <ul>
+      <!--
+        The whole change is an entry rather than a heading. Written as a title
+        it read as one, and a reader looking for the way back from a commit had
+        no reason to think the words at the top of the list were a control.
+        Phrased as a count so it belongs to the same list as the rows under it:
+        four commits, or one of them.
+      -->
+      ${commitRow(
+        { label: `All ${count} commit${count === 1 ? '' : 's'}`, href: `/r/${review.reviewId}` },
+        selected === undefined,
+      )}
+      ${commits.map((commit) =>
+        commitRow(
+          {
+            label: commit.subject,
+            href: `/r/${review.reviewId}?commit=${commit.sha}`,
+            sha: shortSha(commit.sha),
+            files: commit.files,
+          },
+          commit.sha === selected?.sha,
+        ),
+      )}
+    </ul>
+  </details>`
+}
+
+interface CommitRow {
+  label: string
+  href: string
+  /** Absent on the entry for the whole change, which is no single commit. */
+  sha?: string
+  files?: number
+}
+
+function commitRow(row: CommitRow, on: boolean): SafeHtml {
+  return html`<li>
+    <a
+      class="crow ${on ? 'on' : ''}"
+      href="${raw(row.href)}"
+      ${on ? raw('aria-current="true"') : raw('')}
+      title="${row.label}"
+    >
+      ${row.sha === undefined ? raw('') : html`<span class="sha">${row.sha}</span>`}
+      <span class="subj">${row.label}</span>
+      ${
+        row.files === undefined
+          ? raw('')
+          : html`<span class="n">${row.files} file${row.files === 1 ? '' : 's'}</span>`
+      }
+    </a>
+  </li>`
+}
+
+/** Seven characters, which is what git prints and what a person recognises. */
+function shortSha(sha: string): string {
+  return sha.slice(0, 7)
+}
+
+/**
+ * Says which commit is on screen, above the diff it describes.
+ *
+ * The rail says it too, and the rail is a drawer that closes. This is the copy
+ * that survives, and it carries the two things the list cannot: who wrote the
+ * commit and when, and a way back to the whole change that does not require
+ * opening the drawer to find.
+ *
+ * It also states what a reader would otherwise discover by trying, which is
+ * that a comment cannot be left here yet.
+ */
+function readingCommit(review: ReviewSummary, scope: CommitScope): SafeHtml {
+  const commit = scope.selected
+  if (commit === undefined) return raw('')
+
+  const position = scope.commits.findIndex((one) => one.sha === commit.sha) + 1
+
+  return html`<div class="readingcommit">
+    <div class="who">
+      <span class="subj">${commit.subject}</span>
+      <span class="cmeta">
+        ${commit.author} &middot; <span class="sha">${shortSha(commit.sha)}</span> &middot; commit
+        ${position} of ${scope.commits.length}
+      </span>
+    </div>
+    <p class="note">
+      Comments go on the whole change. Reading a commit shows what it did on its own.
+    </p>
+    <a class="btn quiet" href="/r/${review.reviewId}">Back to the whole change</a>
+  </div>`
 }
 
 /**
@@ -756,8 +909,15 @@ function half(
   // pressing on the + and pulling down starts a link drag, no pointerup reaches
   // the handler below, and the one column the page tells you to use is the one
   // where selecting a range does nothing.
-  const action = extendable
-    ? html`<a
+  // Reading one commit leaves the gutter empty. A comment is filed against the
+  // combined change set, so a line as one commit left it has nothing to attach
+  // to and the daemon refuses it; drawing the control anyway would offer a
+  // reviewer an action that fails. The column keeps its width, so switching
+  // between a commit and the whole change does not shift the code sideways.
+  const action = page.readOnly
+    ? raw('')
+    : extendable
+      ? html`<a
         class="addnote extend"
         draggable="false"
         href="${raw(
@@ -767,7 +927,7 @@ function half(
         title="Extend down to line ${here.line}"
         >${EXTEND_ICON}</a
       >`
-    : html`<a
+      : html`<a
         class="addnote"
         draggable="false"
         href="${raw(`/r/${review.reviewId}?box=${encodeURIComponent(keyAt(here.line))}#box`)}"
@@ -1085,7 +1245,7 @@ function outdatedBlock(page: Page, outdated: Thread[]): SafeHtml {
  * halves there whatever the stored preference says.
  */
 /**
- * How big the whole change is, in the bar rather than under the file tree.
+ * How big what you are reading is, in the bar rather than under the file tree.
  *
  * The number describes the review, and the tree is one column of it. Put at the
  * end of the rail, it was read after everything that column exists for, and it
@@ -1096,8 +1256,12 @@ function outdatedBlock(page: Page, outdated: Thread[]): SafeHtml {
  *
  * Every file's own tally is unchanged and still in the rail. What moves is the
  * one number that belongs to no file.
+ *
+ * It counts the files being drawn, so reading one commit shows that commit's
+ * size rather than the push's. The bar describes the page, and the strip above
+ * the diff says which commit the page is showing.
  */
-function wholeChangeTally(diffs: Diffs): SafeHtml {
+function viewTally(diffs: Diffs): SafeHtml {
   let added = 0
   let removed = 0
 

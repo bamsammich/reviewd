@@ -79,14 +79,18 @@ const STYLE = `
 
 * { box-sizing: border-box; }
 
-html { -webkit-text-size-adjust: 100%; }
+/* Everything here is sized in rem, so the root is the one place a reader's own
+   text size and a configured scale meet. A config that sets a scale writes one
+   more declaration after this stylesheet. */
+html { -webkit-text-size-adjust: 100%; font-size: 100%; }
 
 body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
   font-family: var(--sans);
-  font-size: 16px;
+  /* Relative, or the root would scale everything except the text. */
+  font-size: 1rem;
   line-height: 1.55;
 }
 
@@ -392,6 +396,82 @@ main.review > .rail > .page-title {
   position: absolute; width: 1px; height: 1px; overflow: hidden;
   clip-path: inset(50%); white-space: nowrap;
 }
+
+/* ---------- commits ---------- */
+
+/* Above the files, because a commit is picked before a file is and a chosen
+   commit shortens the tree underneath it. A disclosure, so a twenty-commit
+   push costs one row until somebody wants the list, and open while a commit is
+   being read. The shape follows the comment index deliberately: two lists in
+   one column that behave differently are two things to learn. */
+.commits { margin: 0 0 .7rem; }
+.commits > summary {
+  font-size: .74rem; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--muted); cursor: pointer; list-style: none;
+  display: flex; align-items: center; gap: .4rem; flex-wrap: wrap;
+  min-height: 2.25rem;
+}
+.commits > summary::-webkit-details-marker { display: none; }
+.commits > summary::before { content: "\\25b8"; font-size: .65rem; }
+.commits[open] > summary::before { content: "\\25be"; }
+.commits > summary:hover { color: var(--accent); }
+.commits > summary .badge { text-transform: none; letter-spacing: 0; }
+.commits[open] > summary { margin-bottom: .4rem; }
+/* An explicit minmax column, and li that may shrink. A grid column defaults to
+   auto, which sizes to max-content: the longest commit subject then set the
+   width of the list, the rows ran past the right edge of the rail, and the
+   ellipsis on each subject never had a reason to fire. */
+.commits ul {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: .25rem;
+}
+.commits li { min-width: 0; }
+
+/* One line each, the shape the file rows below already use: an identifier on
+   the left, the subject taking what is left, a number on the right. A card per
+   commit was a third taller per row and drew a box around every entry in a
+   list whose entries are all the same kind of thing. */
+.commits .crow {
+  display: flex; align-items: center; gap: .4rem;
+  padding: .25rem .3rem; border-radius: 6px; min-height: 1.9rem;
+  text-decoration: none; color: inherit;
+}
+.commits .crow:hover { background: var(--surface-2); }
+/* Marked by more than colour: aria-current carries it to a screen reader, and
+   the subject takes the accent as well as the ground. */
+.commits .crow.on { background: var(--accent-soft); color: var(--accent); }
+/* Every sha is seven characters of a monospaced face, so the subjects line up
+   without a width being declared. The entry for the whole change carries no
+   sha and starts where the shas do, rather than holding a gap open for an
+   identifier it will never have. */
+.commits .crow .sha {
+  font-family: var(--mono); font-size: .68rem; color: var(--muted); flex: 0 0 auto;
+}
+.commits .crow.on .sha { color: var(--accent); }
+.commits .crow .subj {
+  font-size: .78rem; flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.commits .crow.on .subj { font-weight: 500; }
+/* Right-aligned like the file tallies a few rows down, and in the same column
+   whichever entry it belongs to. */
+.commits .crow .n {
+  font-family: var(--mono); font-size: .68rem; color: var(--muted);
+  flex: 0 0 auto; margin-left: auto;
+}
+
+/* The copy that survives the drawer closing, above the diff it describes. */
+.readingcommit {
+  display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+  padding: .6rem .75rem; margin: 0 0 .8rem;
+  border: 1px solid var(--rule); border-left: 3px solid var(--accent);
+  border-radius: var(--radius); background: var(--surface);
+}
+.readingcommit .who { flex: 1 1 14rem; min-width: 0; }
+.readingcommit .subj { display: block; font-weight: 600; font-size: .92rem; }
+.readingcommit .cmeta { font-size: .78rem; color: var(--muted); }
+.readingcommit .sha { font-family: var(--mono); }
+.readingcommit .note { margin: 0; font-size: .78rem; color: var(--muted); flex: 0 1 auto; }
 
 /* Below the tree now, which is what makes it a disclosure: open when a thread
    is waiting on the reader, closed when the list is reference. */
@@ -1049,7 +1129,36 @@ header.top .keeping-up .dismiss:focus-visible { outline: 2px solid currentColor;
 }
 `
 
-export function page(title: string, body: SafeHtml, extra: SafeHtml = raw('')): SafeHtml {
+/**
+ * How large a page draws, from the daemon's config.
+ *
+ * A percentage on the root rather than a rewrite of the stylesheet, so one
+ * declaration moves every size on the page and nothing else has to know a
+ * scale exists. Left out entirely at 1, which keeps the default page byte for
+ * byte what it was.
+ *
+ * The value is clamped here as well as in the schema. The schema is what a
+ * config file passes through, and this is what any other caller passes
+ * through; a page whose text is a tenth of a millimetre tall is not worth
+ * trusting two layers to prevent.
+ */
+function scaleRule(fontScale: number): SafeHtml {
+  const scale = Math.min(1.5, Math.max(0.75, fontScale))
+  if (scale === 1) return raw('')
+
+  return html`<style>
+    html {
+      font-size: ${raw(String(Math.round(scale * 100 * 100) / 100))}%;
+    }
+  </style>`
+}
+
+export function page(
+  title: string,
+  body: SafeHtml,
+  extra: SafeHtml = raw(''),
+  fontScale = 1,
+): SafeHtml {
   return html`<!doctype html>
     <html lang="en">
       <head>
@@ -1059,6 +1168,7 @@ export function page(title: string, body: SafeHtml, extra: SafeHtml = raw('')): 
         <style>
           ${raw(STYLE)}
         </style>
+        ${scaleRule(fontScale)}
       </head>
       <body>
         <a class="skip" href="#main">Skip to content</a>
