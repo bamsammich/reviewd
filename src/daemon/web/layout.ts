@@ -467,6 +467,13 @@ main.review > .rail > .page-title {
   flex: 0 0 auto; margin-left: auto;
 }
 
+/* What the revision is a reading of. Quiet, because it is orientation rather
+   than news, and above everything it orients. */
+.reading {
+  margin: 0 0 .7rem; padding: .45rem .7rem;
+  border-left: 3px solid var(--rule-strong); color: var(--muted); font-size: .84rem;
+}
+
 /* The copy that survives the drawer closing, above the diff it describes. */
 .readingcommit {
   display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;

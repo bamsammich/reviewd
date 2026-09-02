@@ -289,7 +289,7 @@ export function reviewPage(
       </div>
 
       <div class="files">
-        ${readingCommit(review, scope)}
+        ${whatThisIs(scope)} ${readingCommit(review, scope)}
         ${
           files.length === 0
             ? html`<p class="emptystate">This revision changed nothing.</p>`
@@ -429,6 +429,35 @@ function commitParam(page: Page): string {
 /** Seven characters, which is what git prints and what a person recognises. */
 function shortSha(sha: string): string {
   return sha.slice(0, 7)
+}
+
+/**
+ * What this revision is a reading of, said once at the top.
+ *
+ * A revision carrying commits was built from commits, which is a different
+ * thing from a diff against a branch and leaves out anything uncommitted.
+ * Somebody reviewing a stack that had not been pushed read such a page, found
+ * their working tree missing from it, and spent an afternoon deciding whether
+ * the review or their memory was wrong. One line names the reading.
+ *
+ * The line says what the revision holds rather than where the commits came
+ * from, because that second question has two answers: a review with no base
+ * holds everything no remote has yet, and one opened from a base holds the
+ * branch's own work from there. Both hold commits and neither holds a working
+ * tree, which is the part a reader was missing.
+ *
+ * Nothing is said for a revision with no commits, which is a working tree
+ * against a base and looks like every diff anybody has read.
+ */
+function whatThisIs(scope: CommitScope): SafeHtml {
+  if (scope.commits.length === 0 || scope.selected !== undefined) return raw('')
+
+  const count = scope.commits.length
+
+  return html`<p class="reading">
+    ${count} commit${count === 1 ? '' : 's'}, which is what this push would carry. Anything
+    uncommitted is not part of it.
+  </p>`
 }
 
 /**
