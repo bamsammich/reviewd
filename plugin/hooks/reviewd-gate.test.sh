@@ -314,6 +314,36 @@ chmod +x "$work/broken"
 REVIEWD_BIN="$work/broken" \
   check "a binary that fails" deny "cd $A && git commit -m x" "$outside"
 
+# Why it failed used to be discarded with 2>/dev/null, so every failure read as
+# a daemon that was down. A binary asking for a route an older daemon does not
+# have was reported as silence, and the message sent people to a log with
+# nothing in it.
+cat >"$work/no-route" <<'NOROUTE'
+#!/bin/bash
+echo "reviewd: no route for POST /api/gate/scope" >&2
+exit 1
+NOROUTE
+chmod +x "$work/no-route"
+
+reason=$(jq -nc --arg c "cd $A && git commit -m x" --arg d "$outside" \
+  '{tool_input:{command:$c},cwd:$d}' | REVIEWD_BIN="$work/no-route" "$HOOK" 2>&1)
+
+if printf '%s' "$reason" | grep -q 'no route for POST /api/gate/scope'; then
+  pass=$((pass + 1))
+  printf '  ok   a failure says what it was\n'
+else
+  fail=$((fail + 1))
+  printf '  FAIL a failure says what it was\n    got: %s\n' "$reason"
+fi
+
+if printf '%s' "$reason" | grep -q 'docker compose up -d --build'; then
+  pass=$((pass + 1))
+  printf '  ok   a missing route names the upgrade that fixes it\n'
+else
+  fail=$((fail + 1))
+  printf '  FAIL a missing route names the upgrade that fixes it\n    got: %s\n' "$reason"
+fi
+
 # A long argument used to cost more per character the further in it went: a
 # 32KB --body took 7.7s against this hook's 15s timeout. The bound is loose
 # because CI machines vary; it is here to catch a return to quadratic, not to

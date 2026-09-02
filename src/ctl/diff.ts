@@ -483,6 +483,14 @@ export function relativeTo(root: string, path: string): string {
  * second time.
  */
 export async function unpushedCommits(root: string): Promise<string[]> {
+  // A repository with no commits has no HEAD to name, and rev-list treats that
+  // as an error rather than as an empty answer. Nothing is unpushed there,
+  // which is what a fresh `git init` under push gating should read as: the
+  // review falls back to the working tree instead of failing on a git error
+  // nobody can act on.
+  const head = await git(root, ['rev-parse', '--verify', '--quiet', 'HEAD']).catch(() => '')
+  if (head.trim().length === 0) return []
+
   const out = await git(root, ['rev-list', 'HEAD', '--not', '--remotes'])
   return out.split('\n').filter((line) => line.length > 0)
 }

@@ -453,21 +453,38 @@ fi
 # change and restoring the file produces exactly that appearance. Deciding it
 # is `reviewd gate`'s job now, because it is the only side that also checks
 # what the index is holding.
-answer=$("$REVIEWD" gate "$root" --json --for "$verbs" 2>/dev/null)
+# stderr is kept rather than discarded. Every way `reviewd gate` can fail ends
+# here as an empty answer, and throwing the reason away made all of them read
+# as a daemon that is down: a client asking a route an older daemon does not
+# have was reported as silence, and the message sent people to a log with
+# nothing in it.
+# An explicit template with X's, because `mktemp -t name` is a BSD spelling
+# that GNU mktemp refuses.
+gate_error=$(mktemp "${TMPDIR:-/tmp}/reviewd-gate-err.XXXXXX")
+answer=$("$REVIEWD" gate "$root" --json --for "$verbs" 2>"$gate_error")
+why=$(head -c 400 "$gate_error")
+rm -f "$gate_error"
 
 if [ -z "$answer" ]; then
-  # A daemon that is down denies rather than waves everything through, because
-  # the point of the gate is that unreviewed code does not get committed. The
-  # message carries both ways out.
-  deny "reviewd is not answering, so this $noun cannot be checked.
+  # A daemon that cannot answer denies rather than waving everything through,
+  # because the point of the gate is that unreviewed code does not get
+  # committed. The message carries the reason and both ways out.
+  deny "reviewd could not check this $noun.${why:+
 
-It normally starts on first use, so something stopped it from coming up. The
-log says what:
+What it said:
+  $why}
+
+If the daemon is down, it normally starts on first use, so something stopped
+it. The log says what:
   ~/.local/state/reviewd/reviewd.log
 
 Start it by hand with \`reviewd serve\`, or restart whatever runs it for you: a
 launchd agent (launchctl kickstart -k gui/\$(id -u)/com.bamsammich.reviewd), a
 systemd unit, or the container. Then commit again.
+
+If it named a route the daemon does not have, the daemon is older than this
+binary. A container carries its own copy and upgrades separately:
+  docker compose up -d --build
 
 To turn the gate off for this repository only:
   touch \"$gitdir/reviewd-gate-off\"

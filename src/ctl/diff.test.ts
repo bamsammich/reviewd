@@ -727,3 +727,37 @@ describe('reading a push as its commits', () => {
     expect(push.diff.files.map((f) => f.path).sort()).toEqual(['src/a.ts', 'src/c.ts'])
   })
 })
+
+/**
+ * A repository nobody has committed to yet.
+ *
+ * `rev-list HEAD` treats a missing HEAD as an error rather than as an empty
+ * answer, so a fresh `git init` under push gating failed the whole review on a
+ * git error instead of reading as nothing to push.
+ */
+describe('a repository with no commits', () => {
+  let fresh: TempRepo
+
+  beforeEach(() => {
+    fresh = tempRepo()
+    fresh.write('a.ts', 'const a = 1\n')
+  })
+
+  afterEach(() => {
+    fresh.cleanup()
+  })
+
+  it('has nothing unpushed rather than an error', async () => {
+    expect(await unpushedCommits(fresh.root)).toEqual([])
+  })
+
+  it('carries no push', async () => {
+    expect(await pushRange(fresh.root)).toBeNull()
+  })
+
+  // Null is what sends the caller to the working tree, which is the only
+  // reading a repository with no commits has.
+  it('reads as no push range, so the working tree is what gets reviewed', async () => {
+    expect(await diffPushRange(source(fresh.root))).toBeNull()
+  })
+})
