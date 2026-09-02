@@ -354,3 +354,49 @@ describe('editing a comment on a commit', () => {
     expect(await ctx.db.selectFrom('thread').selectAll().execute()).toEqual([])
   })
 })
+
+/**
+ * What a revision is a reading of, said before anything else.
+ *
+ * A revision carrying commits was built from the commits no remote has yet,
+ * which excludes anything uncommitted. Someone reviewing a stack that had
+ * never been pushed read that page, found their working tree missing from it,
+ * and could not tell whether the review or their memory was wrong.
+ */
+describe('saying what the revision covers', () => {
+  it('names the reading when the revision is a push', async () => {
+    const review = await pushOfTwoCommits()
+    const html = await read(`/r/${review.reviewId}`)
+
+    expect(html).toContain('class="reading"')
+    expect(html).toContain('2 commits, which is what this push would carry')
+    expect(html).toContain('uncommitted is not part of it')
+  })
+
+  // A revision with no commits is the working tree against a base, which looks
+  // like every diff anybody has read and needs no explaining.
+  it('says nothing for a review of a working tree', async () => {
+    const review = await createReview(deps, {
+      title: 'a working tree',
+      sources: [{ path: '/tmp/repo', base: 'HEAD', includeUntracked: true }],
+      createdBy: 'test',
+      notify: false,
+    })
+
+    const source = review.sources[0]!.id
+    await createSnapshot(deps, review.reviewId, {
+      files: [change(source, 'src/a.ts', await upload('const a = 1\n'))],
+    })
+
+    expect(await read(`/r/${review.reviewId}`)).not.toContain('class="reading"')
+  })
+
+  // Reading one commit already says what it is, in the strip that names it.
+  it('stands aside once a commit is chosen', async () => {
+    const review = await pushOfTwoCommits()
+    const html = await read(`/r/${review.reviewId}?commit=aaaaaaa1111`)
+
+    expect(html).not.toContain('class="reading"')
+    expect(html).toContain('<div class="readingcommit">')
+  })
+})
