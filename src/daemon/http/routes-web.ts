@@ -116,6 +116,10 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
             listOpen: cookie(c, 'reviewd_commits') === 'open',
           },
           fontScale,
+          // Which draft is open for editing, from the address rather than a
+          // disclosure, so the state survives a reload and works with the
+          // script unloaded.
+          c.req.query('edit'),
         ).value,
       )
     } catch (error) {
@@ -271,18 +275,23 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
     const body = String(form['body'] ?? '').trim()
     if (body) await editDraft(deps, c.req.param('messageId'), body)
 
-    return back(c, c.req.param('id'), threadId)
+    // Back to the view the comment was edited on. A comment left on one commit
+    // draws only there, so landing on the whole change after saving showed the
+    // reviewer a page their comment is not on.
+    return back(c, c.req.param('id'), threadId, String(form['commitSha'] ?? ''))
   })
 
   routes.post('/r/:id/messages/:messageId/delete', async (c) => {
-    requireToken(c.req.param('id'), (await c.req.parseBody())['token'])
+    const form = await c.req.parseBody()
+    requireToken(c.req.param('id'), form['token'])
     await requireMessageIn(c.req.param('id'), c.req.param('messageId'))
     await deleteDraft(deps, c.req.param('messageId'))
 
     // Back to the review rather than to the thread: deleting the last comment
     // takes the thread with it, and a fragment pointing at something gone
-    // leaves the reader at the top of the page wondering what happened.
-    return back(c, c.req.param('id'))
+    // leaves the reader at the top of the page wondering what happened. The
+    // view survives, since the reader is still reading that commit.
+    return back(c, c.req.param('id'), undefined, String(form['commitSha'] ?? ''))
   })
 
   // One submission sends every draft at once, which is what makes a waiting

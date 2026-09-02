@@ -1043,18 +1043,132 @@ describe('a comment that has not been sent', () => {
       ],
     })
 
-  it('offers a way to edit it', () => {
-    const markup = reviewPage(summary(), [file('src/a.ts')], [draft()]).value
+  /** With one draft open for editing, the way the address asks for it. */
+  const editing = (id?: string) =>
+    reviewPage(
+      summary(),
+      [file('src/a.ts')],
+      [draft()],
+      undefined,
+      'split',
+      new Set(),
+      'open',
+      { commits: [] },
+      1,
+      id,
+    ).value
+
+  it('offers both actions from one menu on the comment', () => {
+    const markup = editing()
 
     expect(markup).toContain('class="msgmenu"')
-    expect(markup).toContain('/messages/m-draft"')
+    // Edit is a link to a page state; delete is a form, because it acts.
+    expect(markup).toContain('?edit=m-draft')
     expect(markup).toContain('/messages/m-draft/delete"')
   })
 
-  it('puts the current text in the box, so editing starts from what is there', () => {
-    const markup = reviewPage(summary(), [file('src/a.ts')], [draft()]).value
+  // The editor is a page state rather than a disclosure the browser opens on
+  // its own, so a reload keeps it and the script is not required to reach it.
+  it('draws the editor only when the address asks for it', () => {
+    expect(editing()).not.toContain('wrong line, sorry</textarea>')
+    expect(editing('m-draft')).toContain('wrong line, sorry</textarea>')
+  })
 
-    expect(markup).toContain('wrong line, sorry</textarea>')
+  it('puts the editor where the comment was, rather than beside it', () => {
+    const markup = editing('m-draft')
+    const message =
+      markup.match(/<div class="msg" id="m-m-draft">[\s\S]*?<\/div>\s*<\/div>/)?.[0] ?? ''
+
+    expect(message).toContain('<textarea')
+    // The rendered body is gone rather than hidden by a rule, so pressing Edit
+    // cannot look like the comment was deleted.
+    expect(message).not.toContain('class="body"')
+  })
+
+  // The control that can lose the comment sits behind the act of changing it.
+  it('keeps delete out of the way until you are editing', () => {
+    const menuOnly = editing()
+    const open = editing('m-draft')
+
+    expect(open).toContain('class="deleteform"')
+    expect(menuOnly).not.toContain('class="deleteform"')
+  })
+
+  /**
+   * Editing is not conversing.
+   *
+   * With Reply and Resolve left in place, a box holding one sentence was
+   * surrounded by five controls in three rows.
+   */
+  it('stands the conversation controls down while a comment is being edited', () => {
+    expect(editing()).toContain('<div class="threadactions">')
+    expect(editing('m-draft')).toContain('<div class="threadactions" hidden>')
+    // A class setting display beats the browser's own [hidden] rule, so the
+    // markup alone left Reply and Resolve drawn under an open editor.
+    expect(editing('m-draft')).toMatch(/\.threadactions\[hidden\] \{ display: none; \}/)
+  })
+
+  it('puts save, cancel and delete on one row, with delete at the far end', () => {
+    const markup = editing('m-draft')
+    const row = markup.match(/<div class="editactions">[\s\S]*?<\/div>\s*<\/div>/)?.[0] ?? ''
+
+    expect(row).toContain('Save')
+    expect(row).toContain('Cancel')
+    expect(row).toContain('Delete')
+    expect(row.indexOf('Save')).toBeLessThan(row.indexOf('Delete'))
+    expect(markup).toMatch(/\.thread \.editactions \.deleteform \{ margin: 0 0 0 auto; \}/)
+  })
+
+  /**
+   * A button carries the browser's own centring, and making it a flex
+   * container moves its text out of `text-align`'s reach. Delete sat 27 pixels
+   * right of Edit until the rule said `justify-content` instead.
+   */
+  it('starts both menu items at the same edge', () => {
+    expect(editing()).toMatch(/\.thread details\.msgmenu \.item \{[^}]*justify-content: flex-start/)
+  })
+
+  /**
+   * A refresh replaces main wholesale, and fresh markup arrives with every
+   * disclosure shut, so an open menu closed by itself whenever the agent
+   * happened to write. Replies already survived this.
+   */
+  it('keeps an open menu across a refresh', () => {
+    const markup = editing()
+
+    expect(markup).toContain('function openMenus()')
+    expect(markup).toContain('restoreMenus(menus)')
+  })
+
+  // Two forms, so the delete button cannot carry the editor's body with it.
+  it('keeps the editor and the delete in separate forms', () => {
+    const markup = editing('m-draft')
+
+    expect(markup).toContain('id="edit-form-m-draft"')
+    expect(markup).toContain('form="edit-form-m-draft"')
+  })
+
+  it('refuses to edit a comment the agent has read, whatever the address says', () => {
+    const markup = reviewPage(
+      summary(),
+      [file('src/a.ts')],
+      [sent()],
+      undefined,
+      'split',
+      new Set(),
+      'open',
+      { commits: [] },
+      1,
+      'm-sent',
+    ).value
+
+    // Scoped to the message: the thread's reply box has a textarea of its own,
+    // and it is not what this is about.
+    const message =
+      markup.match(/<div class="msg" id="m-m-sent">[\s\S]*?<\/div>\s*<\/div>/)?.[0] ?? ''
+
+    expect(message).not.toContain('<textarea')
+    expect(message).toContain('already read')
   })
 
   it('offers nothing on a comment the agent has already read', () => {
@@ -1088,14 +1202,13 @@ describe('a comment that has not been sent', () => {
   // Forms, like every other control here, so a phone with no script running
   // can still fix a typo.
   it('uses forms rather than script', () => {
-    const markup = reviewPage(summary(), [file('src/a.ts')], [draft()]).value
-    const menu = markup.slice(
-      markup.indexOf('class="msgmenu"'),
-      markup.indexOf('</details>', markup.indexOf('class="msgmenu"')),
-    )
+    const markup = editing('m-draft')
 
-    expect(menu).toContain('method="post"')
-    expect(menu).toContain('name="token"')
+    expect(markup).toContain('method="post"')
+    expect(markup).toContain('name="token"')
+    // The way out of the editor is a link, so cancelling needs no script and
+    // no history entry that re-submits.
+    expect(markup).toContain('Cancel')
   })
 })
 

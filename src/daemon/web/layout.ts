@@ -852,6 +852,10 @@ tr.threadrow td { padding: 0; background: var(--surface-2); white-space: normal;
   display: flex; gap: .5rem; align-items: flex-start; flex-wrap: wrap;
   margin-top: .5rem;
 }
+/* A class setting display beats the browser's own [hidden] rule, so hiding it
+   from markup needs saying here as well. Found with Reply and Resolve still
+   drawn under an open editor that had just told them to stand down. */
+.threadactions[hidden] { display: none; }
 
 /* Open, the reply takes the row to itself so the textarea gets the full width
    rather than sharing it with a button. */
@@ -876,22 +880,62 @@ tr.threadrow td { padding: 0; background: var(--surface-2); white-space: normal;
  * fixing your own typo is not the reason anyone opened this page. It sits on
  * the header line beside the "not sent" badge, so the control and the state it
  * depends on are read together. */
-.thread details.msgmenu { display: inline; }
+/* The menu in the comment's own corner.
+ *
+ * Both actions belong to this one message, while Reply and Resolve below
+ * belong to the conversation, so they sit apart. Pushed to the right edge of
+ * the metadata line and given the tap target an icon on its own needs. */
+.thread .msg { position: relative; }
+/* The byline, with the menu at the far end of it. */
+.thread .msgmeta { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
+.thread details.msgmenu { margin-left: auto; }
+/* Square and 44px, the size the rail's icon-only control already uses, because
+   an icon with no word beside it still has to be hittable with a thumb. */
 .thread details.msgmenu > summary {
-  display: inline; font-size: .7rem; color: var(--muted);
-  cursor: pointer; list-style: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: var(--tap); height: var(--tap); border-radius: 7px;
+  color: var(--muted); cursor: pointer; list-style: none;
+  border: 1px solid transparent; font-size: 1rem; line-height: 1;
 }
-.thread details.msgmenu > summary:hover { color: var(--accent); }
 .thread details.msgmenu > summary::-webkit-details-marker { display: none; }
-.thread details.msgmenu[open] > summary { color: var(--accent); }
-.thread details.msgmenu form { margin-top: .5rem; }
+.thread details.msgmenu > summary:hover {
+  color: var(--accent); border-color: var(--rule-strong); background: var(--surface-2);
+}
+.thread details.msgmenu[open] > summary {
+  color: var(--accent); border-color: var(--rule-strong); background: var(--surface-2);
+}
 
-/* The editor replaces the comment rather than sitting above it. Both drawn at
-   once put the same sentence on screen twice, once editable and once not, and
-   the reader has to work out which one is the comment. A following sibling
-   rather than :has, because the body already sits after the menu. */
-.thread details.msgmenu[open] ~ .body { display: none; }
-.thread details.msgmenu .deleteform { margin-top: .35rem; }
+/* Anchored to the comment rather than the line, so it opens over what follows
+   instead of pushing the conversation down as it appears. */
+.thread details.msgmenu .popover {
+  position: absolute; right: 0; top: 2.1rem; z-index: 5;
+  display: grid; min-width: 8rem; gap: .1rem;
+  background: var(--surface); border: 1px solid var(--rule-strong);
+  border-radius: 9px; padding: .25rem;
+  box-shadow: 0 8px 22px rgb(0 0 0 / .18);
+}
+.thread details.msgmenu .popover form { margin: 0; }
+.thread details.msgmenu .item {
+  /* justify-content, not text-align: a button carries the browser's own
+     centring, and turning it into a flex container moves its text out of
+     text-align's reach. Delete sat 27 pixels right of Edit until this said so. */
+  display: flex; align-items: center; justify-content: flex-start; width: 100%;
+  font: inherit; font-size: .85rem; text-align: left; text-decoration: none;
+  padding: .35rem .5rem; min-height: 2.25rem;
+  border: 0; border-radius: 6px; background: none; color: var(--ink);
+}
+.thread details.msgmenu .item:hover { background: var(--accent-soft); color: var(--accent); }
+.thread details.msgmenu .item.del { color: var(--del-ink); }
+.thread details.msgmenu .item.del:hover { background: var(--del-bg); color: var(--del-ink); }
+
+/* The editor stands where the comment stood. Both at once puts the same
+   sentence on screen twice, once editable and once not. */
+.thread .editing { margin-top: .4rem; }
+/* Save and Cancel where a reader looks first, Delete at the far end. Sharing a
+   row with the two controls this state exists for would put the destructive
+   one under the same thumb. */
+.thread .editactions { display: flex; align-items: center; gap: .4rem; margin-top: .5rem; }
+.thread .editactions .deleteform { margin: 0 0 0 auto; }
 
 /* Destructive, and not the reason the menu was opened. Bordered rather than
    filled, so it never competes with Save for the first glance. */

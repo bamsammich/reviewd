@@ -276,3 +276,81 @@ describe('commenting on a commit', () => {
     expect(await ctx.db.selectFrom('thread').selectAll().execute()).toEqual([])
   })
 })
+
+/**
+ * Editing a comment left on a commit.
+ *
+ * The comment draws only on its commit, so a save that redirects to the whole
+ * change lands the reviewer on a page their comment is not on.
+ */
+describe('editing a comment on a commit', () => {
+  async function draftOnFirstCommit(reviewId: string) {
+    const source = (
+      await ctx.db.selectFrom('source').select('id').where('review_id', '=', reviewId).execute()
+    )[0]!.id
+
+    const page = await read(`/r/${reviewId}`)
+    const token = /id="page-token"[^>]*value="([^"]+)"/.exec(page)?.[1] ?? ''
+
+    await app.request(`/r/${reviewId}/threads`, {
+      method: 'POST',
+      headers: { ...HOST, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        token,
+        sourceId: source,
+        path: 'src/a.ts',
+        side: 'new',
+        line: '1',
+        commitSha: 'aaaaaaa1111',
+        body: 'first take',
+      }).toString(),
+    })
+
+    const message = await ctx.db.selectFrom('message').select('id').executeTakeFirstOrThrow()
+    return { messageId: message.id, token }
+  }
+
+  it('opens the editor from the address, in place of the comment', async () => {
+    const review = await pushOfTwoCommits()
+    const { messageId } = await draftOnFirstCommit(review.reviewId)
+
+    const html = await read(`/r/${review.reviewId}?edit=${messageId}&commit=aaaaaaa1111`)
+
+    expect(html).toContain('first take</textarea>')
+    expect(html).toContain('class="editing"')
+  })
+
+  it('comes back to the commit after saving, not to the whole change', async () => {
+    const review = await pushOfTwoCommits()
+    const { messageId, token } = await draftOnFirstCommit(review.reviewId)
+
+    const response = await app.request(`/r/${review.reviewId}/messages/${messageId}`, {
+      method: 'POST',
+      headers: { ...HOST, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        token,
+        body: 'second take',
+        commitSha: 'aaaaaaa1111',
+      }).toString(),
+      redirect: 'manual',
+    })
+
+    expect(response.status).toBe(303)
+    expect(response.headers.get('location')).toContain('?commit=aaaaaaa1111')
+  })
+
+  it('stays on the commit after deleting', async () => {
+    const review = await pushOfTwoCommits()
+    const { messageId, token } = await draftOnFirstCommit(review.reviewId)
+
+    const response = await app.request(`/r/${review.reviewId}/messages/${messageId}/delete`, {
+      method: 'POST',
+      headers: { ...HOST, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ token, commitSha: 'aaaaaaa1111' }).toString(),
+      redirect: 'manual',
+    })
+
+    expect(response.headers.get('location')).toBe(`/r/${review.reviewId}?commit=aaaaaaa1111`)
+    expect(await ctx.db.selectFrom('thread').selectAll().execute()).toEqual([])
+  })
+})
