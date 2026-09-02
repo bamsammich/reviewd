@@ -1,163 +1,100 @@
-import { escapeHtml, raw, type SafeHtml } from './html.js'
+import MarkdownIt from 'markdown-it'
+import { raw, type SafeHtml } from './html.js'
 
 /**
- * The markdown a review comment actually uses.
+ * The markdown a review comment is written in.
  *
- * People type backticks around a symbol, fence a corrected snippet, and list
- * three things. Everything here serves one of those; nothing here is a general
- * markdown implementation, and the omissions are the point. Tables, images,
- * footnotes and raw HTML all stay literal text.
+ * A hand-rolled subset came first, on the reasoning that a comment holds a
+ * backtick, a fence and a short list. What a comment actually holds is
+ * whatever the writer typed, and the subset then grew a case at a time: a
+ * heading arrived as its own hashes, and a table as rows of pipes. Each
+ * omission was a small decision, and the sum of them was a renderer that
+ * disagreed with every other place the same person writes markdown.
  *
- * Escaping runs first, over the whole body, and every tag below is one this
- * file wrote. That ordering is what makes the subset safe rather than the
- * regexes: a comment cannot produce a tag, only text that this file then wraps.
+ * A parser answers the whole question once. What matters is which parser and
+ * on what terms, because a comment is text one person wrote and another
+ * person's browser renders.
+ *
+ * `html: false` is the safety story, and it is the whole of it: raw HTML in a
+ * comment is escaped rather than passed through, so a comment cannot produce a
+ * tag. Asserted in this file's tests against a script tag and an `img` with an
+ * `onerror`, rather than taken from the documentation.
+ *
+ * Link schemes are markdown-it's own defaults: `javascript:`, `vbscript:`,
+ * `file:` and `data:` are refused and left as the text somebody typed, while
+ * http, https, mailto and site-relative links render. A quote inside an href
+ * is percent-encoded, so an attribute cannot be broken out of.
+ *
+ * `linkify` stays off, so a bare URL in prose is text. Turning it on would
+ * make a link of something nobody asked to be one, and a path or a hostname
+ * inside a sentence about code is ordinary here.
  */
-
-/** Schemes a link may use. Anything else renders as text, `javascript:` included. */
-const SAFE_LINK = /^(https?:\/\/|mailto:|\/)/i
+const md = new MarkdownIt({
+  html: false,
+  // A newline inside a paragraph is a line break, which is what the subset did
+  // and what someone typing into a small box on a phone means by pressing
+  // return. CommonMark would need two trailing spaces to say the same thing.
+  breaks: true,
+  linkify: false,
+  typographer: false,
+})
 
 /**
- * Stands in for a code span while emphasis runs.
+ * Headings, moved under the page's own.
  *
- * A control character rather than a word, because it has to be something the
- * body cannot contain: `renderMarkdown` strips it from the input first, so a
- * comment cannot forge one and reach into the span list.
+ * A comment sits inside a document that already has an h1 and an h2, so a
+ * comment's `#` would outrank the review's title in the outline a screen
+ * reader reads out. Three levels are more than a comment needs, and every one
+ * of them lands below the page's own structure.
  */
-const HOLD = '\u0000'
+const HEADING: Record<string, string> = {
+  h1: 'h4',
+  h2: 'h5',
+  h3: 'h6',
+  h4: 'h6',
+  h5: 'h6',
+  h6: 'h6',
+}
 
+md.renderer.rules['heading_open'] = (tokens, index) =>
+  `<${HEADING[tokens[index]?.tag ?? 'h6'] ?? 'h6'} class="ch">`
+
+md.renderer.rules['heading_close'] = (tokens, index) =>
+  `</${HEADING[tokens[index]?.tag ?? 'h6'] ?? 'h6'}>`
+
+/**
+ * External links carry `rel`, and site-relative ones do not need it.
+ *
+ * `noopener` and `noreferrer` describe a target this page never sets, and
+ * `nofollow` describes a crawler that will never reach a review, so none of
+ * the three does much work. They stay because a link an agent wrote into a
+ * comment is the one place on this page where the href came from outside.
+ */
+type Rule = NonNullable<(typeof md.renderer.rules)[string]>
+
+const renderToken: Rule = (tokens, index, options, _env, self) =>
+  self.renderToken(tokens, index, options)
+
+const defaultLink = md.renderer.rules['link_open'] ?? renderToken
+
+md.renderer.rules['link_open'] = (tokens, index, options, env, self) => {
+  const href = String(tokens[index]?.attrGet('href') ?? '')
+  if (/^https?:/i.test(href)) tokens[index]?.attrSet('rel', 'noopener noreferrer nofollow')
+  return defaultLink(tokens, index, options, env, self)
+}
+
+/** The class the stylesheet already dresses a fenced block with. */
+const defaultFence = md.renderer.rules['fence'] ?? renderToken
+
+md.renderer.rules['fence'] = (tokens, index, options, env, self) =>
+  String(defaultFence(tokens, index, options, env, self)).replace(/^<pre>/, '<pre class="code">')
+
+/**
+ * A comment's body as HTML.
+ *
+ * Safe to insert because of `html: false` above, rather than because of
+ * anything a caller does with the result.
+ */
 export function renderMarkdown(body: string): SafeHtml {
-  const escaped = escapeHtml(body.replace(/\r\n/g, '\n').replaceAll(HOLD, ''))
-  return raw(blocks(escaped))
-}
-
-/**
- * Splits on fenced blocks first, so nothing inside one is read as markup.
- *
- * A comment pasting a corrected snippet is the common case, and a snippet full
- * of asterisks and underscores would otherwise come out italicised.
- */
-function blocks(text: string): string {
-  const out: string[] = []
-  const fence = /^```([A-Za-z0-9+#._-]*)\n([\s\S]*?)(?:\n)?^```[ \t]*$/gm
-  let at = 0
-
-  for (const match of text.matchAll(fence)) {
-    const start = match.index
-    if (start > at) out.push(prose(text.slice(at, start)))
-
-    const language = match[1] ?? ''
-    const code = match[2] ?? ''
-    const attribute = language ? ` class="language-${language}"` : ''
-    out.push(`<pre class="code"><code${attribute}>${code}\n</code></pre>`)
-
-    at = start + match[0].length
-  }
-
-  if (at < text.length) out.push(prose(text.slice(at)))
-  return out.join('')
-}
-
-/** Paragraphs, lists and quotes, over text that carries no fences. */
-function prose(text: string): string {
-  const lines = text.split('\n')
-  const out: string[] = []
-  let paragraph: string[] = []
-  let list: { kind: 'ul' | 'ol'; items: string[] } | null = null
-  let quote: string[] = []
-
-  const flushParagraph = (): void => {
-    if (paragraph.length === 0) return
-    out.push(`<p>${inline(paragraph.join('\n'))}</p>`)
-    paragraph = []
-  }
-
-  const flushList = (): void => {
-    if (!list) return
-    const items = list.items.map((item) => `<li>${inline(item)}</li>`).join('')
-    out.push(`<${list.kind}>${items}</${list.kind}>`)
-    list = null
-  }
-
-  const flushQuote = (): void => {
-    if (quote.length === 0) return
-    out.push(`<blockquote>${inline(quote.join('\n'))}</blockquote>`)
-    quote = []
-  }
-
-  const flushAll = (): void => {
-    flushParagraph()
-    flushList()
-    flushQuote()
-  }
-
-  for (const line of lines) {
-    const bullet = /^[ \t]*[-*][ \t]+(.*)$/.exec(line)
-    const numbered = /^[ \t]*\d+\.[ \t]+(.*)$/.exec(line)
-    const quoted = /^[ \t]*&gt;[ \t]?(.*)$/.exec(line)
-
-    if (bullet || numbered) {
-      flushParagraph()
-      flushQuote()
-      const kind = bullet ? 'ul' : 'ol'
-      if (list && list.kind !== kind) flushList()
-      list ??= { kind, items: [] }
-      list.items.push((bullet ?? numbered)?.[1] ?? '')
-      continue
-    }
-
-    if (quoted) {
-      flushParagraph()
-      flushList()
-      quote.push(quoted[1] ?? '')
-      continue
-    }
-
-    if (line.trim() === '') {
-      flushAll()
-      continue
-    }
-
-    flushList()
-    flushQuote()
-    paragraph.push(line)
-  }
-
-  flushAll()
-  return out.join('')
-}
-
-/**
- * Inline code first, and its contents are then left alone.
- *
- * `**` inside a span of code is two asterisks a reader typed on purpose, and
- * bolding it would corrupt the one thing a code span exists to reproduce.
- */
-function inline(text: string): string {
-  // Code spans come out first and go back last, standing in the meantime as a
-  // character the body cannot contain. Running emphasis over the parts between
-  // them instead left `**` on either side of a code span unpaired, so
-  // **`name`** printed its own asterisks.
-  const spans: string[] = []
-  const held = text.replace(/`([^`\n]+)`/g, (_whole, code: string) => {
-    spans.push(code)
-    return `${HOLD}${spans.length - 1}${HOLD}`
-  })
-
-  return emphasis(held)
-    .replace(new RegExp(`${HOLD}(\\d+)${HOLD}`, 'g'), (_whole, index: string) => {
-      return `<code>${spans[Number(index)] ?? ''}</code>`
-    })
-    .replace(/\n/g, '<br />')
-}
-
-function emphasis(text: string): string {
-  return text
-    .replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, (whole, label: string, href: string) =>
-      SAFE_LINK.test(href)
-        ? `<a href="${href}" rel="noopener noreferrer nofollow">${label}</a>`
-        : whole,
-    )
-    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/(^|[^\w*])\*([^*\n]+)\*(?![\w*])/g, '$1<em>$2</em>')
-    .replace(/(^|[^\w_])_([^_\n]+)_(?![\w_])/g, '$1<em>$2</em>')
+  return raw(md.render(body.replace(/\r\n/g, '\n')))
 }
