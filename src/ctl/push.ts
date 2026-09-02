@@ -1,6 +1,7 @@
 import type { CommitSpec, FileChangeSpec, SnapshotManifest, SnapshotResult } from '../protocol.js'
 import type { Client } from './client.js'
 import {
+  diffFromBase,
   diffPushRange,
   diffSource,
   DEFAULT_LIMITS,
@@ -29,21 +30,31 @@ export async function pushSnapshot(
   const blobs = new Map<string, Uint8Array>()
 
   for (const source of sources) {
-    // A caller who named a base named what to compare against, and that wins.
-    // Reading the push range instead showed a reviewer every commit on the
-    // branch and nothing uncommitted, while the review still reported the base
-    // it had been given: a page that does not contain the change under review,
-    // approvable under push gating.
+    // What a base means follows what the gate will ask about, because a review
+    // nobody can approve into the thing it describes is worth nothing.
     //
-    // Omitting the base is how a caller asks for the gate's own reading, which
-    // is what the tool description already says: omit, and a git repository is
-    // compared against HEAD.
-    const named = source.baseRef !== undefined
-    const gatedOnPush = !named && (await scopeOf(client, source.rootPath)) === 'push'
-    const push = gatedOnPush ? await diffPushRange(source, limits) : null
+    // Under commit gating the question is a working tree against something,
+    // and a base names that something. Under push gating the question is which
+    // commits are about to leave, and a base names where they start: the pull
+    // request below this one in a stack is already on somebody's screen in its
+    // own review, so the base is the boundary between the two.
+    //
+    // Narrowing a review this way is safe because the gate does not read the
+    // base at all. It reads `git rev-list HEAD --not --remotes` itself and
+    // wants an approval for every commit there, so a base that leaves a commit
+    // out leaves it unapproved rather than sneaking it past.
+    const gatedOnPush = (await scopeOf(client, source.rootPath)) === 'push'
+
+    const push = gatedOnPush
+      ? source.baseRef === undefined
+        ? await diffPushRange(source, limits)
+        : await diffFromBase(source, source.baseRef, limits)
+      : null
 
     // A root with nothing to push falls back to the working tree, which is
-    // what a reviewer opening the page before committing expects to read.
+    // what a reviewer opening the page before committing expects to read. A
+    // base naming no commit lands here too, and the diff against it fails
+    // loudly rather than being guessed at.
     const diff = push?.diff ?? (await diffSource(source, limits))
 
     files.push(...diff.files)

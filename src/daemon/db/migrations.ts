@@ -435,6 +435,67 @@ const commitComments: Migration = {
   },
 }
 
+/**
+ * Approval as a claim about one commit, so a push is checked commit by commit
+ * rather than against a single fingerprint of the whole range.
+ *
+ * A fingerprint covers one reading of one range, which fails a stacked branch:
+ * commits underneath were approved in their own review, the range moves every
+ * time either branch gains a commit, and the reviewer is asked to look again
+ * at code they already passed. Coverage per commit composes instead, and it
+ * denies harder than a fingerprint did. Any commit in the push nobody approved
+ * refuses the push, whatever base the review was opened against.
+ *
+ * `patch_id` is `git patch-id --stable`, which survives a rebase that rewrites
+ * a commit's sha without changing what the commit does. `parent_sha` is what
+ * the commit sat on when somebody read it; a rebase moves that, so the gate
+ * reports the move rather than refusing it.
+ */
+const commitApproval: Migration = {
+  async up(db: MigrationDb): Promise<void> {
+    await db.schema.alterTable('commit').addColumn('patch_id', 'text').execute()
+    await db.schema.alterTable('commit').addColumn('parent_sha', 'text').execute()
+
+    await db.schema
+      .createTable('approved_commit')
+      .addColumn('id', 'text', (col) => col.primaryKey())
+      .addColumn('review_id', 'text', (col) =>
+        col.notNull().references('review.id').onDelete('cascade'),
+      )
+      // Denormalized from source, the way `approval.root_path` is, so the gate
+      // asks about a repository rather than about a review.
+      .addColumn('root_path', 'text', (col) => col.notNull())
+      .addColumn('sha', 'text', (col) => col.notNull())
+      .addColumn('patch_id', 'text')
+      .addColumn('parent_sha', 'text')
+      .addColumn('approved_at', 'integer', (col) => col.notNull())
+      .execute()
+
+    // The gate asks one question per commit of a push: has anybody approved
+    // this sha in this repository.
+    await db.schema
+      .createIndex('approved_commit_lookup')
+      .on('approved_commit')
+      .columns(['root_path', 'sha'])
+      .execute()
+
+    // The same question again, for a commit whose sha a rebase rewrote.
+    await db.schema
+      .createIndex('approved_commit_patch')
+      .on('approved_commit')
+      .columns(['root_path', 'patch_id'])
+      .execute()
+  },
+
+  async down(db: MigrationDb): Promise<void> {
+    await db.schema.dropIndex('approved_commit_patch').execute()
+    await db.schema.dropIndex('approved_commit_lookup').execute()
+    await db.schema.dropTable('approved_commit').execute()
+    await db.schema.alterTable('commit').dropColumn('parent_sha').execute()
+    await db.schema.alterTable('commit').dropColumn('patch_id').execute()
+  },
+}
+
 export const migrations: Record<string, Migration> = {
   '0001_initial': initial,
   '0002_line_ranges': lineRanges,
@@ -442,6 +503,7 @@ export const migrations: Record<string, Migration> = {
   '0004_review_level_threads': reviewLevelThreads,
   '0005_commit_scopes': commitScopes,
   '0006_commit_comments': commitComments,
+  '0007_commit_approval': commitApproval,
 }
 
 export class CodeMigrationProvider implements MigrationProvider {

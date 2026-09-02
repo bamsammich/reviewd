@@ -12,6 +12,7 @@ import {
   waitResult,
   type CreateReviewRequest,
   type CreateThreadRequest,
+  type GateRequest,
   type GateResponse,
   type ObserveResponse,
   type ReleaseResult,
@@ -156,8 +157,20 @@ export class Client {
     fingerprint: string,
     tree: string | null = null,
     head: string | null = null,
+    /**
+     * What a push carries, oldest first, so the daemon can check coverage one
+     * commit at a time. Omitted for a commit, where the question is a working
+     * tree and the fingerprint answers it on its own.
+     */
+    commits?: GateRequest['commits'],
   ): Promise<GateResponse> {
-    return this.json('POST', '/api/gate', gateResponse, { root, fingerprint, tree, head })
+    return this.json('POST', '/api/gate', gateResponse, {
+      root,
+      fingerprint,
+      tree,
+      head,
+      commits,
+    })
   }
 
   /** What this repository's gate holds, asked before anything is computed. */

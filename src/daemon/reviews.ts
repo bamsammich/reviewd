@@ -474,6 +474,8 @@ export async function createSnapshot(
             author: commit.author,
             committed_at: commit.committedAt,
             ordinal,
+            patch_id: commit.patchId ?? null,
+            parent_sha: commit.parentSha ?? null,
           })),
         )
         .execute()

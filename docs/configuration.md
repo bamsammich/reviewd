@@ -88,7 +88,8 @@ control below what a thumb can hit.
 {
   "gate": {
     "scope": "commit",
-    "roots": { "/Users/you/code/scratch": "push" }
+    "roots": { "/Users/you/code/scratch": "push" },
+    "approval_follows": "change"
   }
 }
 ```
@@ -101,6 +102,34 @@ instead, so a branch of five commits is one approval rather than five.
 **`roots`** names exceptions by absolute path. Matching is exact: a repository
 nested inside a named one keeps the default rather than inheriting a setting
 nobody chose for it.
+
+**`approval_follows`** is `change` or `commit`, and decides whether an approval
+is attached to what a commit does or to the commit itself. A push is approved
+commit by commit, and plenty of ordinary git gives a commit a new sha while
+leaving its change alone.
+
+Under `change`, the default, a commit whose sha has moved is recognised by `git
+patch-id --stable`, so an approved stack stays approved through the rewrites
+that stacked work runs on. The gate reports the move in a warning rather than
+refusing it. The claim is deliberately weaker than a sha: it says somebody read
+this change, not that they read it sitting where it now sits.
+
+Rebase is the common case and not the only one. Measured against git:
+
+| operation | patch id |
+| --- | --- |
+| rebase onto new upstream work | unchanged |
+| `commit --amend` that only rewords | unchanged |
+| `cherry-pick` onto another branch | unchanged |
+| two commits squashed into one | changes |
+
+So an approved commit cherry-picked to another branch arrives approved, and a
+squash needs reading again.
+
+Under `commit`, any rewrite throws away the approval it rewrites. Choose it
+where a review is about a state rather than a change, since the same patch
+applied to a different parent can behave differently and nobody read it there.
+Every rewrite then costs a fresh approval, which is the point.
 
 The setting lives here rather than beside the code because the hook sends the
 repository root and waits for an answer anyway, so the scope rides back on a

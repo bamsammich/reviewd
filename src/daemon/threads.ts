@@ -605,6 +605,12 @@ export async function submitReview(
         .where('review_id', '=', reviewId)
         .where('consumed_at', 'is', null)
         .execute()
+
+      // Per-commit coverage goes wholesale. Nothing records that a push used a
+      // given commit's approval, so there is no consumed row to preserve, and
+      // leaving them would let a stacked branch push commits the reviewer had
+      // just asked to change.
+      await tx.deleteFrom('approved_commit').where('review_id', '=', reviewId).execute()
     }
 
     await tx
@@ -665,6 +671,58 @@ async function writeApprovals(
       })),
     )
     .execute()
+
+  await writeApprovedCommits(tx, reviewId, snapshotId, sources, t)
+}
+
+/**
+ * Every commit the approved revision listed, recorded one row apiece.
+ *
+ * A fingerprint covers one range and expires the moment either end moves, so a
+ * branch stacked on an open review sends its reviewer back through commits
+ * they have already passed. Coverage per commit composes instead: the push
+ * gate asks whether each commit leaving the machine was approved by anybody,
+ * and the review below answers for its own.
+ *
+ * The rows outlive the snapshot that produced them and die with the review, so
+ * releasing a review withdraws the approvals it granted.
+ */
+async function writeApprovedCommits(
+  tx: Transaction<Database>,
+  reviewId: string,
+  snapshotId: string,
+  sources: { source_id: string; root_path: string }[],
+  t: number,
+): Promise<void> {
+  const roots = new Map(sources.map((source) => [source.source_id, source.root_path]))
+
+  const commits = await tx
+    .selectFrom('commit')
+    .select(['source_id', 'sha', 'patch_id', 'parent_sha'])
+    .where('snapshot_id', '=', snapshotId)
+    .execute()
+
+  await tx.deleteFrom('approved_commit').where('review_id', '=', reviewId).execute()
+
+  // A review of a working tree lists no commits, and there is nothing here to
+  // record. Its approval is the fingerprint, which is what commit gating asks
+  // about anyway.
+  if (commits.length === 0) return
+
+  await tx
+    .insertInto('approved_commit')
+    .values(
+      commits.map((commit) => ({
+        id: newId(),
+        review_id: reviewId,
+        root_path: roots.get(commit.source_id) ?? '',
+        sha: commit.sha,
+        patch_id: commit.patch_id,
+        parent_sha: commit.parent_sha,
+        approved_at: t,
+      })),
+    )
+    .execute()
 }
 
 /** Removes an approval inside the window before a commit consumes it. */
@@ -676,6 +734,8 @@ export async function unapprove(deps: Deps, reviewId: string): Promise<{ removed
     .deleteFrom('approval')
     .where('review_id', '=', reviewId)
     .executeTakeFirst()
+
+  await db.deleteFrom('approved_commit').where('review_id', '=', reviewId).execute()
 
   await db
     .updateTable('review')

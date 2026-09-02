@@ -60,6 +60,14 @@ export interface CommitTable {
   author: string
   committed_at: Millis
   ordinal: number
+  /**
+   * `git patch-id --stable`, and the commit this one sat on when it was read.
+   *
+   * Both are null for a revision uploaded by a client too old to compute them,
+   * which the gate reads as a commit it can only recognise by sha.
+   */
+  patch_id: string | null
+  parent_sha: string | null
 }
 
 export interface FileChangeTable {
@@ -186,6 +194,29 @@ export interface ApprovalTable {
   gated_head: string | null
 }
 
+/**
+ * One commit somebody approved, kept apart from the review that carried it.
+ *
+ * The push gate checks coverage per commit, so a stacked branch does not send
+ * its reviewer back through commits an earlier review already passed, and a
+ * commit nobody read refuses the push whatever base the review named.
+ *
+ * Rows outlive the snapshot whose commit list produced them and die with the
+ * review, which is what makes coverage compose: a branch stacked on an open
+ * review draws on that review's approvals until it is released.
+ */
+export interface ApprovedCommitTable {
+  id: string
+  review_id: string
+  /** Denormalized from source, so the gate asks about a repository. */
+  root_path: string
+  sha: string
+  /** Null when the client that uploaded the commit could not compute one. */
+  patch_id: string | null
+  parent_sha: string | null
+  approved_at: Millis
+}
+
 export interface Database {
   review: ReviewTable
   source: SourceTable
@@ -198,4 +229,5 @@ export interface Database {
   message: MessageTable
   submission: SubmissionTable
   approval: ApprovalTable
+  approved_commit: ApprovedCommitTable
 }

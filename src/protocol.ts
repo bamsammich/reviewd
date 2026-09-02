@@ -150,6 +150,19 @@ export const commitSpec = z.object({
   author: z.string(),
   committedAt: z.number().int(),
   files: z.array(fileChangeSpec),
+  /**
+   * `git patch-id --stable`, and the commit this one sat on.
+   *
+   * The push gate approves commit by commit, and a rebase rewrites every sha
+   * it touches without changing what those commits do. Matching on a patch id
+   * lets an approval survive the rewrite, and carrying the parent lets the
+   * gate say a commit has moved since somebody read it.
+   *
+   * Optional, so a revision uploaded by an older client still validates and
+   * arrives as a commit the gate can recognise by sha alone.
+   */
+  patchId: z.string().min(1).nullish(),
+  parentSha: z.string().min(1).nullish(),
 })
 export type CommitSpec = z.infer<typeof commitSpec>
 
@@ -330,6 +343,30 @@ export const gateRequest = z.object({
    */
   tree: z.string().min(1).nullish(),
   head: z.string().min(1).nullish(),
+  /**
+   * What a push carries, oldest first, when the question is about a push.
+   *
+   * The daemon cannot run `git rev-list` and has no way to learn a range on
+   * its own, so the client that is being gated reads its own repository and
+   * says what is about to leave it. Every commit named here has to be covered
+   * by an approval or the push is refused, which is what makes a base the
+   * caller chose unable to hide anything: narrowing the review narrows what
+   * gets approved, never what gets checked.
+   *
+   * Absent under commit gating, where the question is a working tree and a
+   * fingerprint answers it, and absent from an older client, which the gate
+   * falls back to answering by fingerprint alone.
+   */
+  commits: z
+    .array(
+      z.object({
+        sha: z.string().min(1),
+        patchId: z.string().min(1).nullish(),
+        parentSha: z.string().min(1).nullish(),
+        subject: z.string().default(''),
+      }),
+    )
+    .optional(),
 })
 export type GateRequest = z.infer<typeof gateRequest>
 
