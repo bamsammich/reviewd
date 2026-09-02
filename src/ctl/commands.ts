@@ -199,7 +199,16 @@ export async function checkGate(
   await ensureDaemon(baseUrl)
   const client = new Client(baseUrl)
 
-  const scope = await client.gateScope(root)
+  // A daemon that cannot answer which scope applies is one that predates push
+  // gating, and every such daemon gated every commit. Falling back to `commit`
+  // reads as the older behaviour and is the stricter of the two, so a gate can
+  // only tighten by guessing here, never loosen.
+  //
+  // Without the fallback the whole command failed, and the hook reads a
+  // failure as an empty answer and reports the daemon as down. Upgrading the
+  // binary while a container keeps serving the old image is the ordinary way
+  // to arrive here, and the README's own upgrade path leads through it.
+  const scope = await client.gateScope(root).catch(() => 'commit' as GateScope)
 
   if (!verbs.includes(scope)) {
     return report(
