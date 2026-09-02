@@ -1585,6 +1585,28 @@ describe('the commits of a push', () => {
  * A percentage on the root, because every size on these pages is a rem. Left
  * out at 1 so the default page is byte for byte what it was.
  */
+/**
+ * How far down the page anything sticky starts.
+ *
+ * A hand-picked 3.35rem was 48px at a 0.9 font scale while the bar drew 59,
+ * because the bar holds a 44px control with half a rem of padding either side
+ * and a rule under it. The rail parked against the smaller number and tucked
+ * under the bar as the page scrolled.
+ */
+describe('the app bar height', () => {
+  it('is built from what the bar holds, not chosen to look about right', () => {
+    const markup = reviewPage(summary(), [file('src/a.ts')], []).value
+
+    expect(markup).toContain('--top-bar: calc(var(--tap) + 1rem + 1px);')
+  })
+
+  it('is what the bar sizes itself to, so the two cannot disagree', () => {
+    const markup = reviewPage(summary(), [file('src/a.ts')], []).value
+
+    expect(markup).toMatch(/header\.top \{[^}]*min-height: var\(--top-bar\)/)
+  })
+})
+
 describe('the configured font scale', () => {
   const at = (scale?: number) =>
     reviewPage(
