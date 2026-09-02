@@ -108,7 +108,13 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
           view,
           folded,
           rail,
-          { commits, ...(commit === undefined ? {} : { selected: commit }) },
+          {
+            commits,
+            ...(commit === undefined ? {} : { selected: commit }),
+            // The reader's own toggle, written by the page when they open or
+            // close the list.
+            listOpen: cookie(c, 'reviewd_commits') === 'open',
+          },
           fontScale,
         ).value,
       )
@@ -211,18 +217,23 @@ export function webRoutes(deps: Deps & { bus: Bus }): Hono {
     const end = Number(form['endLine'])
     const endLine = anchored && Number.isInteger(end) && end > line ? end : undefined
 
+    // Which reading of the file the reviewer had on screen. A comment written
+    // while reading one commit is about the line as that commit left it.
+    const commitSha = String(form['commitSha'] ?? '')
+
     const created = await createThread(deps, reviewId, {
       side,
       body,
       author: 'human',
       ...(anchored ? { sourceId: String(form['sourceId'] ?? ''), path, line } : {}),
       ...(endLine === undefined ? {} : { endLine }),
+      ...(anchored && commitSha.length > 0 ? { commitSha } : {}),
     })
 
-    // Back to the comment just written. Without the id this redirected to the
-    // top of the review, so writing a note two thousand lines down cost the
-    // reviewer their place every time.
-    return back(c, reviewId, created.threadId)
+    // Back to the comment just written, on the view it was written on. Without
+    // the id this redirected to the top of the review, so writing a note two
+    // thousand lines down cost the reviewer their place every time.
+    return back(c, reviewId, created.threadId, commitSha)
   })
 
   routes.post('/r/:id/threads/:threadId/replies', async (c) => {
@@ -474,7 +485,8 @@ function setCookie(c: Context, name: string, value: string): void {
 }
 
 /** A redirect after every mutation, so a reload never resubmits the form. */
-function back(c: Context, reviewId: string, threadId?: string): Response {
+function back(c: Context, reviewId: string, threadId?: string, commitSha?: string): Response {
   const fragment = threadId ? `#t-${threadId}` : ''
-  return c.redirect(`/r/${reviewId}${fragment}`, 303)
+  const query = commitSha ? `?commit=${encodeURIComponent(commitSha)}` : ''
+  return c.redirect(`/r/${reviewId}${query}${fragment}`, 303)
 }

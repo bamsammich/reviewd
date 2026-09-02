@@ -178,3 +178,101 @@ describe('reading one commit from the URL', () => {
     expect(html).not.toContain('<details class="commits"')
   })
 })
+
+/**
+ * A comment left while reading one commit.
+ *
+ * The line as commit one left it is not the line the combined diff holds, so a
+ * note about it belongs to the commit rather than to the push.
+ */
+describe('commenting on a commit', () => {
+  const post = async (path: string, form: Record<string, string>) => {
+    // The page token, which every form on the page is minted from. A form's
+    // own token field only exists once a comment box is open.
+    const page = await read(path.split('/threads')[0] as string)
+    const token = /id="page-token"[^>]*value="([^"]+)"/.exec(page)?.[1] ?? ''
+
+    return app.request(path.split('?')[0] as string, {
+      method: 'POST',
+      headers: { ...HOST, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ ...form, token }).toString(),
+      redirect: 'manual',
+    })
+  }
+
+  async function commentOnFirstCommit(reviewId: string, body: string) {
+    const source = (
+      await ctx.db.selectFrom('source').select('id').where('review_id', '=', reviewId).execute()
+    )[0]!.id
+
+    return post(`/r/${reviewId}/threads`, {
+      sourceId: source,
+      path: 'src/a.ts',
+      side: 'new',
+      line: '1',
+      commitSha: 'aaaaaaa1111',
+      body,
+    })
+  }
+
+  it('files it against the commit, not the push', async () => {
+    const review = await pushOfTwoCommits()
+    await commentOnFirstCommit(review.reviewId, 'this is the state I meant')
+
+    const rows = await ctx.db.selectFrom('thread').select(['commit_sha', 'path']).execute()
+    expect(rows).toEqual([{ commit_sha: 'aaaaaaa1111', path: 'src/a.ts' }])
+  })
+
+  it('draws it on its commit and not on the whole change', async () => {
+    const review = await pushOfTwoCommits()
+    await commentOnFirstCommit(review.reviewId, 'this is the state I meant')
+
+    const id = (await ctx.db.selectFrom('thread').select('id').execute())[0]!.id
+    const onCommit = await read(`/r/${review.reviewId}?commit=aaaaaaa1111`)
+    const combined = await read(`/r/${review.reviewId}`)
+
+    // The thread itself, not its text: the comment index on the combined view
+    // names it on purpose, which is how a reader finds it from there.
+    expect(onCommit).toContain(`<div class="thread active" id="t-${id}"`)
+    expect(combined).not.toContain(`<div class="thread active" id="t-${id}"`)
+    expect(combined).toContain('this is the state I meant')
+  })
+
+  // The index is the page's answer to "where are my comments", so a note on a
+  // view the reader is not looking at is exactly the one it has to carry.
+  it('lists it from the whole change, pointing at its commit', async () => {
+    const review = await pushOfTwoCommits()
+    await commentOnFirstCommit(review.reviewId, 'this is the state I meant')
+
+    const combined = await read(`/r/${review.reviewId}`)
+
+    expect(combined).toContain('?commit=aaaaaaa1111#t-')
+    expect(combined).toContain('on aaaaaaa')
+  })
+
+  it('refuses a commit this revision does not carry', async () => {
+    const review = await pushOfTwoCommits()
+    const source = (
+      await ctx.db
+        .selectFrom('source')
+        .select('id')
+        .where('review_id', '=', review.reviewId)
+        .execute()
+    )[0]!.id
+
+    const response = await post(`/r/${review.reviewId}/threads`, {
+      sourceId: source,
+      path: 'src/a.ts',
+      side: 'new',
+      line: '1',
+      commitSha: 'deadbeef',
+      body: 'against a commit that is not here',
+    })
+
+    // Refused rather than quietly filed against the combined change set: a
+    // comment moved to a different reading of the code is worse than one that
+    // did not save.
+    expect(response.status).toBe(400)
+    expect(await ctx.db.selectFrom('thread').selectAll().execute()).toEqual([])
+  })
+})

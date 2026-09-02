@@ -222,6 +222,14 @@ export const thread = z.object({
   line: z.number().int().nullable(),
   /** Last line of a range, or null when the comment is on one line. */
   endLine: z.number().int().nullable().default(null),
+  /**
+   * The commit this comment was left on, or null for the combined change set.
+   *
+   * The agent needs it to answer the note: a line as one commit left it is not
+   * the line the working tree holds, so a reply that ignores which commit was
+   * on screen is a reply about different code.
+   */
+  commitSha: z.string().nullable().default(null),
   state: threadState,
   origin: author,
   turn,
@@ -244,6 +252,15 @@ export const createThreadRequest = z
     /** Last line of a range. Omit for a comment on one line. */
     endLine: z.number().int().positive().optional(),
     side: side.default('new'),
+    /**
+     * The commit this comment is about, for a review that carries commits.
+     *
+     * Omitted for the combined change set, which is where a comment on the
+     * whole push goes and where every comment on a review of a working tree
+     * goes. A sha rather than an id, because the sha is what a person reads
+     * and what survives the revision it was written against.
+     */
+    commitSha: z.string().min(1).optional(),
     body: z.string().min(1),
   })
   .refine((request) => (request.path === undefined) === (request.line === undefined), {
