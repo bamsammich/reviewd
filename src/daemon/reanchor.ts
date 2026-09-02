@@ -214,6 +214,11 @@ async function linesFor(
     .selectFrom('file_change')
     .selectAll()
     .where('snapshot_id', '=', snapshotId)
+    // The combined change set, which is where a comment on the whole push
+    // lives. A commit holds the same path with the blobs that commit saw, and
+    // anchoring against those would move a comment onto a state the reviewer
+    // was never shown.
+    .where('commit_id', 'is', null)
     .where('source_id', '=', thread.source_id)
     .where('path', '=', thread.path)
     .executeTakeFirst()

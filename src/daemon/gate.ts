@@ -302,6 +302,9 @@ async function warningsFor(
         .selectFrom('file_change')
         .select(({ fn }) => fn.countAll<number>().as('n'))
         .where('snapshot_id', '=', latest.id)
+        // The combined change set, so a binary file the push touched five
+        // times is one file nobody could read rather than five.
+        .where('commit_id', 'is', null)
         .where((eb) =>
           eb.or([eb('file_change.is_binary', '=', 1), eb('file_change.truncated', '=', 1)]),
         )

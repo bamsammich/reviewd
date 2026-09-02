@@ -138,6 +138,9 @@ export async function loadFiles(db: Kysely<Database>, reviewId: string): Promise
       'source.ordinal',
     ])
     .where('file_change.snapshot_id', '=', snapshot.id)
+    // The combined change set, which is the page with no commit chosen.
+    // Drawing one commit reads its own rows and is its own piece of work.
+    .where('file_change.commit_id', 'is', null)
     .orderBy('source.ordinal')
     .orderBy('file_change.path')
     .execute()

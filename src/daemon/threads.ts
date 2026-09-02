@@ -88,6 +88,10 @@ export async function readAnchor(
     .selectFrom('file_change')
     .selectAll()
     .where('snapshot_id', '=', snapshotId)
+    // Every comment is on the combined change set today. Anchoring one to a
+    // commit is its own piece of work; until then a commit's rows are drawn
+    // and never written against.
+    .where('commit_id', 'is', null)
     .where('source_id', '=', sourceId)
     .where('path', '=', path)
     .executeTakeFirst()
@@ -676,6 +680,10 @@ async function onlySource(db: Kysely<Database>, reviewId: string, path: string):
     .select('source_id')
     .distinct()
     .where('snapshot_id', '=', snapshot.id)
+    // A file one commit added and a later one deleted is in no combined
+    // change set, so a comment naming it is refused rather than filed against
+    // a path the review does not show.
+    .where('commit_id', 'is', null)
     .where('path', '=', path)
     .execute()
 

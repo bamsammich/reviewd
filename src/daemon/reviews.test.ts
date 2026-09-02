@@ -404,3 +404,180 @@ describe('summarize', () => {
     await expect(summarize(deps, 'nope')).rejects.toMatchObject({ status: 404 })
   })
 })
+
+/**
+ * A push stored as both readings: the change set it adds up to, and the
+ * commits it divides into.
+ *
+ * The daemon never derives one from the other. It cannot: the states a later
+ * commit replaced appear in no combined diff, and git is what it has no way
+ * to reach.
+ */
+describe('createSnapshot with commits', () => {
+  /** One source, since what commits divide is one repository's push. */
+  async function oneRootReview() {
+    return createReview(deps, {
+      title: 'a push of three commits',
+      sources: [{ path: '/tmp/dotfiles', base: 'HEAD', includeUntracked: true }],
+      createdBy: 'test-session',
+      notify: false,
+    })
+  }
+
+  it('stores each commit and the change set that commit alone carried', async () => {
+    const review = await oneRootReview()
+    const source = review.sources[0]!.id
+
+    const two = await upload('const a = 2\n')
+    const three = await upload('const a = 3\n')
+
+    await createSnapshot(deps, review.reviewId, {
+      files: [fileOf(source, 'src/a.ts', three)],
+      commits: [
+        {
+          sourceId: source,
+          sha: 'aaa1',
+          subject: 'to two',
+          author: 'test',
+          committedAt: 1_700_000_000_000,
+          files: [fileOf(source, 'src/a.ts', two)],
+        },
+        {
+          sourceId: source,
+          sha: 'bbb2',
+          subject: 'to three',
+          author: 'test',
+          committedAt: 1_700_000_060_000,
+          files: [fileOf(source, 'src/a.ts', three)],
+        },
+      ],
+    })
+
+    const commits = await ctx.db.selectFrom('commit').selectAll().orderBy('ordinal').execute()
+    expect(commits.map((c) => c.subject)).toEqual(['to two', 'to three'])
+    expect(commits.map((c) => c.ordinal)).toEqual([0, 1])
+
+    // The state a later commit replaced, which is the whole point: the
+    // combined diff holds only the 3 and the first commit holds the 2.
+    const rows = await ctx.db.selectFrom('file_change').selectAll().execute()
+    const byCommit = new Map(rows.map((r) => [r.commit_id, r.new_blob_id]))
+    expect(byCommit.get(null)).toBe(three)
+    expect(byCommit.get(commits[0]!.id)).toBe(two)
+    expect(byCommit.get(commits[1]!.id)).toBe(three)
+  })
+
+  it('counts the files a reviewer has to read, not the rows', async () => {
+    const review = await oneRootReview()
+    const source = review.sources[0]!.id
+    const blob = await upload('const a = 3\n')
+
+    const result = await createSnapshot(deps, review.reviewId, {
+      files: [fileOf(source, 'src/a.ts', blob)],
+      commits: [1, 2, 3].map((n) => ({
+        sourceId: source,
+        sha: `sha${n}`,
+        subject: `commit ${n}`,
+        author: 'test',
+        committedAt: 1_700_000_000_000,
+        files: [fileOf(source, 'src/a.ts', blob)],
+      })),
+    })
+
+    // One file, touched three times. Four rows say four, and four is the
+    // number a reviewer would be told to go and read.
+    expect(result.fileCount).toBe(1)
+    expect((await summarize(deps, review.reviewId)).fileCount).toBe(1)
+  })
+
+  it('fingerprints the push, so dividing it differently is not a new thing to approve', async () => {
+    // The gate asks about a push by diffing its two ends, a reading with no
+    // commits in it. A fingerprint fed by commits could never match it.
+    const review = await oneRootReview()
+    const source = review.sources[0]!.id
+    const blob = await upload('const a = 3\n')
+
+    await createSnapshot(deps, review.reviewId, { files: [fileOf(source, 'src/a.ts', blob)] })
+
+    await createSnapshot(deps, review.reviewId, {
+      files: [fileOf(source, 'src/a.ts', blob)],
+      commits: [
+        {
+          sourceId: source,
+          sha: 'aaa1',
+          subject: 'squashed into one',
+          author: 'test',
+          committedAt: 1_700_000_000_000,
+          files: [fileOf(source, 'src/a.ts', blob)],
+        },
+      ],
+    })
+
+    const rows = await ctx.db.selectFrom('snapshot_source').selectAll().execute()
+    expect(rows).toHaveLength(2)
+    expect(rows[0]!.fingerprint).toBe(rows[1]!.fingerprint)
+  })
+
+  it('refuses a commit whose own side was never uploaded', async () => {
+    // Nothing else would have asked for those bytes: the state a later commit
+    // replaced is in no combined diff, so this is the only check that sees it.
+    const review = await oneRootReview()
+    const source = review.sources[0]!.id
+    const three = await upload('const a = 3\n')
+
+    await expect(
+      createSnapshot(deps, review.reviewId, {
+        files: [fileOf(source, 'src/a.ts', three)],
+        commits: [
+          {
+            sourceId: source,
+            sha: 'aaa1',
+            subject: 'to two',
+            author: 'test',
+            committedAt: 1_700_000_000_000,
+            files: [fileOf(source, 'src/a.ts', sha256(bytes('const a = 2\n')))],
+          },
+        ],
+      }),
+    ).rejects.toThrow(/not uploaded/)
+  })
+
+  it('refuses a commit naming a source from another review', async () => {
+    const mine = await oneRootReview()
+    const theirs = await createReview(deps, {
+      title: 'other',
+      sources: [{ path: '/tmp/other', base: 'HEAD', includeUntracked: true }],
+      createdBy: '',
+      notify: false,
+    })
+
+    await expect(
+      createSnapshot(deps, mine.reviewId, {
+        files: [],
+        commits: [
+          {
+            sourceId: theirs.sources[0]!.id,
+            sha: 'aaa1',
+            subject: 'a commit of a push nobody here is reviewing',
+            author: 'test',
+            committedAt: 1_700_000_000_000,
+            files: [],
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({ status: 400 })
+  })
+
+  it('reads a revision that carries no commits the way it always did', async () => {
+    // Every review made before this existed, and every one of a working tree.
+    const review = await oneRootReview()
+    const source = review.sources[0]!.id
+    const blob = await upload('const a = 1\n')
+
+    const result = await createSnapshot(deps, review.reviewId, {
+      files: [fileOf(source, 'src/a.ts', blob)],
+    })
+
+    expect(result.fileCount).toBe(1)
+    expect(await ctx.db.selectFrom('commit').selectAll().execute()).toEqual([])
+  })
+})

@@ -3,6 +3,7 @@ import { basename } from 'node:path'
 import type { Kysely } from 'kysely'
 import type {
   CreateReviewRequest,
+  FileChangeSpec,
   ReviewSummary,
   SnapshotManifest,
   SnapshotResult,
@@ -132,11 +133,15 @@ export async function summarize({ db, config }: Deps, reviewId: string): Promise
     : []
   const approved = new Set(approvals.map((a) => a.source_id))
 
+  // The combined change set only. A file the push touched in four commits has
+  // five rows here and is one file to read, so counting them all would report
+  // a review four times the size of the one on screen.
   const fileCount = latest
     ? await db
         .selectFrom('file_change')
         .select(({ fn }) => fn.countAll<number>().as('n'))
         .where('snapshot_id', '=', latest.id)
+        .where('commit_id', 'is', null)
         .executeTakeFirst()
     : undefined
 
@@ -299,6 +304,22 @@ export async function readBlob(
 // snapshots
 // ---------------------------------------------------------------------------
 
+function fileChangeRow(snapshotId: string, commitId: string | null, file: FileChangeSpec) {
+  return {
+    id: newId(),
+    snapshot_id: snapshotId,
+    commit_id: commitId,
+    source_id: file.sourceId,
+    path: file.path,
+    change_type: file.changeType,
+    old_path: file.oldPath,
+    old_blob_id: file.oldBlobId,
+    new_blob_id: file.newBlobId,
+    is_binary: file.isBinary ? (1 as const) : (0 as const),
+    truncated: file.truncated ? (1 as const) : (0 as const),
+  }
+}
+
 export async function createSnapshot(
   deps: Deps,
   reviewId: string,
@@ -314,9 +335,26 @@ export async function createSnapshot(
 
   if (!review) throw new ReviewError(`no review ${reviewId}`, 404)
 
+  // Absent from a revision of a working tree, and from any client older than
+  // per-commit review. Both mean the same thing here: this push is one change
+  // set and nothing divides it.
+  const commits = manifest.commits ?? []
+
   if (manifest.files.length > config.limits.max_files_per_snapshot) {
     throw new ReviewError(
       `${manifest.files.length} files, over the ${config.limits.max_files_per_snapshot} limit`,
+      413,
+    )
+  }
+
+  // Counted together rather than per commit, because the cost being bounded is
+  // the rows this snapshot writes. Twenty commits of fifty files each is the
+  // same thousand rows as one commit of a thousand, and only the total says so.
+  const commitFiles = commits.reduce((total, commit) => total + commit.files.length, 0)
+  if (commitFiles > config.limits.max_files_per_snapshot) {
+    throw new ReviewError(
+      `${commits.length} commits change ${commitFiles} files between them, ` +
+        `over the ${config.limits.max_files_per_snapshot} limit`,
       413,
     )
   }
@@ -337,6 +375,24 @@ export async function createSnapshot(
     }
   }
 
+  for (const commit of commits) {
+    if (!sourceIds.has(commit.sourceId)) {
+      throw new ReviewError(
+        `commit ${commit.sha} names source ${commit.sourceId}, not in this review`,
+        400,
+      )
+    }
+    for (const file of commit.files) {
+      if (file.sourceId !== commit.sourceId) {
+        throw new ReviewError(
+          `file ${file.path} of commit ${commit.sha} names source ${file.sourceId}, ` +
+            `not the source the commit belongs to`,
+          400,
+        )
+      }
+    }
+  }
+
   // Derived here, never accepted. A fingerprint on the wire is a claim about
   // bytes rather than a fact about them, and the gate rests on it: a client
   // that sent one could show the reviewer one change set and have the approval
@@ -348,8 +404,10 @@ export async function createSnapshot(
 
   // Referenced content must already be here. Accepting a manifest that points
   // at bytes nobody uploaded would leave a review that renders as empty files.
+  // A commit's own sides count: the state a later commit replaced appears
+  // nowhere in the combined diff, so nothing else would have asked for it.
   const referenced = new Set<string>()
-  for (const file of manifest.files) {
+  for (const file of [...manifest.files, ...commits.flatMap((c) => c.files)]) {
     if (file.oldBlobId) referenced.add(file.oldBlobId)
     if (file.newBlobId) referenced.add(file.newBlobId)
   }
@@ -397,24 +455,42 @@ export async function createSnapshot(
       )
       .execute()
 
-    if (manifest.files.length > 0) {
+    // Ordinal is the position the client sent, oldest first. The committed
+    // date cannot stand in for it: a rebase writes commits in an order the
+    // dates it carried do not describe, and two commits made in the same
+    // second are ordered by nothing at all.
+    const commitIds = commits.map(() => newId())
+
+    if (commits.length > 0) {
       await tx
-        .insertInto('file_change')
+        .insertInto('commit')
         .values(
-          manifest.files.map((file) => ({
-            id: newId(),
+          commits.map((commit, ordinal) => ({
+            id: commitIds[ordinal] as string,
             snapshot_id: snapshotId,
-            source_id: file.sourceId,
-            path: file.path,
-            change_type: file.changeType,
-            old_path: file.oldPath,
-            old_blob_id: file.oldBlobId,
-            new_blob_id: file.newBlobId,
-            is_binary: file.isBinary ? (1 as const) : (0 as const),
-            truncated: file.truncated ? (1 as const) : (0 as const),
+            source_id: commit.sourceId,
+            sha: commit.sha,
+            subject: commit.subject,
+            author: commit.author,
+            committed_at: commit.committedAt,
+            ordinal,
           })),
         )
         .execute()
+    }
+
+    // The combined change set keeps a null commit, which is what the page
+    // reads when no commit is chosen and what every review made before
+    // commits existed already holds.
+    const rows = [
+      ...manifest.files.map((file) => fileChangeRow(snapshotId, null, file)),
+      ...commits.flatMap((commit, index) =>
+        commit.files.map((file) => fileChangeRow(snapshotId, commitIds[index] as string, file)),
+      ),
+    ]
+
+    if (rows.length > 0) {
+      await tx.insertInto('file_change').values(rows).execute()
     }
 
     // A new snapshot supersedes any approval, which is the gate re-arming.

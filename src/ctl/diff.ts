@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, relative, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { manifestFingerprint } from '../fingerprint.js'
-import type { ChangeType, FileChangeSpec } from '../protocol.js'
+import type { ChangeType, CommitSpec, FileChangeSpec } from '../protocol.js'
 import { canonical, git, repoRoot } from './git.js'
 
 const run = promisify(execFile)
@@ -615,4 +615,51 @@ export async function diffOneCommit(
   }
 
   return diffCommitRange(source, { base: parent, head: sha }, limits)
+}
+
+/**
+ * A push read twice: as the one change set it adds up to, and as the commits
+ * it is divided into.
+ *
+ * Both readings come from the same range, so the reviewer cannot be shown a
+ * combined diff of one push and a commit list of another. Null when this root
+ * is not a repository, or when every commit on it is already on a remote and
+ * a push would carry nothing.
+ */
+export async function diffPushRange(
+  source: SourceInput,
+  limits: DiffLimits = DEFAULT_LIMITS,
+): Promise<{ diff: SourceDiff; commits: CommitSpec[] } | null> {
+  if ((await repoRoot(source.rootPath)) === null) return null
+
+  const range = await pushRange(source.rootPath)
+  if (range === null) return null
+
+  const diff = await diffCommitRange(source, range, limits)
+
+  // rev-list answers newest first and the wire carries oldest first, which is
+  // the order the commits were written and the order the page lists them in.
+  const infos = (await commitInfo(source.rootPath, range.commits)).reverse()
+
+  const commits: CommitSpec[] = []
+  for (const info of infos) {
+    const one = await diffOneCommit(source, info.sha, limits)
+
+    commits.push({
+      sourceId: source.id,
+      sha: info.sha,
+      subject: info.subject,
+      author: info.author,
+      committedAt: info.committedAt,
+      files: one.files,
+    })
+
+    // Into the combined reading's map, because the caller uploads content
+    // once for the whole source. A commit's own sides are usually bytes the
+    // combined diff already carries; the ones that are not are the states a
+    // later commit replaced, which is the thing a per-commit view exists for.
+    for (const [id, bytes] of one.blobs) diff.blobs.set(id, bytes)
+  }
+
+  return { diff, commits }
 }
