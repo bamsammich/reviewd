@@ -98,6 +98,16 @@ interface Page {
   palette: Palette
   diffs: Diffs
   /**
+   * The draft the reader asked to edit, or none.
+   *
+   * A page state rather than a disclosure the browser opens on its own, the
+   * same way the comment composer is: the editor holds the comment's text, and
+   * arriving at it by a link means the page can be reloaded, shared, or
+   * reached with the script unloaded and still show the same thing.
+   */
+  editing: string | undefined
+
+  /**
    * The commit being read, or none while the whole change is on screen.
    *
    * A comment written here is filed against this commit, so it stays attached
@@ -201,6 +211,8 @@ export function reviewPage(
   scope: CommitScope = { commits: [] },
   /** From the daemon's config, so one reader can shrink the page to fit more. */
   fontScale = 1,
+  /** The id of a draft the reader opened for editing, from the address. */
+  editing?: string | undefined,
 ): SafeHtml {
   // A comment belongs to the reading it was written against. One left on
   // commit three is about the line as that commit left it, which is not the
@@ -235,6 +247,7 @@ export function reviewPage(
     palette,
     diffs,
     commitSha: scope.selected?.sha,
+    editing,
   }
 
   const body = html` ${topBar(
@@ -1104,10 +1117,15 @@ function tokensForHalf(file: FileView, side: Half, which: 'left' | 'right'): Tok
  * routes refuse: a comment that can be quietly rewritten after it was acted on
  * is worse than one that cannot be fixed at all.
  *
- * A `details` disclosure rather than a menu the script builds, which is the
- * same shape Reply uses two elements down. Every control on this page works
- * with the script unloaded, and a reviewer on a phone with a flaky connection
- * is exactly who needs to fix a typo.
+ * A menu in the comment's own corner, because both actions belong to this one
+ * message while Reply and Resolve below belong to the conversation. What
+ * shipped first was the word "Edit" set in the metadata line at the size and
+ * colour of a timestamp, which read as one more piece of metadata, said one of
+ * the two things it did, and hid the comment when pressed.
+ *
+ * A `details` rather than a menu the script builds. Every control on this page
+ * works with the script unloaded, and a reviewer on a phone with a flaky
+ * connection is exactly who needs to fix a typo.
  */
 function draftMenu(page: Page, message: Thread['messages'][number]): SafeHtml {
   if (message.submittedAt !== null || message.author !== 'human') return raw('')
@@ -1115,23 +1133,89 @@ function draftMenu(page: Page, message: Thread['messages'][number]): SafeHtml {
   const action = `/r/${page.review.reviewId}/messages/${message.id}`
 
   return html`<details class="msgmenu">
-    <summary aria-label="Edit or delete this comment">Edit</summary>
-    <form method="post" action="${raw(action)}">
-      ${tokenField(page)}
-      <label class="visually-hidden" for="edit-${message.id}">Edit this comment</label>
-      <textarea id="edit-${message.id}" name="body" rows="3" required>${message.body}</textarea>
-      <div class="actions">
-        <button type="submit" class="primary">Save</button>
-      </div>
-    </form>
-    <form method="post" action="${raw(`${action}/delete`)}" class="deleteform">
-      ${tokenField(page)}
-      <button type="submit" class="danger">Delete this comment</button>
-    </form>
+    <summary aria-label="Edit or delete this comment" title="Edit or delete">
+      <span aria-hidden="true">&#8943;</span>
+    </summary>
+    <div class="popover">
+      <a class="item" href="${raw(`${editHref(page, message.id)}#m-${message.id}`)}">Edit</a>
+      <form method="post" action="${raw(`${action}/delete`)}">
+        ${tokenField(page)} ${viewField(page)}
+        <button type="submit" class="item del">Delete</button>
+      </form>
+    </div>
   </details>`
 }
 
+/**
+ * Which reading of the change this form was submitted from.
+ *
+ * A comment left on one commit draws only there, so a route that redirects to
+ * the whole change after saving lands the reviewer on a page their comment is
+ * not on.
+ */
+function viewField(page: Page): SafeHtml {
+  if (page.commitSha === undefined) return raw('')
+  return html`<input type="hidden" name="commitSha" value="${page.commitSha}" />`
+}
+
+/** The address of this page with one comment opened for editing. */
+function editHref(page: Page, messageId: string): string {
+  const commit = page.commitSha === undefined ? '' : `&commit=${encodeURIComponent(page.commitSha)}`
+  return `/r/${page.review.reviewId}?edit=${encodeURIComponent(messageId)}${commit}`
+}
+
+/**
+ * A draft being edited, in the place the comment was.
+ *
+ * The editor replaces the body rather than appearing beside it. Both at once
+ * puts the same sentence on screen twice, once editable and once not, and the
+ * reader has to work out which one is the comment; the first version solved
+ * that by hiding the body from a sibling rule, which made pressing Edit look
+ * like the comment had been deleted.
+ *
+ * Delete is here rather than in the menu it was opened from, so the control
+ * that can lose the comment sits behind the act of changing it.
+ */
+function draftEditor(page: Page, message: Thread['messages'][number]): SafeHtml {
+  const action = `/r/${page.review.reviewId}/messages/${message.id}`
+
+  return html`<div class="editing">
+    <form method="post" action="${raw(action)}" id="edit-form-${message.id}">
+      ${tokenField(page)} ${viewField(page)}
+      <label class="visually-hidden" for="edit-${message.id}">Edit this comment</label>
+      <textarea id="edit-${message.id}" name="body" rows="3" required>${message.body}</textarea>
+    </form>
+    <!--
+      One row rather than three. Save and Cancel are what this state is for;
+      Delete sits at the far end, away from the button next to it in muscle
+      memory. The delete form holds only its own token, so the two cannot
+      submit each other's fields.
+    -->
+    <div class="editactions">
+      <button type="submit" form="edit-form-${message.id}" class="primary">Save</button>
+      <a class="btn quiet" href="${raw(cancelHref(page))}">Cancel</a>
+      <form method="post" action="${raw(`${action}/delete`)}" class="deleteform">
+        ${tokenField(page)} ${viewField(page)}
+        <button type="submit" class="danger">Delete</button>
+      </form>
+    </div>
+  </div>`
+}
+
+/** Back to the page without an editor open, on the view being read. */
+function cancelHref(page: Page): string {
+  const commit = page.commitSha === undefined ? '' : `?commit=${encodeURIComponent(page.commitSha)}`
+  return `/r/${page.review.reviewId}${commit}`
+}
+
 function threadBlock(page: Page, thread: Thread, showLocation: boolean): SafeHtml {
+  // Reply and Resolve are about the conversation, and editing one of its
+  // comments is not a moment for either. Left in place they made five controls
+  // in three rows around a box holding one sentence.
+  const editingHere = thread.messages.some(
+    (message) => message.id === page.editing && message.submittedAt === null,
+  )
+
   return html`<div class="threadrow">
     <div class="thread ${thread.state}" id="t-${thread.id}">
       ${
@@ -1144,9 +1228,16 @@ function threadBlock(page: Page, thread: Thread, showLocation: boolean): SafeHtm
           ? html`<p class="drift">The code around this comment changed since it was written.</p>`
           : raw('')
       }
-      ${thread.messages.map(
-        (message) =>
-          html`<div class="msg">
+      ${thread.messages.map((message) => {
+        const editing = page.editing === message.id && message.submittedAt === null
+
+        return html`<div class="msg" id="m-${message.id}">
+          <!--
+            The byline is its own row so the menu can sit at the far end of it.
+            Left as loose spans, the menu had nothing to push against and
+            landed against the timestamp in the middle of the comment.
+          -->
+          <div class="msgmeta">
             <span class="who">${message.author === 'human' ? 'you' : 'agent'}</span>
             <span class="when" title="${new Date(message.createdAt).toISOString()}"
               >${age(Math.max(0, Math.floor((Date.now() - message.createdAt) / 1000)))} ago</span
@@ -1156,16 +1247,22 @@ function threadBlock(page: Page, thread: Thread, showLocation: boolean): SafeHtm
                 ? html`<span class="badge draft">not sent</span>`
                 : raw('')
             }
-            ${draftMenu(page, message)}
-            <div class="body">${renderMarkdown(message.body)}</div>
-          </div>`,
-      )}
+            ${editing ? raw('') : draftMenu(page, message)}
+          </div>
+          ${
+            editing
+              ? draftEditor(page, message)
+              : html`<div class="body">${renderMarkdown(message.body)}</div>`
+          }
+        </div>`
+      })}
       <!--
         Reply and Resolve on one row. Stacked, they read as two unrelated
         controls of equal weight, and the one a thread waiting on you actually
         wants is the top one.
       -->
-      <div class="threadactions">
+      ${editingHere ? raw('<!-- editing: reply and resolve stand down -->') : raw('')}
+      <div class="threadactions"${editingHere ? raw(' hidden') : raw('')}>
         <details class="reply">
           <summary>Reply</summary>
           <form method="post" action="/r/${page.review.reviewId}/threads/${thread.id}/replies">
@@ -1552,6 +1649,29 @@ function restoreReplies(state) {
   }
 }
 
+/*
+ * Menus a reader has open, kept across a refresh.
+ *
+ * A refresh replaces main wholesale, and freshly rendered markup arrives with
+ * every disclosure shut. A comment menu then closed by itself while somebody
+ * was reading it, at whatever moment the agent happened to write, which looks
+ * like the menu refusing to stay open rather than like the page updating.
+ * Replies already survive this; menus now do too.
+ */
+function openMenus() {
+  return Array.from(document.querySelectorAll('.msg details.msgmenu[open]'), (details) => {
+    const msg = details.closest('.msg');
+    return msg ? msg.id : '';
+  }).filter(Boolean);
+}
+
+function restoreMenus(ids) {
+  for (const id of ids) {
+    const details = document.querySelector('#' + CSS.escape(id) + ' details.msgmenu');
+    if (details) details.open = true;
+  }
+}
+
 async function refresh() {
   const response = await fetch(location.href);
   if (!response.ok) return;
@@ -1566,6 +1686,7 @@ async function refresh() {
   if (!main || !nextMain) return;
 
   const replies = openReplies();
+  const menus = openMenus();
   const offset = window.scrollY;
 
   main.innerHTML = nextMain.innerHTML;
@@ -1575,6 +1696,7 @@ async function refresh() {
   if (head && nextHead) head.outerHTML = nextHead.outerHTML;
 
   restoreReplies(replies);
+  restoreMenus(menus);
   // The new markup arrives with the tools hidden and the tree unfiltered,
   // because the server does not know either was ever changed.
   restoreDrawer();
