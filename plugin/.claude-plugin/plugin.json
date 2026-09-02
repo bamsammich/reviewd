@@ -1,6 +1,6 @@
 {
   "name": "reviewd",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Hold every commit until a human has read it. Opens a review an agent pushes to, readable on any device, and refuses git commit until it is approved.",
   "author": {
     "name": "Travis Huddleston"
