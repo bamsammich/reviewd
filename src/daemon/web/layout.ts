@@ -489,6 +489,9 @@ main.review > .rail > .page-title {
 .commentindex > summary .badge { text-transform: none; letter-spacing: 0; }
 .commentindex[open] > summary { margin-bottom: .4rem; }
 .commentindex ul { list-style: none; margin: 0; padding: 0; display: grid; gap: .25rem; }
+/* Which commit a comment is on, said only when it is somewhere other than the
+   view being read. */
+.commentindex .oncommit { font-family: var(--mono); color: var(--muted); font-weight: 400; }
 .commentindex a {
   display: grid; gap: 0; align-content: center;
   padding: .3rem .55rem; min-height: 2.6rem;

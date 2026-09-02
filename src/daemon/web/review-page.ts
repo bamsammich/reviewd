@@ -98,16 +98,13 @@ interface Page {
   palette: Palette
   diffs: Diffs
   /**
-   * True while one commit is being read rather than the whole change.
+   * The commit being read, or none while the whole change is on screen.
    *
-   * A comment is filed against the combined change set, so a line that exists
-   * only in commit two has nothing to attach to and the daemon refuses it. A
-   * control that cannot work is worse than no control, so the gutter draws
-   * without one here. Anchoring a comment to a commit is its own piece of
-   * work; existing threads still appear wherever their file and line are on
-   * screen.
+   * A comment written here is filed against this commit, so it stays attached
+   * to the line as that commit left it rather than drifting onto the state a
+   * later commit replaced it with.
    */
-  readOnly: boolean
+  commitSha: string | undefined
 }
 
 export { parsePosition as parseOpenBox, positionKey as boxKey } from './position.js'
@@ -184,6 +181,13 @@ export interface CommitScope {
   commits: CommitView[]
   /** Absent while the combined change set is showing. */
   selected?: CommitView
+  /**
+   * Whether the reader has the list open, from their last toggle of it.
+   *
+   * Reading one commit opens it whatever this says, since a page about a
+   * commit that hides the commit list is hiding its own context.
+   */
+  listOpen?: boolean
 }
 
 export function reviewPage(
@@ -198,13 +202,26 @@ export function reviewPage(
   /** From the daemon's config, so one reader can shrink the page to fit more. */
   fontScale = 1,
 ): SafeHtml {
+  // A comment belongs to the reading it was written against. One left on
+  // commit three is about the line as that commit left it, which is not the
+  // line the combined diff holds, so it draws on its commit and nowhere else.
+  // Threads about the change as a whole have no commit and stay on the
+  // combined view, where the code they describe is what the push adds up to.
+  const onThisView = threads.filter(
+    (thread) => (thread.commitSha ?? undefined) === scope.selected?.sha,
+  )
+
+  // Counted across the whole review rather than this view. An unsent comment
+  // on another commit still travels with the next verdict, and a submit bar
+  // that ignored it would say nothing is waiting to be sent while something
+  // is.
   const drafts = threads.reduce(
     (count, thread) => count + thread.messages.filter((m) => m.submittedAt === null).length,
     0,
   )
-  const owed = threads.filter((t) => t.state === 'active' && t.turn === 'human')
+  const owed = onThisView.filter((t) => t.state === 'active' && t.turn === 'human')
   const awaitingYou = owed.length
-  const outdated = threads.filter((t) => t.state === 'outdated')
+  const outdated = onThisView.filter((t) => t.state === 'outdated')
   const grouped = groupBySource(review.sources, files)
   // Filled while the body renders, read after. Every colour the diff used, and
   // no others, reaches the stylesheet at the end.
@@ -212,12 +229,12 @@ export function reviewPage(
   const diffs = diffsFor(files)
   const page_: Page = {
     review,
-    threads,
+    threads: onThisView,
     open,
     folded,
     palette,
     diffs,
-    readOnly: scope.selected !== undefined,
+    commitSha: scope.selected?.sha,
   }
 
   const body = html` ${topBar(
@@ -254,8 +271,8 @@ export function reviewPage(
       -->
       <div class="rail">
         <h1 class="page-title">${review.title}</h1>
-        ${commitList(review, scope)} ${scopeList(grouped, threads, diffs)}
-        ${coaching(threads.length, drafts, awaitingYou)} ${commentIndex(threads)}
+        ${commitList(review, scope)} ${scopeList(grouped, onThisView, diffs)}
+        ${coaching(onThisView.length, drafts, awaitingYou)} ${commentIndex(threads, review, scope)}
       </div>
 
       <div class="files">
@@ -266,7 +283,7 @@ export function reviewPage(
             : raw('')
         }
         ${grouped.map((group) => sourceGroup(page_, group, grouped.length > 1))}
-        ${reviewLevelBlock(page_, threads)}
+        ${reviewLevelBlock(page_, onThisView)}
         ${outdatedBlock(page_, outdated)}
       </div>
     </main>
@@ -320,7 +337,9 @@ function commitList(review: ReviewSummary, scope: CommitScope): SafeHtml {
   const { commits, selected } = scope
   const count = commits.length
 
-  return html`<details class="commits" ${selected === undefined ? raw('') : raw('open')}>
+  const open = scope.listOpen === true || selected !== undefined
+
+  return html`<details class="commits" ${open ? raw('open') : raw('')}>
     <summary>
       <span class="what">${count} commit${count === 1 ? '' : 's'}</span>
       ${
@@ -383,6 +402,17 @@ function commitRow(row: CommitRow, on: boolean): SafeHtml {
   </li>`
 }
 
+/**
+ * The commit on screen, as a query parameter to append to a link.
+ *
+ * Every link that opens a comment box has to carry it, or pressing the plus
+ * beside a line of commit three lands the reader on the whole change with a
+ * box open against a different reading of the file.
+ */
+function commitParam(page: Page): string {
+  return page.commitSha === undefined ? '' : `&commit=${encodeURIComponent(page.commitSha)}`
+}
+
 /** Seven characters, which is what git prints and what a person recognises. */
 function shortSha(sha: string): string {
   return sha.slice(0, 7)
@@ -414,7 +444,7 @@ function readingCommit(review: ReviewSummary, scope: CommitScope): SafeHtml {
       </span>
     </div>
     <p class="note">
-      Comments go on the whole change. Reading a commit shows what it did on its own.
+      A comment here is about the line as this commit left it, and stays on this commit.
     </p>
     <a class="btn quiet" href="/r/${review.reviewId}">Back to the whole change</a>
   </div>`
@@ -660,7 +690,7 @@ function coaching(threadCount: number, drafts: number, awaitingYou: number): Saf
  * Owed first. A reader with a thread waiting on them has one job and the rest
  * of the list is reference.
  */
-function commentIndex(threads: Thread[]): SafeHtml {
+function commentIndex(threads: Thread[], review: ReviewSummary, scope: CommitScope): SafeHtml {
   const open = threads.filter((thread) => thread.state === 'active')
   if (open.length === 0) return raw('')
 
@@ -670,6 +700,7 @@ function commentIndex(threads: Thread[]): SafeHtml {
 
   const shown = ordered.slice(0, INDEX_SHOWN)
   const held = ordered.slice(INDEX_SHOWN)
+  const here = scope.selected?.sha
 
   // Open when something is waiting on the reader, closed otherwise.
   //
@@ -685,14 +716,14 @@ function commentIndex(threads: Thread[]): SafeHtml {
       ${owed.length > 0 ? html`<span class="badge you">${owed.length} for you</span>` : raw('')}
     </summary>
     <ul>
-      ${shown.map((thread) => commentIndexEntry(thread))}
+      ${shown.map((thread) => commentIndexEntry(thread, review, here))}
     </ul>
     ${
       held.length > 0
         ? html`<details class="more">
             <summary>${held.length} more</summary>
             <ul>
-              ${held.map((thread) => commentIndexEntry(thread))}
+              ${held.map((thread) => commentIndexEntry(thread, review, here))}
             </ul>
           </details>`
         : raw('')
@@ -713,9 +744,27 @@ function commentIndex(threads: Thread[]): SafeHtml {
  */
 const INDEX_SHOWN = 6
 
-function commentIndexEntry(thread: Thread): SafeHtml {
+/**
+ * One entry, which may be on a view the reader is not looking at.
+ *
+ * The index lists every open thread rather than this view's, because it is the
+ * page's answer to "where are the comments waiting on me" and a note left on
+ * commit three is exactly the one that would otherwise be impossible to find.
+ * An entry elsewhere links to the view it lives on; one on this view keeps the
+ * fragment link that scrolls to it.
+ */
+function commentIndexEntry(
+  thread: Thread,
+  review: ReviewSummary,
+  here: string | undefined,
+): SafeHtml {
   const last = thread.messages[thread.messages.length - 1]
   const anchored = thread.path !== null
+  const elsewhere = (thread.commitSha ?? undefined) !== here
+
+  const href = elsewhere
+    ? `/r/${review.reviewId}${thread.commitSha ? `?commit=${encodeURIComponent(thread.commitSha)}` : ''}#t-${thread.id}`
+    : `#t-${thread.id}`
 
   // Monospace belongs to the thing that is actually a path. A sentence set in
   // it alongside two filenames reads as a third filename.
@@ -724,8 +773,16 @@ function commentIndexEntry(thread: Thread): SafeHtml {
     : 'The change as a whole'
 
   return html`<li>
-    <a class="${thread.turn === 'human' ? 'owed' : ''}" href="#t-${thread.id}">
-      <span class="where ${anchored ? 'at' : ''}">${where}</span>
+    <a class="${thread.turn === 'human' ? 'owed' : ''}" href="${raw(href)}">
+      <span class="where ${anchored ? 'at' : ''}"
+        >${where}${
+          // Named only when it is somewhere other than where the reader is, so
+          // the common case stays one line about one place.
+          elsewhere && thread.commitSha
+            ? html` <span class="oncommit">on ${shortSha(thread.commitSha)}</span>`
+            : raw('')
+        }</span
+      >
       <span class="gist">${excerpt(last?.body ?? '')}</span>
       ${
         thread.turn === 'human'
@@ -909,28 +966,23 @@ function half(
   // pressing on the + and pulling down starts a link drag, no pointerup reaches
   // the handler below, and the one column the page tells you to use is the one
   // where selecting a range does nothing.
-  // Reading one commit leaves the gutter empty. A comment is filed against the
-  // combined change set, so a line as one commit left it has nothing to attach
-  // to and the daemon refuses it; drawing the control anyway would offer a
-  // reviewer an action that fails. The column keeps its width, so switching
-  // between a commit and the whole change does not shift the code sideways.
-  const action = page.readOnly
-    ? raw('')
-    : extendable
-      ? html`<a
+  const action = extendable
+    ? html`<a
         class="addnote extend"
         draggable="false"
         href="${raw(
-          `/r/${review.reviewId}?box=${encodeURIComponent(keyAt(open.line))}&to=${here.line}#box`,
+          `/r/${review.reviewId}?box=${encodeURIComponent(keyAt(open.line))}&to=${here.line}${commitParam(page)}#box`,
         )}"
         aria-label="Extend the comment down to line ${here.line}"
         title="Extend down to line ${here.line}"
         >${EXTEND_ICON}</a
       >`
-      : html`<a
+    : html`<a
         class="addnote"
         draggable="false"
-        href="${raw(`/r/${review.reviewId}?box=${encodeURIComponent(keyAt(here.line))}#box`)}"
+        href="${raw(
+          `/r/${review.reviewId}?box=${encodeURIComponent(keyAt(here.line))}${commitParam(page)}#box`,
+        )}"
         data-box
         aria-label="Comment on ${file.path} line ${here.line}"
         title="Comment on line ${here.line}"
@@ -1165,6 +1217,16 @@ function newThreadBlock(page: Page, file: FileView, at: Position): SafeHtml {
         <input type="hidden" name="path" value="${at.path}" />
         <input type="hidden" name="side" value="${at.side}" />
         <input type="hidden" name="line" value="${at.line}" />
+        <!--
+          Which reading of the file this comment is about. Absent on the whole
+          change, so a comment there is filed the way every comment was before
+          commits could be read on their own.
+        -->
+        ${
+          page.commitSha === undefined
+            ? raw('')
+            : html`<input type="hidden" name="commitSha" value="${page.commitSha}" />`
+        }
         ${at.endLine ? html`<input type="hidden" name="endLine" value="${at.endLine}" />` : raw('')}
         <label for="${id}">Comment on ${file.path} ${where}</label>
         <textarea id="${id}" name="body" rows="3" autofocus required></textarea>
@@ -1446,12 +1508,24 @@ const FOLD_LIMIT = 3500;
 /* Never destroy something being written. A refresh replaces the whole main
    element, which would take an open comment box and whatever is typed into it
    with it, so the update waits for the reviewer to finish instead. */
+/*
+ * Whether the page would be pulled out from under someone mid-sentence.
+ *
+ * A textarea inside a closed disclosure is not one anybody is writing in. The
+ * edit menu on a saved comment holds that comment's own text, so counting it
+ * meant every review with one unsent comment reported itself as being written
+ * in forever: the update pill went up on the first reply and stayed up, and
+ * the page never refreshed again. An open menu still counts, because a
+ * reviewer part-way through an edit is exactly who this protects.
+ */
 function busyWriting() {
   const active = document.activeElement;
   if (active && active.tagName === 'TEXTAREA') return true;
   if (document.querySelector('.inline-box')) return true;
 
   for (const area of document.querySelectorAll('.thread textarea')) {
+    const menu = area.closest('details');
+    if (menu && !menu.open) continue;
     if (area.value.trim()) return true;
   }
 
@@ -2265,6 +2339,18 @@ document.addEventListener('toggle', (event) => {
   }
 
   document.cookie = 'reviewd_folds=' + value + '; Path=/; Max-Age=31536000; SameSite=Lax';
+}, true);
+
+/* Whether the commit list is open is the reader's decision, not the view's.
+   Opening it, reading one commit and coming back to the whole change used to
+   shut it, which took the list away mid-navigation from the person using it. */
+document.addEventListener('toggle', (event) => {
+  const details = event.target;
+  if (!details.classList || !details.classList.contains('commits')) return;
+
+  document.cookie =
+    'reviewd_commits=' + (details.open ? 'open' : 'closed') +
+    '; Path=/; Max-Age=31536000; SameSite=Lax';
 }, true);
 
 document.addEventListener('click', (event) => {

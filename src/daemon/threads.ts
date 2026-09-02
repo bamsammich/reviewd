@@ -83,15 +83,20 @@ export async function readAnchor(
   side: 'old' | 'new',
   lineNumber: number,
   endLine?: number | undefined,
+  /** The commit whose rows to read, or none for the combined change set. */
+  commitId?: string | undefined,
 ): Promise<{ start: Anchor; end: Anchor | undefined; lineCount: number | undefined }> {
   const change = await db
     .selectFrom('file_change')
     .selectAll()
     .where('snapshot_id', '=', snapshotId)
-    // Every comment is on the combined change set today. Anchoring one to a
-    // commit is its own piece of work; until then a commit's rows are drawn
-    // and never written against.
-    .where('commit_id', 'is', null)
+    // The rows of the view the comment was left on. A line as one commit left
+    // it is a different line from the same path in the combined change set,
+    // and hashing the wrong one would anchor the comment to code the reader
+    // was not looking at.
+    .where((eb) =>
+      commitId === undefined ? eb('commit_id', 'is', null) : eb('commit_id', '=', commitId),
+    )
     .where('source_id', '=', sourceId)
     .where('path', '=', path)
     .executeTakeFirst()
@@ -150,12 +155,27 @@ export async function createThread(
       anchorHash: null,
       contextHash: null,
       endAnchorHash: null,
+      // A note about the change as a whole is about all of it, however the
+      // reader happened to be reading when they wrote it.
+      commitSha: null,
     })
   }
 
   const path = request.path as string
   const line = request.line as number
-  const sourceId = request.sourceId ?? (await onlySource(db, reviewId, path))
+
+  // Resolved against this snapshot, so a comment cannot name a commit the
+  // review does not carry. Refused rather than filed against the combined set:
+  // a comment silently moved to a different reading of the code is worse than
+  // one that did not save.
+  const commit =
+    request.commitSha === undefined ? undefined : await commitOf(db, snapshot.id, request.commitSha)
+
+  if (request.commitSha !== undefined && commit === undefined) {
+    throw new ReviewError(`this revision carries no commit ${request.commitSha}`, 400)
+  }
+
+  const sourceId = request.sourceId ?? (await onlySource(db, reviewId, path, commit?.id))
 
   // The wire schema refuses a backwards range, but that only runs on a parsed
   // request and this function is exported. Coercing it quietly would store a
@@ -172,7 +192,16 @@ export async function createThread(
   const endLine =
     request.endLine !== undefined && request.endLine > line ? request.endLine : undefined
 
-  const anchor = await readAnchor(db, snapshot.id, sourceId, path, request.side, line, endLine)
+  const anchor = await readAnchor(
+    db,
+    snapshot.id,
+    sourceId,
+    path,
+    request.side,
+    line,
+    endLine,
+    commit?.id,
+  )
 
   // A line past the end of the file hashes to the empty string, which matches
   // nothing later and would leave the comment marked drifted forever for a
@@ -195,6 +224,7 @@ export async function createThread(
     anchorHash: anchor.start.anchorHash,
     contextHash: anchor.start.contextHash,
     endAnchorHash: anchor.end?.anchorHash ?? null,
+    commitSha: commit?.sha ?? null,
   })
 }
 
@@ -208,6 +238,8 @@ interface ThreadPlace {
   anchorHash: string | null
   contextHash: string | null
   endAnchorHash: string | null
+  /** The commit the comment was left on, or null for the combined change set. */
+  commitSha: string | null
 }
 
 async function insertThread(
@@ -236,6 +268,7 @@ async function insertThread(
         anchor_hash: place.anchorHash,
         context_hash: place.contextHash,
         end_anchor_hash: place.endAnchorHash,
+        commit_sha: place.commitSha,
         state: 'active',
         origin: request.author,
         drifted: 0,
@@ -395,6 +428,7 @@ export async function listThreads(
       'thread.side',
       'thread.line',
       'thread.end_line',
+      'thread.commit_sha',
       'thread.state',
       'thread.origin',
       'thread.drifted',
@@ -449,6 +483,7 @@ export async function listThreads(
       side: row.side,
       line: row.line,
       endLine: row.end_line,
+      commitSha: row.commit_sha,
       state: row.state,
       origin: row.origin,
       turn,
@@ -671,7 +706,22 @@ async function latestSnapshot(db: Kysely<Database>, reviewId: string) {
  * rather than a guess: a comment filed against the wrong root is worse than a
  * comment refused.
  */
-async function onlySource(db: Kysely<Database>, reviewId: string, path: string): Promise<string> {
+/** The commit of this snapshot with that sha, or none. */
+async function commitOf(db: Kysely<Database>, snapshotId: string, sha: string) {
+  return db
+    .selectFrom('commit')
+    .select(['id', 'sha'])
+    .where('snapshot_id', '=', snapshotId)
+    .where('sha', '=', sha)
+    .executeTakeFirst()
+}
+
+async function onlySource(
+  db: Kysely<Database>,
+  reviewId: string,
+  path: string,
+  commitId?: string | undefined,
+): Promise<string> {
   const snapshot = await latestSnapshot(db, reviewId)
   if (!snapshot) throw new ReviewError('review has no snapshot', 409)
 
@@ -680,10 +730,13 @@ async function onlySource(db: Kysely<Database>, reviewId: string, path: string):
     .select('source_id')
     .distinct()
     .where('snapshot_id', '=', snapshot.id)
-    // A file one commit added and a later one deleted is in no combined
-    // change set, so a comment naming it is refused rather than filed against
-    // a path the review does not show.
-    .where('commit_id', 'is', null)
+    // The rows of the view being commented on. A file one commit added and a
+    // later one deleted is in no combined change set, so a comment naming it
+    // without naming a commit is refused rather than filed against a path the
+    // review does not show.
+    .where((eb) =>
+      commitId === undefined ? eb('commit_id', 'is', null) : eb('commit_id', '=', commitId),
+    )
     .where('path', '=', path)
     .execute()
 

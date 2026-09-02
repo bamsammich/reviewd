@@ -1345,7 +1345,7 @@ describe('the commits of a push', () => {
 
   // Closed while the whole change is showing: a reader who has not asked for
   // the list wants the filenames, which is what the column is for.
-  it('stays shut until a commit is being read', () => {
+  it('stays shut until a commit is being read, or the reader opens it', () => {
     expect(withCommits()).toContain('<details class="commits" >')
     expect(withCommits(COMMITS[1])).toContain('<details class="commits" open>')
   })
@@ -1357,6 +1357,32 @@ describe('the commits of a push', () => {
    * rows under it. Asserted on the row's own text rather than on the page,
    * because prose elsewhere can contain the same words.
    */
+  /**
+   * Whether the list is open is the reader's decision, not the view's.
+   *
+   * Opening it, reading one commit and coming back to the whole change used to
+   * shut it, which took the list away mid-navigation from the person using it.
+   */
+  it('keeps the list open on the whole change when the reader opened it', () => {
+    const withPreference = reviewPage(
+      summary(),
+      [file('src/a.ts')],
+      [],
+      undefined,
+      'split',
+      new Set(),
+      'open',
+      { commits: COMMITS, listOpen: true },
+    ).value
+
+    expect(withPreference).toContain('<details class="commits" open>')
+  })
+
+  it('remembers the toggle rather than deriving it', () => {
+    // The page writes the cookie the route reads back.
+    expect(withCommits()).toContain("'reviewd_commits='")
+  })
+
   it('offers all the commits as the first entry, in the same shape as the rest', () => {
     const markup = withCommits(COMMITS[0])
     const rows = [...markup.matchAll(/<a\s+class="crow[^"]*"[\s\S]*?<\/a>/g)].map((m) => m[0])
@@ -1393,13 +1419,22 @@ describe('the commits of a push', () => {
   })
 
   /**
-   * A comment is filed against the combined change set. A line as one commit
-   * left it may not be in that set at all, so the daemon refuses it, and a
-   * control that always fails is worse than no control.
+   * A comment left while reading a commit is about the line as that commit
+   * left it, so the gutter works here and every link out of it keeps the
+   * commit the reader was on.
    */
-  it('draws no comment control while a commit is being read', () => {
-    expect(withCommits()).toContain('class="addnote"')
-    expect(withCommits(COMMITS[0])).not.toContain('class="addnote"')
+  it('takes a comment on a commit, and carries which one', () => {
+    const markup = withCommits(COMMITS[0])
+
+    expect(markup).toContain('class="addnote"')
+    expect(markup).toContain('&commit=aaaaaaa1111')
+  })
+
+  it('files a comment on the whole change against no commit', () => {
+    const markup = withCommits()
+
+    expect(markup).toContain('class="addnote"')
+    expect(markup).not.toContain('&commit=')
   })
 
   /**
@@ -1426,8 +1461,8 @@ describe('the commits of a push', () => {
     expect(one).toContain('<div class="readingcommit">')
   })
 
-  it('says why rather than leaving the reader to find out', () => {
-    expect(withCommits(COMMITS[0])).toContain('Comments go on the whole change')
+  it('says what a comment written here will be about', () => {
+    expect(withCommits(COMMITS[0])).toContain('stays on this commit')
   })
 })
 

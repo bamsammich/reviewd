@@ -473,3 +473,119 @@ describe('re-anchoring a snapshot', () => {
     expect((await threadRow()).state).toBe('active')
   })
 })
+
+/**
+ * What a new revision does to a comment left on a commit.
+ *
+ * A commit-anchored comment is measured against that commit's own rows in the
+ * new revision, found by sha. A rebase replaces the shas, so the commit the
+ * comment was about stops existing and the comment outdates rather than
+ * silently reattaching to whichever commit now sits in that position.
+ */
+describe('re-anchoring a comment left on a commit', () => {
+  async function reviewWithCommit(sha: string, text: string) {
+    const review = await createReview(deps, {
+      title: 'a push',
+      sources: [{ path: '/tmp/repo', base: 'HEAD', includeUntracked: true }],
+      createdBy: 'test',
+      notify: false,
+    })
+
+    await snapshotWith(review.reviewId, sha, text)
+    return review
+  }
+
+  async function snapshotWith(reviewId: string, sha: string, text: string) {
+    const source = (
+      await ctx.db.selectFrom('source').select('id').where('review_id', '=', reviewId).execute()
+    )[0]!.id
+
+    const bytes = new TextEncoder().encode(text)
+    const blobId = sha256(bytes)
+    await putBlob(deps, blobId, bytes)
+
+    const file = {
+      sourceId: source,
+      path: 'src/a.ts',
+      changeType: 'modified' as const,
+      oldPath: null,
+      oldBlobId: null,
+      newBlobId: blobId,
+      oldHash: null,
+      newHash: blobId,
+      isBinary: false,
+      truncated: false,
+    }
+
+    await createSnapshot(deps, reviewId, {
+      files: [file],
+      commits: [
+        {
+          sourceId: source,
+          sha,
+          subject: 'the commit',
+          author: 'test',
+          committedAt: 1_700_000_000_000,
+          files: [file],
+        },
+      ],
+    })
+
+    return source
+  }
+
+  it('follows the line when the commit survives', async () => {
+    const review = await reviewWithCommit('aaaaaaa1111', 'one\ntwo\nthree\n')
+    const source = (
+      await ctx.db
+        .selectFrom('source')
+        .select('id')
+        .where('review_id', '=', review.reviewId)
+        .execute()
+    )[0]!.id
+
+    await createThread(deps, review.reviewId, {
+      sourceId: source,
+      path: 'src/a.ts',
+      side: 'new',
+      line: 2,
+      commitSha: 'aaaaaaa1111',
+      body: 'about two',
+      author: 'human',
+    })
+
+    // Same commit, a line added above the one the comment sits on.
+    await snapshotWith(review.reviewId, 'aaaaaaa1111', 'zero\none\ntwo\nthree\n')
+
+    const thread = await ctx.db.selectFrom('thread').selectAll().executeTakeFirstOrThrow()
+    expect(thread.state).toBe('active')
+    expect(thread.line).toBe(3)
+  })
+
+  it('outdates when a rebase replaces the commit it was about', async () => {
+    const review = await reviewWithCommit('aaaaaaa1111', 'one\ntwo\nthree\n')
+    const source = (
+      await ctx.db
+        .selectFrom('source')
+        .select('id')
+        .where('review_id', '=', review.reviewId)
+        .execute()
+    )[0]!.id
+
+    await createThread(deps, review.reviewId, {
+      sourceId: source,
+      path: 'src/a.ts',
+      side: 'new',
+      line: 2,
+      commitSha: 'aaaaaaa1111',
+      body: 'about two',
+      author: 'human',
+    })
+
+    // The same content under a new sha, which is what a rebase produces.
+    await snapshotWith(review.reviewId, 'bbbbbbb2222', 'one\ntwo\nthree\n')
+
+    const thread = await ctx.db.selectFrom('thread').selectAll().executeTakeFirstOrThrow()
+    expect(thread.state).toBe('outdated')
+  })
+})

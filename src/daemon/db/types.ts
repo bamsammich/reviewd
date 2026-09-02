@@ -132,6 +132,14 @@ export interface ThreadTable {
    * Whether the conversation is live. Whose turn it is stays derived from the
    * last message, so no column here can drift away from the message list.
    */
+  /**
+   * The commit this comment was left on, or null for the combined change set.
+   *
+   * A sha rather than a reference to a commit row, because commit rows belong
+   * to one snapshot and are replaced by the next, while a comment outlives the
+   * revision it was written against.
+   */
+  commit_sha: string | null
   state: 'active' | 'resolved' | 'outdated'
   origin: 'human' | 'agent'
   /** Set when re-anchoring matched the line but not its surroundings. */

@@ -51,6 +51,8 @@ interface ThreadRow {
   anchor_hash: string
   context_hash: string
   end_anchor_hash: string | null
+  /** Null for a comment on the whole push; a sha for one left on a commit. */
+  commit_sha: string | null
 }
 
 export async function reanchor(
@@ -70,6 +72,7 @@ export async function reanchor(
       'anchor_hash',
       'context_hash',
       'end_anchor_hash',
+      'commit_sha',
     ])
     .where('review_id', '=', reviewId)
     .where('state', '!=', 'resolved')
@@ -200,25 +203,53 @@ export function locateEnd(
   return { endLine: end, drifted: !intact }
 }
 
+/**
+ * The lines a thread should be measured against in the new revision.
+ *
+ * A comment on the whole push reads the combined change set. A comment left on
+ * one commit reads that commit's rows, found by sha: a commit holds the same
+ * path with the blobs that commit saw, and measuring one against the other
+ * would move a comment onto a state the reviewer was never shown.
+ *
+ * A commit that the new revision does not carry returns nothing, so the thread
+ * outdates. That is what a rebase does to a comment: the commit it was about
+ * stopped existing, and saying so is more honest than reattaching the note to
+ * whichever commit now occupies that position.
+ */
 async function linesFor(
   db: Kysely<Database>,
   snapshotId: string,
   thread: ThreadRow,
   cache: Map<string, string[] | null>,
 ): Promise<string[] | null> {
-  const key = `${thread.source_id}:${thread.path}:${thread.side}`
+  const key = `${thread.commit_sha ?? ''}:${thread.source_id}:${thread.path}:${thread.side}`
   const cached = cache.get(key)
   if (cached !== undefined) return cached
+
+  let commitId: string | undefined
+  if (thread.commit_sha !== null) {
+    const commit = await db
+      .selectFrom('commit')
+      .select('id')
+      .where('snapshot_id', '=', snapshotId)
+      .where('sha', '=', thread.commit_sha)
+      .executeTakeFirst()
+
+    if (!commit) {
+      cache.set(key, null)
+      return null
+    }
+
+    commitId = commit.id
+  }
 
   const change = await db
     .selectFrom('file_change')
     .selectAll()
     .where('snapshot_id', '=', snapshotId)
-    // The combined change set, which is where a comment on the whole push
-    // lives. A commit holds the same path with the blobs that commit saw, and
-    // anchoring against those would move a comment onto a state the reviewer
-    // was never shown.
-    .where('commit_id', 'is', null)
+    .where((eb) =>
+      commitId === undefined ? eb('commit_id', 'is', null) : eb('commit_id', '=', commitId),
+    )
     .where('source_id', '=', thread.source_id)
     .where('path', '=', thread.path)
     .executeTakeFirst()

@@ -407,12 +407,41 @@ const commitScopes: Migration = {
   },
 }
 
+/**
+ * Which commit a comment was left on, for a review that carries commits.
+ *
+ * Null is the combined change set, which is where every comment written before
+ * this one lives and where a comment on a review of a working tree still goes.
+ * A sha rather than a foreign key to `commit`: commit rows belong to one
+ * snapshot and are replaced wholesale by the next, while a comment outlives
+ * the revision it was written against. The sha is what stays true across both.
+ */
+const commitComments: Migration = {
+  async up(db: MigrationDb): Promise<void> {
+    await db.schema.alterTable('thread').addColumn('commit_sha', 'text').execute()
+
+    // Every read of a commit's threads asks this and only this: which comments
+    // belong on the view being drawn.
+    await db.schema
+      .createIndex('thread_commit')
+      .on('thread')
+      .columns(['review_id', 'commit_sha'])
+      .execute()
+  },
+
+  async down(db: MigrationDb): Promise<void> {
+    await db.schema.dropIndex('thread_commit').execute()
+    await db.schema.alterTable('thread').dropColumn('commit_sha').execute()
+  },
+}
+
 export const migrations: Record<string, Migration> = {
   '0001_initial': initial,
   '0002_line_ranges': lineRanges,
   '0003_gated_tree': gatedTree,
   '0004_review_level_threads': reviewLevelThreads,
   '0005_commit_scopes': commitScopes,
+  '0006_commit_comments': commitComments,
 }
 
 export class CodeMigrationProvider implements MigrationProvider {
