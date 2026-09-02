@@ -90,6 +90,40 @@ the old image keeps showing the old review page however current the binary is.
 `reviewd doctor` reports where the daemon answers and not which version
 answered, so it will not catch this for you.
 
+### Configuring it
+
+Nothing here is required. The daemon writes `~/.config/reviewd/config.json` with
+defaults on first start, and every setting below is optional.
+
+```json
+{
+  "port": 7777,
+  "public_url": "http://127.0.0.1:7777",
+  "ui": { "font_scale": 1 },
+  "gate": { "scope": "commit" }
+}
+```
+
+| key | decides |
+| --- | --- |
+| `host`, `port` | where the daemon listens, and so who can reach it |
+| `public_url` | the address every review link opens, which a tunnel has to say |
+| `ui.font_scale` | how large the pages draw, between `0.75` and `1.5` |
+| `gate.scope` | whether the gate holds every commit or every push |
+| `limits` | the largest file uploaded, and the most files one revision may carry |
+| `sweep.review_idle_days` | how long an untouched review lives |
+| `notify.webhook_url` | where to POST when a review is waiting for you |
+
+Clients find the daemon through `~/.config/reviewd/client.json`, and a missing
+file means loopback:
+
+```json
+{ "base_url": "http://127.0.0.1:7777" }
+```
+
+Every key, every environment variable, and the reasoning behind the defaults are
+in [docs/configuration.md](docs/configuration.md).
+
 ### Running the daemon
 
 There is no service to install. The daemon starts on first use: whichever of the
