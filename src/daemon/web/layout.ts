@@ -205,24 +205,14 @@ ul.reviews .roots {
   color: var(--muted); margin: 0;
 }
 
-/* The heading and the controls that act on what it counts. */
-/* The heading, the control that hides all of it, and the tools that act on it.
-   Hide sits beside the count rather than above the diff: a control that closes
-   the drawer belongs to the drawer, and its way back lives in the app bar,
-   which is the one part of the page the drawer cannot take with it. */
+/* The heading and the tools that act on what it counts. The control that hides
+   all of it is in the app bar, where the control that brings it back is: one
+   button in one place, rather than a button that vanishes with the thing it
+   closed and a different one somewhere else. */
 .scopehead {
-  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  display: grid; grid-template-columns: minmax(0, 1fr);
   gap: .4rem .5rem; align-items: center; margin-bottom: .5rem;
 }
-/* An icon on its own needs the tap target the words used to give it. Square,
-   so it reads as one control rather than a button that lost its label. */
-.scopehead .hidefiles {
-  justify-self: end;
-  display: inline-flex; align-items: center; justify-content: center;
-  width: var(--tap); height: var(--tap); padding: 0;
-  color: var(--muted);
-}
-.scopehead .hidefiles:hover { color: var(--accent); border-color: var(--accent); }
 .scopetools { grid-column: 1 / -1; display: flex; gap: .35rem; align-items: center; }
 
 /* type=search, so the browser draws its own clear button and Escape behaves
@@ -682,6 +672,21 @@ a.addnote.extend { color: var(--accent); opacity: 1; }
  * unified and the switch would offer a choice the layout has already made. */
 header.top .barcontrols { display: flex; align-items: center; gap: .4rem; flex: 0 0 auto; }
 header.top .barcontrols .viewmode { display: none; }
+
+/* One control for the drawer, drawn the same way whichever direction it points,
+   so pressing it never moves it. Square, because an icon on its own still needs
+   the tap target the words used to give it. */
+.drawertoggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: var(--tap); height: var(--tap); padding: 0;
+  color: var(--muted); flex: 0 0 auto;
+}
+.drawertoggle:hover { color: var(--accent); border-color: var(--accent); }
+/* Pressed while the files are showing, which is the state the icon cannot
+   express on its own: the same glyph means both "this is open" and "open it". */
+.drawertoggle[aria-expanded='true'] {
+  color: var(--ink-2); border-color: var(--rule-strong); background: var(--surface-2);
+}
 
 /* The size of the whole change, at the end of the bar the drawer cannot hide.
  *
