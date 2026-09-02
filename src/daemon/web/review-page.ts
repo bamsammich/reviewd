@@ -1,7 +1,7 @@
 import type { ReviewSummary, SourceSummary, Thread } from '../../protocol.js'
 import { Palette, renderLine, type Token } from './highlight.js'
 import { lineMarkKey, markRows, type LineMarks } from './words.js'
-import { COMMENT_ICON, EXTEND_ICON, FOLDER_ICON, GIT_ICON } from './icons.js'
+import { COMMENT_ICON, EXTEND_ICON, FOLDER_ICON, GIT_ICON, SIDEBAR_ICON } from './icons.js'
 import { escapeHtml, html, raw, type SafeHtml } from './html.js'
 import { renderMarkdown } from './markdown.js'
 // anchorForHalf is gone from here: nothing in the renderer asks where a row is
@@ -186,7 +186,10 @@ export function reviewPage(
   const diffs = diffsFor(files)
   const page_: Page = { review, threads, open, folded, palette, diffs }
 
-  const body = html` ${topBar(review.title, html`<span class="rev">rev ${review.snapshotSeq}</span>`)}
+  const body = html` ${topBar(
+    review.title,
+    html`${diffControls(review, view, rail)}<span class="rev">rev ${review.snapshotSeq}</span>`,
+  )}
     <main
       id="main"
       class="review with-bar view-${view} rail-${rail}"
@@ -206,14 +209,21 @@ export function reviewPage(
         data-awaiting="${awaitingYou}"
         data-submitted="${review.lastSubmissionAt}"
       />
+      <!--
+        Files first. Everything else in this column used to sit above them, and
+        on a nine-file review that put 500 pixels of a 900 pixel window between
+        the top of the rail and the first filename, in the column whose whole
+        job is picking a file. What follows the tree is still here, in the
+        order a reader wants it once they have found the file.
+      -->
       <div class="rail">
         <h1 class="page-title">${review.title}</h1>
+        ${scopeList(grouped, threads, diffs, review, view)}
+        ${coaching(threads.length, drafts, awaitingYou)} ${commentIndex(threads)}
         ${tally(
           [...diffs.values()].reduce((sum, diff) => sum + diff.added, 0),
           [...diffs.values()].reduce((sum, diff) => sum + diff.removed, 0),
         )}
-        ${coaching(threads.length, drafts, awaitingYou)} ${commentIndex(threads)}
-        ${scopeList(grouped, threads, diffs)}
       </div>
 
       <div class="files">
@@ -222,7 +232,6 @@ export function reviewPage(
             ? html`<p class="emptystate">This revision changed nothing.</p>`
             : raw('')
         }
-        ${viewToggle(review, view, rail)}
         ${grouped.map((group) => sourceGroup(page_, group, grouped.length > 1))}
         ${reviewLevelBlock(page_, threads)}
         ${outdatedBlock(page_, outdated)}
@@ -280,7 +289,13 @@ function groupBySource(sources: SourceSummary[], files: FileView[]): SourceGroup
  * JavaScript except the marker for the file you are currently reading, which
  * is the one thing the server cannot know.
  */
-function scopeList(groups: SourceGroup[], threads: Thread[], diffs: Diffs): SafeHtml {
+function scopeList(
+  groups: SourceGroup[],
+  threads: Thread[],
+  diffs: Diffs,
+  review: ReviewSummary,
+  view: ViewMode,
+): SafeHtml {
   if (groups.length === 0) return raw('')
 
   const files = groups.reduce((total, group) => total + group.files.length, 0)
@@ -291,6 +306,7 @@ function scopeList(groups: SourceGroup[], threads: Thread[], diffs: Diffs): Safe
         ${files} file${files === 1 ? '' : 's'} in
         ${groups.length === 1 ? '1 place' : `${groups.length} places`}
       </h2>
+      ${hideDrawer(review, view)}
       <!--
         Hidden until the script unhides it. A filter box that does nothing is
         worse than no filter box, and the filtering is the script's job.
@@ -322,15 +338,24 @@ function sourceBranch(group: SourceGroup, threads: Thread[], diffs: Diffs): Safe
   const name = group.source.label || basenameOf(group.source.rootPath)
   const tracked = group.source.vcs === 'git'
 
+  // The path rides on the link rather than under the name.
+  //
+  // Wrapped onto its own line it made this a two-row card, which cost 79
+  // pixels above the file tree on every review to say something the name
+  // already says: what distinguishes two sources is which repository they are,
+  // and the name is that. The full path stays a hover and stays in the
+  // accessible name, so nothing is lost, only unstacked.
   return html`<div class="branch">
-    <a class="root ${group.source.approved ? 'ok' : ''}" href="#src-${group.source.id}">
+    <a
+      class="root ${group.source.approved ? 'ok' : ''}"
+      href="#src-${group.source.id}"
+      title="${group.source.rootPath}"
+    >
       ${tracked ? GIT_ICON : FOLDER_ICON}
       <span class="visually-hidden">${tracked ? 'git repository' : 'directory'}</span>
       <span class="name">${name}</span>
       ${group.source.approved ? html`<span class="badge approved">approved</span>` : raw('')}
-      <span class="path" title="${group.source.rootPath}"
-        >${displayPath(group.source.rootPath)}</span
-      >
+      <span class="visually-hidden">at ${displayPath(group.source.rootPath)}</span>
     </a>
     ${treeList(group.tree, threads, name, diffs)}
   </div>`
@@ -502,11 +527,19 @@ function commentIndex(threads: Thread[]): SafeHtml {
   const shown = ordered.slice(0, INDEX_SHOWN)
   const held = ordered.slice(INDEX_SHOWN)
 
-  return html`<nav class="commentindex" aria-labelledby="comments-heading">
-    <h2 id="comments-heading">
+  // Open when something is waiting on the reader, closed otherwise.
+  //
+  // The list sits below the file tree now, so leaving it open on every review
+  // would push the files back up the page the moment a review has comments.
+  // Closed by default and open when owed keeps the one case that matters
+  // visible without spending the column on the case that does not: a reader
+  // with nothing waiting is reading files, and a reader with three threads
+  // owed has those three as their whole job.
+  return html`<details class="commentindex" ${owed.length > 0 ? raw('open') : raw('')}>
+    <summary>
       ${open.length} open comment${open.length === 1 ? '' : 's'}
       ${owed.length > 0 ? html`<span class="badge you">${owed.length} for you</span>` : raw('')}
-    </h2>
+    </summary>
     <ul>
       ${shown.map((thread) => commentIndexEntry(thread))}
     </ul>
@@ -520,7 +553,7 @@ function commentIndex(threads: Thread[]): SafeHtml {
           </details>`
         : raw('')
     }
-  </nav>`
+  </details>`
 }
 
 /**
@@ -860,6 +893,41 @@ function tokensForHalf(file: FileView, side: Half, which: 'left' | 'right'): Tok
   return lines?.[side.line - 1]
 }
 
+/**
+ * Edit and delete, on a comment nobody has read yet.
+ *
+ * Only while a comment is a draft. Once a verdict carries it to the agent the
+ * agent has read it and may have acted, so the controls do not appear and the
+ * routes refuse: a comment that can be quietly rewritten after it was acted on
+ * is worse than one that cannot be fixed at all.
+ *
+ * A `details` disclosure rather than a menu the script builds, which is the
+ * same shape Reply uses two elements down. Every control on this page works
+ * with the script unloaded, and a reviewer on a phone with a flaky connection
+ * is exactly who needs to fix a typo.
+ */
+function draftMenu(page: Page, message: Thread['messages'][number]): SafeHtml {
+  if (message.submittedAt !== null || message.author !== 'human') return raw('')
+
+  const action = `/r/${page.review.reviewId}/messages/${message.id}`
+
+  return html`<details class="msgmenu">
+    <summary aria-label="Edit or delete this comment">Edit</summary>
+    <form method="post" action="${raw(action)}">
+      ${tokenField(page)}
+      <label class="visually-hidden" for="edit-${message.id}">Edit this comment</label>
+      <textarea id="edit-${message.id}" name="body" rows="3" required>${message.body}</textarea>
+      <div class="actions">
+        <button type="submit" class="primary">Save</button>
+      </div>
+    </form>
+    <form method="post" action="${raw(`${action}/delete`)}" class="deleteform">
+      ${tokenField(page)}
+      <button type="submit" class="danger">Delete this comment</button>
+    </form>
+  </details>`
+}
+
 function threadBlock(page: Page, thread: Thread, showLocation: boolean): SafeHtml {
   return html`<div class="threadrow">
     <div class="thread ${thread.state}" id="t-${thread.id}">
@@ -880,7 +948,12 @@ function threadBlock(page: Page, thread: Thread, showLocation: boolean): SafeHtm
             <span class="when" title="${new Date(message.createdAt).toISOString()}"
               >${age(Math.max(0, Math.floor((Date.now() - message.createdAt) / 1000)))} ago</span
             >
-            ${message.submittedAt === null ? html`<span class="badge draft">not sent</span>` : raw('')}
+            ${
+              message.submittedAt === null
+                ? html`<span class="badge draft">not sent</span>`
+                : raw('')
+            }
+            ${draftMenu(page, message)}
             <div class="body">${renderMarkdown(message.body)}</div>
           </div>`,
       )}
@@ -1020,21 +1093,57 @@ function outdatedBlock(page: Page, outdated: Thread[]): SafeHtml {
  * that cannot be honored is worse than no option. The stylesheet stacks the
  * halves there whatever the stored preference says.
  */
-function viewToggle(review: ReviewSummary, view: ViewMode, rail: RailState): SafeHtml {
+/**
+ * The diff controls, in the bar that stays.
+ *
+ * These sat above the first file, which put a control on the diff rather than
+ * on the page and scrolled it away the moment anyone started reading. The bar
+ * is already sticky, so a reader who has scrolled four files down can still
+ * change how the fifth is drawn.
+ *
+ * The drawer control appears here only while the drawer is closed. Its other
+ * half lives inside the drawer, next to the list it hides, which is where a
+ * control that hides something belongs. Closing the drawer would take that
+ * control with it, so the way back has to survive somewhere the drawer cannot
+ * hide, and this bar is the one place on the page that is always drawn.
+ */
+function diffControls(review: ReviewSummary, view: ViewMode, rail: RailState): SafeHtml {
   const other: ViewMode = view === 'split' ? 'unified' : 'split'
-  const flip: RailState = rail === 'open' ? 'closed' : 'open'
 
-  return html`<div class="viewtoggle">
-    <a
-      class="btn quiet"
-      href="/r/${review.reviewId}?rail=${flip}"
-      aria-expanded="${rail === 'open' ? 'true' : 'false'}"
-      >${rail === 'open' ? 'Hide files' : 'Show files'}</a
-    >
-    <a class="btn quiet viewmode" href="/r/${review.reviewId}?view=${other}">
+  return html`<div class="barcontrols">
+    ${
+      rail === 'closed'
+        ? html`<a
+            class="btn quiet"
+            href="/r/${review.reviewId}?rail=open&view=${view}"
+            aria-expanded="false"
+            >Show files</a
+          >`
+        : raw('')
+    }
+    <a class="btn quiet viewmode" href="/r/${review.reviewId}?view=${other}&rail=${rail}">
       ${other === 'split' ? 'Show side by side' : 'Show unified'}
     </a>
   </div>`
+}
+
+/**
+ * The other half of the drawer control, inside the drawer it closes.
+ *
+ * An icon, the way GitHub draws the same control. The heading beside it
+ * already says how many files are in here, so a button repeating the word
+ * would spend a third of a narrow column restating its own neighbour. The
+ * label carries the words for anyone who cannot see the shape.
+ */
+function hideDrawer(review: ReviewSummary, view: ViewMode): SafeHtml {
+  return html`<a
+    class="btn quiet hidefiles"
+    href="/r/${review.reviewId}?rail=closed&view=${view}"
+    aria-expanded="true"
+    aria-label="Hide files"
+    title="Hide files"
+    >${SIDEBAR_ICON}</a
+  >`
 }
 
 /**

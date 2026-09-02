@@ -200,7 +200,9 @@ ul.reviews .roots {
 /* Its own margin rather than the title's. Wide enough for the app bar to show
    the title, the h1 above this is taken out of flow and its margin goes with
    it, leaving the size as the first thing in the rail. */
-.rail > .tally { margin: 0 0 .9rem; }
+/* Last in the column, under the tree and the comments, so the size of the
+   whole change is the thing a reader scrolls past rather than through. */
+.rail > .tally { margin: .9rem 0 0; }
 
 /* ---------- scope: what is under review ---------- */
 
@@ -211,8 +213,24 @@ ul.reviews .roots {
 }
 
 /* The heading and the controls that act on what it counts. */
-.scopehead { display: grid; gap: .4rem; margin-bottom: .5rem; }
-.scopetools { display: flex; gap: .35rem; align-items: center; }
+/* The heading, the control that hides all of it, and the tools that act on it.
+   Hide sits beside the count rather than above the diff: a control that closes
+   the drawer belongs to the drawer, and its way back lives in the app bar,
+   which is the one part of the page the drawer cannot take with it. */
+.scopehead {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  gap: .4rem .5rem; align-items: center; margin-bottom: .5rem;
+}
+/* An icon on its own needs the tap target the words used to give it. Square,
+   so it reads as one control rather than a button that lost its label. */
+.scopehead .hidefiles {
+  justify-self: end;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: var(--tap); height: var(--tap); padding: 0;
+  color: var(--muted);
+}
+.scopehead .hidefiles:hover { color: var(--accent); border-color: var(--accent); }
+.scopetools { grid-column: 1 / -1; display: flex; gap: .35rem; align-items: center; }
 
 /* type=search, so the browser draws its own clear button and Escape behaves
    the way it does in every other search field. */
@@ -249,21 +267,19 @@ ul.reviews .roots {
 }
 .scope ul { list-style: none; margin: 0; padding: 0; display: grid; gap: .1rem; }
 .scope .branch + .branch { margin-top: .8rem; }
+/* One line. It was two, because the path wrapped below the name, and the
+   second row bought nothing the name did not already say. */
 .scope a.root {
-  display: flex; align-items: center; gap: .4rem .5rem; flex-wrap: wrap;
-  padding: .45rem .6rem; min-height: var(--tap);
+  display: flex; align-items: center; gap: .5rem; flex-wrap: nowrap;
+  padding: .3rem .5rem; min-height: 2rem;
   background: var(--surface); border: 1px solid var(--rule);
   border-left: 3px solid var(--rule-strong);
-  border-radius: var(--radius); text-decoration: none; color: inherit;
+  border-radius: 8px; text-decoration: none; color: inherit;
   margin-bottom: .3rem;
 }
 .scope a.root.ok { border-left-color: var(--add-ink); }
 .scope .vcs { flex: 0 0 auto; color: var(--muted); }
 .scope a.root.ok .vcs { color: var(--add-ink); }
-.scope .path {
-  font-family: var(--mono); font-size: .72rem; color: var(--muted);
-  overflow-wrap: anywhere; flex: 1 1 100%;
-}
 .scope .name {
   font-family: var(--mono); font-weight: 600; font-size: .82rem;
   min-width: 0; overflow-wrap: anywhere;
@@ -353,16 +369,12 @@ ul.reviews .roots {
   .scope { max-height: 34vh; overflow-y: auto; }
 
   /* Not capped and not scrolled: the disclosure already bounds the list, and a
-     cut-off entry under a heading reads as damage rather than as more below. */
-  .commentindex a { min-height: 2.75rem; }
+     cut-off entry under a heading reads as damage rather than as more below.
+     The disclosure itself is a target too, and a thumb finds it the same way
+     it finds the entries below. */
+  .commentindex a,
+  .commentindex > summary { min-height: 2.75rem; }
 
-  /* The app bar is already showing this exact string, two lines above, and it
-     stays there while you scroll. Kept for the document outline and for a
-     screen reader, which is what an h1 is for. */
-  main.review > .rail > .page-title {
-    position: absolute; width: 1px; height: 1px; overflow: hidden;
-    clip-path: inset(50%); white-space: nowrap;
-  }
 }
 
 .hint {
@@ -387,13 +399,32 @@ ul.reviews .roots {
  * 13,000 and 33,600 pixels down a page 34,000 tall. A comment on the change as
  * a whole had no file to be counted against and appeared nowhere at all.
  */
-.commentindex { margin: 0 0 .9rem; }
-.commentindex h2 {
-  font-size: .74rem; text-transform: uppercase; letter-spacing: .07em;
-  color: var(--muted); margin: 0 0 .4rem;
-  display: flex; align-items: center; gap: .4rem; flex-wrap: wrap;
+/* The app bar shows this exact string and keeps showing it while you scroll,
+   so the rail repeating it spends 93 pixels restating its own header. Kept in
+   the document for the outline and for a screen reader, which is what an h1 is
+   for, and hidden at every width rather than only on a phone: the rule used to
+   live inside a max-width query, which hid it where the app bar was the only
+   copy and showed it where there were two. */
+main.review > .rail > .page-title {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap;
 }
-.commentindex h2 .badge { text-transform: none; letter-spacing: 0; }
+
+/* Below the tree now, which is what makes it a disclosure: open when a thread
+   is waiting on the reader, closed when the list is reference. */
+.commentindex { margin: .9rem 0 0; }
+.commentindex > summary {
+  font-size: .74rem; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--muted); cursor: pointer; list-style: none;
+  display: flex; align-items: center; gap: .4rem; flex-wrap: wrap;
+  min-height: 2.25rem;
+}
+.commentindex > summary::-webkit-details-marker { display: none; }
+.commentindex > summary::before { content: "\\25b8"; font-size: .65rem; }
+.commentindex[open] > summary::before { content: "\\25be"; }
+.commentindex > summary:hover { color: var(--accent); }
+.commentindex > summary .badge { text-transform: none; letter-spacing: 0; }
+.commentindex[open] > summary { margin-bottom: .4rem; }
 .commentindex ul { list-style: none; margin: 0; padding: 0; display: grid; gap: .25rem; }
 .commentindex a {
   display: grid; gap: 0; align-content: center;
@@ -651,8 +682,13 @@ a.addnote.extend { color: var(--accent); opacity: 1; }
    diff rather than beside it, so the row shows at every width. The two choices
    that only mean something on a wide screen, side-by-side and wrapping, are
    hidden below the breakpoint, where both are ignored anyway. */
-.viewtoggle { display: flex; justify-content: flex-end; gap: .4rem; margin-bottom: .6rem; }
-.viewtoggle .viewmode { display: none; }
+/* The diff controls, in the bar rather than above the first file.
+ *
+ * The view switch stays hidden until the screen is wide enough for two
+ * columns, because below that width the stylesheet stacks every row into
+ * unified and the switch would offer a choice the layout has already made. */
+header.top .barcontrols { display: flex; align-items: center; gap: .4rem; flex: 0 0 auto; }
+header.top .barcontrols .viewmode { display: none; }
 
 /* Closed: the diff takes the whole width and the tree is gone rather than
    emptied, so nothing keeps a column it is not using. */
@@ -742,6 +778,36 @@ tr.threadrow td { padding: 0; background: var(--surface-2); white-space: normal;
 .thread details.reply > summary:hover { border-color: var(--accent); }
 .thread details.reply > summary::-webkit-details-marker { display: none; }
 .thread details.reply[open] > summary { margin-bottom: .5rem; }
+
+/* Edit and delete, on a comment nobody has read yet.
+ *
+ * Quiet next to Reply on purpose. Reply is what a thread is usually for, and
+ * fixing your own typo is not the reason anyone opened this page. It sits on
+ * the header line beside the "not sent" badge, so the control and the state it
+ * depends on are read together. */
+.thread details.msgmenu { display: inline; }
+.thread details.msgmenu > summary {
+  display: inline; font-size: .7rem; color: var(--muted);
+  cursor: pointer; list-style: none;
+}
+.thread details.msgmenu > summary:hover { color: var(--accent); }
+.thread details.msgmenu > summary::-webkit-details-marker { display: none; }
+.thread details.msgmenu[open] > summary { color: var(--accent); }
+.thread details.msgmenu form { margin-top: .5rem; }
+
+/* The editor replaces the comment rather than sitting above it. Both drawn at
+   once put the same sentence on screen twice, once editable and once not, and
+   the reader has to work out which one is the comment. A following sibling
+   rather than :has, because the body already sits after the menu. */
+.thread details.msgmenu[open] ~ .body { display: none; }
+.thread details.msgmenu .deleteform { margin-top: .35rem; }
+
+/* Destructive, and not the reason the menu was opened. Bordered rather than
+   filled, so it never competes with Save for the first glance. */
+button.danger {
+  border-color: var(--del-ink); color: var(--del-ink); background: var(--surface);
+}
+button.danger:hover { background: var(--del-bg); }
 
 /* ---------- controls ---------- */
 
@@ -892,7 +958,7 @@ header.top .keeping-up .dismiss:focus-visible { outline: 2px solid currentColor;
 @media (min-width: 1024px) {
   main { padding: 1.25rem 1.5rem; }
 
-  .viewtoggle .viewmode { display: inline-flex; }
+  header.top .barcontrols .viewmode { display: inline-flex; }
 
   /* Split needs a diff column wide enough to carry two readable halves, and
      what decides that is the diff column, not the window. Measured at 1024px

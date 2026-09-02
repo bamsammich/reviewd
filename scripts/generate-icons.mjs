@@ -17,7 +17,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 const require_ = createRequire(import.meta.url)
 
 /** Every icon the web UI renders. Adding one here is the whole change. */
-const ICONS = ['git-branch', 'folder', 'chat-teardrop-dots', 'arrow-line-down']
+const ICONS = ['git-branch', 'folder', 'chat-teardrop-dots', 'arrow-line-down', 'sidebar-simple']
 
 const entries = ICONS.map((name) => {
   const path = require_.resolve(`@phosphor-icons/core/regular/${name}.svg`)
@@ -27,7 +27,13 @@ const entries = ICONS.map((name) => {
     throw new Error(`generate-icons: ${name}.svg is not an svg element`)
   }
 
-  return `  '${name}':\n    '${svg.replace(/'/g, "\\'")}',`
+  // Quoted only where a key needs it, which is how prettier leaves them. The
+  // generator emitted every key quoted, so `npm run icons` produced a file
+  // that failed `format:check` and someone had to reformat a file the header
+  // tells them not to edit.
+  const key = /^[$_\p{ID_Start}][$\p{ID_Continue}]*$/u.test(name) ? name : `'${name}'`
+
+  return `  ${key}:\n    '${svg.replace(/'/g, "\\'")}',`
 }).join('\n')
 
 // Read off disk rather than required. The package's exports map does not offer
