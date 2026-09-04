@@ -184,6 +184,27 @@ check "commit from inside the repository" deny "git commit -m x" "$A"
 PUSH=$(printf 'push')
 
 check "a push is watched" deny "git $PUSH" "$A"
+
+# `npm version patch` records its commit inside npm's own process, so the text
+# this hook reads carries no git command at all. Found while cutting 0.1.3 by
+# running the release command the README documents.
+check "a version bump is watched" deny "npm version patch" "$A"
+check "a version bump by minor is watched" deny "npm version minor" "$A"
+check "an explicit version is watched" deny "npm version 1.2.3" "$A"
+check "pnpm bumps too" deny "pnpm version patch" "$A"
+check "yarn bumps too" deny "yarn version major" "$A"
+check "a bump behind a wrapper is watched" deny "sh -c 'cd $A && npm version patch'" "$outside"
+
+# Reading rather than writing. Neither of these records a commit, and denying
+# one would refuse something for a thing it does not do.
+check "bare npm version only prints" allow "npm version" "$A"
+check "npm version --json only prints" allow "npm version --json" "$A"
+check "a bump told not to commit is left alone" \
+  allow "npm version patch --no-git-tag-version" "$A"
+
+# Nothing to do with versions.
+check "npm install is not a commit" allow "npm install" "$A"
+check "npm run version-check is not a bump" allow "npm run version-check" "$A"
 check "a push with a remote and a branch is watched" deny "git $PUSH origin main" "$A"
 check "a push named with -C is watched" deny "git -C $A $PUSH" "$work/beta"
 
