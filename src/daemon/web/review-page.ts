@@ -699,6 +699,16 @@ function sourceBranch(group: SourceGroup, threads: Thread[], diffs: Diffs): Safe
       ${tracked ? GIT_ICON : FOLDER_ICON}
       <span class="visually-hidden">${tracked ? 'git repository' : 'directory'}</span>
       <span class="name">${name}</span>
+      ${
+        group.source.gates
+          ? raw('')
+          : // A source inside a repository without being its root. Approving it
+            // cannot clear that repository's gate, and the person who needs to
+            // know is whoever is about to approve expecting a commit to follow.
+            html`<span class="badge nogate" title="The commit gate asks about the repository root, and this review covers part of it, so approving cannot clear a commit here"
+              >no gate</span
+            >`
+      }
       ${group.source.approved ? html`<span class="badge approved">approved</span>` : raw('')}
       <span class="visually-hidden">at ${displayPath(group.source.rootPath)}</span>
     </a>

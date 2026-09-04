@@ -84,6 +84,9 @@ export async function createReview(
           root_path: source.path,
           // A source with no base ref is a plain file set rather than a repo.
           vcs: (source.base === undefined ? 'none' : 'git') as 'git' | 'none',
+          // Absent means yes, which is what every row written before the
+          // client sent this was.
+          can_gate: source.gates === false ? 0 : 1,
           base_ref: source.base ?? null,
           ordinal: index,
         })),
@@ -159,6 +162,7 @@ export async function summarize({ db, config }: Deps, reviewId: string): Promise
     label: source.label,
     rootPath: source.root_path,
     vcs: source.vcs,
+    gates: source.can_gate !== 0,
     baseRef: source.base_ref,
     approved: approved.has(source.id),
   }))

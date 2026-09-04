@@ -181,6 +181,11 @@ ul.reviews .roots {
   color: var(--muted); white-space: nowrap;
 }
 .badge.you { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+/* A source approving cannot unlock. Quiet rather than alarming: nothing is
+   wrong, the review simply covers part of a repository and the gate asks about
+   the whole of one. */
+.branch .badge.nogate { color: var(--muted); border-color: var(--rule); }
+
 .badge.approved { border-color: var(--add-ink); color: var(--add-ink); }
 .badge.draft { border-color: var(--warn-ink); color: var(--warn-ink); }
 

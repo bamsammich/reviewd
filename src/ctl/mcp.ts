@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { Client } from './client.js'
 import { loadClientConfig } from './config.js'
 import { DEFAULT_LIMITS } from './diff.js'
-import { canonical } from './git.js'
+import { canonical, repoRoot } from './git.js'
 import { pushSnapshot } from './push.js'
 
 /**
@@ -99,15 +99,31 @@ export function createMcpServer(client = new Client(loadClientConfig().base_url)
     },
     async ({ title, summary, sources, notify }) => {
       try {
+        // Decided here because the daemon never runs git. A directory inside
+        // a repository that is not its root cannot clear that repository's
+        // gate: the hook resolves the root and asks about it, and an approval
+        // keyed to a path underneath never matches.
+        const scoped = await Promise.all(
+          sources.map(async (s) => {
+            const path = canonical(s.path)
+            const root = await repoRoot(path)
+
+            return {
+              spec: {
+                path,
+                ...(s.base === undefined ? {} : { base: s.base }),
+                ...(s.label === undefined ? {} : { label: s.label }),
+                ...(root !== null && canonical(root) !== path ? { gates: false } : {}),
+              },
+              insideRepo: root !== null && canonical(root) !== path,
+              root,
+            }
+          }),
+        )
+
         const review = await client.createReview({
           title,
-          sources: sources.map((s) => ({
-            // Canonical, so the path stored here is the one the commit hook
-            // will compute when it asks the gate about this repository.
-            path: canonical(s.path),
-            ...(s.base === undefined ? {} : { base: s.base }),
-            ...(s.label === undefined ? {} : { label: s.label }),
-          })),
+          sources: scoped.map((one) => one.spec),
           createdBy: 'agent',
           notify: notify ?? false,
         })
@@ -122,6 +138,12 @@ export function createMcpServer(client = new Client(loadClientConfig().base_url)
           })),
           DEFAULT_LIMITS,
         )
+
+        // Said in the result rather than left to be discovered. A review of
+        // part of a repository is worth having to talk about that part, and
+        // the person who needs to know it cannot gate is whoever is about to
+        // approve it expecting a commit to follow.
+        const ungated = scoped.filter((one) => one.insideRepo)
 
         // After the snapshot, so the note lands on a review that has something
         // to read. A thread with no path is the review-level comment the page
@@ -142,6 +164,17 @@ export function createMcpServer(client = new Client(loadClientConfig().base_url)
           url: review.url,
           fileCount: snapshot.fileCount,
           sources: review.sources.map((s) => ({ id: s.id, label: s.label, root: s.rootPath })),
+          ...(ungated.length === 0
+            ? {}
+            : {
+                cannotGate: ungated.map((one) => one.spec.path),
+                note:
+                  'This review covers part of a repository rather than a repository, so ' +
+                  "approving it cannot clear that repository's commit gate: the gate asks " +
+                  'about the root and the approval is recorded against the path below it. ' +
+                  'Good for talking about the change. Open a review of the repository root ' +
+                  'when a commit has to follow.',
+              }),
         })
       } catch (error) {
         return fail(error)

@@ -48,6 +48,23 @@ export const sourceSpec = z.object({
   /** HEAD, a branch, a sha, or omitted for a plain file set. */
   base: z.string().min(1).optional(),
   label: z.string().min(1).optional(),
+  /**
+   * Whether approving this source can ever clear the commit gate on it.
+   *
+   * False for a directory that sits inside a repository without being its
+   * root. The gate resolves the repository a command acts on, so it asks about
+   * the root, and an approval recorded against a path below the root never
+   * matches it. Such a review is worth having to talk about part of a
+   * repository, and worth saying so about, because a reviewer who approves one
+   * expecting a commit to follow waits forever.
+   *
+   * The client decides it, because the daemon never runs git and cannot tell a
+   * subdirectory of a repository from a directory that is not in one.
+   *
+   * Optional, so a client too old to send it leaves the review reading the way
+   * it always did.
+   */
+  gates: z.boolean().optional(),
 })
 export type SourceSpec = z.infer<typeof sourceSpec>
 
@@ -66,6 +83,16 @@ export const sourceSummary = z.object({
   vcs,
   baseRef: z.string().nullable(),
   approved: z.boolean(),
+  /**
+   * False where approving cannot clear a gate. See `sourceSpec.gates`.
+   *
+   * Defaulted rather than required, because a client reads this from whichever
+   * daemon it is pointed at and a daemon older than the field sends nothing.
+   * Required, the first release carrying it could not talk to a daemon that
+   * had not been upgraded yet, which is a container restart behind on every
+   * machine that runs one.
+   */
+  gates: z.boolean().default(true),
 })
 export type SourceSummary = z.infer<typeof sourceSummary>
 
