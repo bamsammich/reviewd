@@ -1425,6 +1425,7 @@ describe('commenting on the change as a whole', () => {
 describe('the commits of a push', () => {
   const commit = (sha: string, subject: string, files = 2, approved = false): CommitView => ({
     id: `id-${sha}`,
+    sourceId: SOURCE,
     sha,
     subject,
     author: 'test',
@@ -1658,6 +1659,7 @@ describe('the configured font scale', () => {
 describe('a verdict scoped to the reading on screen', () => {
   const commit = (sha: string, subject: string, approved = false): CommitView => ({
     id: `id-${sha}`,
+    sourceId: SOURCE,
     sha,
     subject,
     author: 'test',
@@ -1748,6 +1750,7 @@ describe('a verdict scoped to the reading on screen', () => {
 describe('coverage in the commit rail', () => {
   const commit = (sha: string, subject: string, approved = false): CommitView => ({
     id: `id-${sha}`,
+    sourceId: SOURCE,
     sha,
     subject,
     author: 'test',
@@ -1806,6 +1809,7 @@ describe('coverage in the commit rail', () => {
 describe('the jump strip', () => {
   const commit = (sha: string, subject: string): CommitView => ({
     id: `id-${sha}`,
+    sourceId: SOURCE,
     sha,
     subject,
     author: 'test',
@@ -1858,6 +1862,7 @@ describe('the jump strip', () => {
 describe('orientation, trimmed', () => {
   const commit = (sha: string, subject: string): CommitView => ({
     id: `id-${sha}`,
+    sourceId: SOURCE,
     sha,
     subject,
     author: 'test',
@@ -1891,5 +1896,101 @@ describe('orientation, trimmed', () => {
 
     expect(markup).not.toContain('<p class="note">')
     expect(markup).toContain('title="A comment left here is about the line as this commit left it')
+  })
+})
+
+/**
+ * A review spanning two repositories, in the commit list.
+ *
+ * Every commit was listed in one undivided run with nothing saying where each
+ * came from, while the file tree in the same rail grouped by repository
+ * correctly. Ordering was never wrong: `createSnapshot` numbers commits across
+ * the whole manifest and `pushSnapshot` appends each source in turn, so the
+ * runs arrive contiguous and in source order.
+ */
+describe('commits from more than one repository', () => {
+  const OTHER = 'src-2'
+
+  const commit = (sha: string, subject: string, sourceId = SOURCE): CommitView => ({
+    id: `id-${sha}`,
+    sourceId,
+    sha,
+    subject,
+    author: 'test',
+    committedAt: 1_700_000_000_000,
+    files: 1,
+    approved: false,
+  })
+
+  const twoPlaces = () => ({
+    ...summary(),
+    sources: [
+      { ...summary().sources[0]!, id: SOURCE, label: 'api', rootPath: '/tmp/api' },
+      { ...summary().sources[0]!, id: OTHER, label: 'web', rootPath: '/tmp/web' },
+    ],
+  })
+
+  const SPREAD = [
+    commit('aaaaaaa1111', 'first in api'),
+    commit('bbbbbbb2222', 'second in api'),
+    commit('ccccccc3333', 'first in web', OTHER),
+  ]
+
+  const page = (review: ReviewSummary, commits: CommitView[], selected?: CommitView) =>
+    reviewPage(review, [file('src/a.ts')], [], undefined, 'split', new Set(), 'open', {
+      commits,
+      listOpen: true,
+      ...(selected === undefined ? {} : { selected }),
+    }).value
+
+  it('names each repository above its own run', () => {
+    const markup = page(twoPlaces(), SPREAD)
+
+    expect(markup).toContain('<li class="place">api</li>')
+    expect(markup).toContain('<li class="place">web</li>')
+  })
+
+  it('counts the places in the summary', () => {
+    expect(page(twoPlaces(), SPREAD)).toContain('3 commits in 2 places')
+  })
+
+  /**
+   * Nearly every review covers one root, and naming the only place there is
+   * says nothing a reader did not already know.
+   */
+  it('says nothing about places when every commit came from one', () => {
+    const markup = page(summary(), [SPREAD[0]!, SPREAD[1]!])
+
+    expect(markup).not.toContain('class="place"')
+    expect(markup).toContain('2 commits')
+    expect(markup).not.toContain('in 1 place')
+  })
+
+  // "Commit 3 of 3" for the first of one is a number describing nothing.
+  it('counts a commit inside its own repository, and names it', () => {
+    const markup = page(twoPlaces(), SPREAD, SPREAD[2])
+
+    // The word "commit" sits on the line above in the template, so the match
+    // starts at the number.
+    expect(markup).toContain('1 of 1 in web')
+    expect(markup).not.toContain('3 of 3')
+  })
+
+  it('leaves the count alone on a review of one repository', () => {
+    const markup = page(summary(), [SPREAD[0]!, SPREAD[1]!], SPREAD[1])
+
+    expect(markup).toContain('2 of 2')
+    expect(markup).not.toContain('2 of 2 in')
+  })
+
+  /**
+   * A source the review no longer lists is still a source the commits came
+   * from, and dropping the run would hide them entirely.
+   */
+  it('still lists commits whose source the review does not name', () => {
+    const markup = page(summary(), SPREAD)
+
+    expect(markup).toContain('first in web')
+    expect(markup).toContain('<li class="place">elsewhere</li>')
   })
 })

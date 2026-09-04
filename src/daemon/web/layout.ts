@@ -491,6 +491,16 @@ main.review > .rail > .page-title {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .commits .crow.on .subj { font-weight: 500; }
+/* Which repository the run under it came from, drawn only where a review has
+   commits from more than one. Named like the file tree's own source headings,
+   because it answers the same question a few rows further down. */
+.commits .place {
+  font-size: .68rem; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--muted); padding: .45rem .3rem .15rem;
+  border-top: 1px solid var(--rule); margin-top: .25rem;
+}
+.commits ul > .place:first-of-type { border-top: 0; margin-top: 0; }
+
 /* A column that is always there, holding a tick or holding nothing, so the
    shas beside it stay in one line however much of the change is covered. */
 .commits .crow .tick {
