@@ -289,7 +289,7 @@ export function reviewPage(
       </div>
 
       <div class="files">
-        ${whatThisIs(scope)} ${readingCommit(review, scope)}
+        ${navStrip(scope, grouped)} ${whatThisIs(scope)} ${readingCommit(review, scope)}
         ${
           files.length === 0
             ? html`<p class="emptystate">This revision changed nothing.</p>`
@@ -353,7 +353,7 @@ function commitList(review: ReviewSummary, scope: CommitScope): SafeHtml {
   const open = scope.listOpen === true || selected !== undefined
   const covered = commits.filter((commit) => commit.approved).length
 
-  return html`<details class="commits" ${open ? raw('open') : raw('')}>
+  return html`<details class="commits" id="commitnav" ${open ? raw('open') : raw('')}>
     <summary>
       <span class="what">${count} commit${count === 1 ? '' : 's'}</span>
       ${
@@ -455,6 +455,38 @@ function shortSha(sha: string): string {
 }
 
 /**
+ * A line of counts that stays under the app bar, each one a jump to its list.
+ *
+ * On a phone the rail stacks above the diff, and a reviewer opening a review
+ * met a commit list and a file tree and no code at all: the first row of diff
+ * sat 119px past what the screen could show. Moving the rail under the diff is
+ * what puts code on the first screen, and this is what keeps navigation within
+ * reach once it is down there, since a page can run to 34,000px and nobody is
+ * scrolling to the foot of one to change commits.
+ *
+ * Anchors rather than a control, so it costs no script and no state. Drawn
+ * only where the rail moves, which is the same breakpoint the stylesheet
+ * already uses to stop laying the page out in two columns.
+ */
+function navStrip(scope: CommitScope, groups: SourceGroup[]): SafeHtml {
+  const files = groups.reduce((total, group) => total + group.files.length, 0)
+  const commits = scope.commits.length
+
+  // Nothing to jump to, so nothing to draw.
+  if (files === 0 && commits === 0) return raw('')
+
+  return html`<nav class="navstrip" aria-label="Jump to navigation">
+    ${
+      commits === 0
+        ? raw('')
+        : html`<a href="#commitnav">${commits} commit${commits === 1 ? '' : 's'}</a>`
+    }
+    ${commits === 0 || files === 0 ? raw('') : html`<span class="sep" aria-hidden="true">·</span>`}
+    ${files === 0 ? raw('') : html`<a href="#filenav">${files} file${files === 1 ? '' : 's'}</a>`}
+  </nav>`
+}
+
+/**
  * What this revision is a reading of, said once at the top.
  *
  * A revision carrying commits was built from commits, which is a different
@@ -477,10 +509,10 @@ function whatThisIs(scope: CommitScope): SafeHtml {
 
   const count = scope.commits.length
 
-  return html`<p class="reading">
-    ${count} commit${count === 1 ? '' : 's'}, which is what this push would carry. Anything
-    uncommitted is not part of it.
-  </p>`
+  // Trimmed to the part a reader could not work out for themselves. The
+  // sentence it replaced said the same thing three ways and sat above the diff
+  // on every revision, where on a phone it cost two lines of the first screen.
+  return html`<p class="reading">${count} commit${count === 1 ? '' : 's'}, no working tree.</p>`
 }
 
 /**
@@ -508,10 +540,18 @@ function readingCommit(review: ReviewSummary, scope: CommitScope): SafeHtml {
         ${position} of ${scope.commits.length}
       </span>
     </div>
-    <p class="note">
-      A comment here is about the line as this commit left it, and stays on this commit.
-    </p>
-    <a class="btn quiet" href="/r/${review.reviewId}">Back to the whole change</a>
+    <!--
+      The sentence that stood here explained where a comment written on this
+      page lands. It said so on every commit header for the life of the tool,
+      and a reader learns it the first time they leave one. The title carries
+      it now, for anybody who wonders.
+    -->
+    <a
+      class="btn quiet"
+      href="/r/${review.reviewId}"
+      title="A comment left here is about the line as this commit left it, and stays on this commit"
+      >Back to the whole change</a
+    >
   </div>`
 }
 
@@ -540,7 +580,7 @@ function scopeList(groups: SourceGroup[], threads: Thread[], diffs: Diffs): Safe
 
   const files = groups.reduce((total, group) => total + group.files.length, 0)
 
-  return html`<nav class="scope" aria-labelledby="scope-heading" data-sources="${groups.length}">
+  return html`<nav class="scope" id="filenav" aria-labelledby="scope-heading" data-sources="${groups.length}">
     <div class="scopehead">
       <h2 id="scope-heading">
         ${files} file${files === 1 ? '' : 's'} in

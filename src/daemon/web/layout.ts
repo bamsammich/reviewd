@@ -359,6 +359,37 @@ ul.reviews .roots {
    Measured on a 760px viewport before this: the title, the source card, the
    tree and the hint filled the screen and the submit bar cut the hint off
    mid-sentence. A reviewer opening a review on a phone saw no code at all. */
+/* A line of counts that stays put while the diff scrolls under it.
+   Drawn only where the rail moves under the diff; above that breakpoint the
+   rail is beside the code and nothing needs jumping to. */
+.navstrip { display: none; }
+
+@media (max-width: 1023px) {
+  /* The rail stacks above the diff by default, which put a commit list, a file
+     tree and a hint on the first screen of a phone and no code at all: the
+     first row of diff measured 818px down a 699px screen. Order puts the code
+     first and the navigation after it, and the strip keeps that navigation one
+     tap away rather than one long scroll. */
+  main.review {
+    display: flex; flex-direction: column;
+  }
+  main.review > .files { order: 1; }
+  main.review > .rail {
+    order: 2; margin-top: 1rem; padding-top: .75rem; border-top: 1px solid var(--rule);
+  }
+
+  .navstrip {
+    position: sticky; top: var(--top-bar); z-index: 5;
+    display: flex; align-items: center; gap: .55rem;
+    margin: 0 0 .6rem; padding: .5rem .7rem;
+    background: var(--surface); border-bottom: 1px solid var(--rule);
+    font-size: .8rem; min-height: var(--tap);
+  }
+  .navstrip a { color: var(--accent); text-decoration: none; }
+  .navstrip a:hover { text-decoration: underline; }
+  .navstrip .sep { color: var(--muted); }
+}
+
 @media (max-width: 1023px) {
   .scope { max-height: 34vh; overflow-y: auto; }
 

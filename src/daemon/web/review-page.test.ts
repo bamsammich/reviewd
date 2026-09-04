@@ -1460,8 +1460,11 @@ describe('the commits of a push', () => {
   // Closed while the whole change is showing: a reader who has not asked for
   // the list wants the filenames, which is what the column is for.
   it('stays shut until a commit is being read, or the reader opens it', () => {
-    expect(withCommits()).toContain('<details class="commits" >')
-    expect(withCommits(COMMITS[1])).toContain('<details class="commits" open>')
+    // Matched on the open state alone. Asserting the whole opening tag made
+    // the test fail the moment the element gained an id for the phone's jump
+    // strip to point at, which is not what the test is about.
+    expect(withCommits()).toContain('<details class="commits" id="commitnav" >')
+    expect(withCommits(COMMITS[1])).toContain('<details class="commits" id="commitnav" open>')
   })
 
   /**
@@ -1489,7 +1492,7 @@ describe('the commits of a push', () => {
       { commits: COMMITS, listOpen: true },
     ).value
 
-    expect(withPreference).toContain('<details class="commits" open>')
+    expect(withPreference).toContain('<details class="commits" id="commitnav" open>')
   })
 
   it('remembers the toggle rather than deriving it', () => {
@@ -1788,5 +1791,105 @@ describe('coverage in the commit rail', () => {
     const all = TWO.map((one) => ({ ...one, approved: true }))
 
     expect(rail(all).match(/class="tick yes"/g)).toHaveLength(3)
+  })
+})
+
+/**
+ * The strip of counts that keeps navigation reachable on a phone.
+ *
+ * The rail stacks above the diff on a narrow screen, which put a commit list,
+ * a file tree and a hint on the first screen and no code at all: the first row
+ * of diff measured 818px down a 699px screen. The stylesheet moves the rail
+ * under the diff, and this is what stops that stranding navigation at the foot
+ * of a page that can run to 34,000px.
+ */
+describe('the jump strip', () => {
+  const commit = (sha: string, subject: string): CommitView => ({
+    id: `id-${sha}`,
+    sha,
+    subject,
+    author: 'test',
+    committedAt: 1_700_000_000_000,
+    files: 2,
+    approved: false,
+  })
+
+  const page = (commits: CommitView[], files = [file('src/a.ts')]) =>
+    reviewPage(summary(), files, [], undefined, 'split', new Set(), 'open', { commits }).value
+
+  const TWO = [commit('aaaaaaa1111', 'first'), commit('bbbbbbb2222', 'second')]
+
+  it('counts both lists', () => {
+    const markup = page(TWO)
+
+    expect(markup).toContain('2 commits')
+    expect(markup).toContain('1 file')
+  })
+
+  // Anchors rather than a control, so the strip costs no script and no state.
+  it('points at the lists it counts', () => {
+    const markup = page(TWO)
+
+    expect(markup).toContain('href="#commitnav"')
+    expect(markup).toContain('href="#filenav"')
+    expect(markup).toContain('id="commitnav"')
+    expect(markup).toContain('id="filenav"')
+  })
+
+  it('says nothing about commits when a revision carries none', () => {
+    const markup = page([])
+
+    expect(markup).toContain('class="navstrip"')
+    expect(markup).not.toContain('href="#commitnav"')
+    expect(markup).toContain('href="#filenav"')
+  })
+
+  it('draws nothing at all when there is nothing to jump to', () => {
+    expect(page([], []).includes('class="navstrip"')).toBe(false)
+  })
+})
+
+/**
+ * What the page says about itself, after the trim.
+ *
+ * Both lines sit above the diff, so on a phone they are paid for out of the
+ * first screen. Each keeps the part a reader could not work out alone.
+ */
+describe('orientation, trimmed', () => {
+  const commit = (sha: string, subject: string): CommitView => ({
+    id: `id-${sha}`,
+    sha,
+    subject,
+    author: 'test',
+    committedAt: 1_700_000_000_000,
+    files: 2,
+    approved: false,
+  })
+
+  const TWO = [commit('aaaaaaa1111', 'first'), commit('bbbbbbb2222', 'second')]
+
+  const page = (selected?: CommitView) =>
+    reviewPage(summary(), [file('src/a.ts')], [], undefined, 'split', new Set(), 'open', {
+      commits: TWO,
+      ...(selected === undefined ? {} : { selected }),
+    }).value
+
+  it('says a push holds commits and no working tree, in five words', () => {
+    const markup = page()
+
+    expect(markup).toContain('2 commits, no working tree.')
+    expect(markup).not.toContain('which is what this push would carry')
+  })
+
+  /**
+   * Where a comment lands is learned by leaving one. The sentence saying so
+   * stood on every commit header for the life of the tool; the title carries
+   * it now for anybody who wonders.
+   */
+  it('moves the note about where a comment lands onto a title', () => {
+    const markup = page(TWO[1])
+
+    expect(markup).not.toContain('<p class="note">')
+    expect(markup).toContain('title="A comment left here is about the line as this commit left it')
   })
 })
