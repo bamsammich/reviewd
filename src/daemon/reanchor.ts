@@ -89,14 +89,15 @@ export async function reanchor(
   const lineCache = new Map<string, string[] | null>()
 
   for (const thread of threads.filter(isAnchored)) {
-    const lines = await linesFor(db, snapshotId, thread, lineCache)
+    const found_ = await linesFor(db, reviewId, snapshotId, thread, lineCache)
 
-    if (!lines) {
+    if (!found_) {
       await markOutdated(db, thread.id, snapshotId, t)
       outdated += 1
       continue
     }
 
+    const { lines, sha } = found_
     const found = locate(lines, thread)
 
     if (!found) {
@@ -110,6 +111,10 @@ export async function reanchor(
 
     const range = locateEnd(lines, thread, found.line)
 
+    // The sha travels with the comment when the commit was rewritten. The page
+    // draws a thread on the commit whose sha it holds, so a comment that
+    // followed its change and kept the old sha would re-anchor correctly and
+    // then render on no commit at all.
     await db
       .updateTable('thread')
       .set({
@@ -120,6 +125,7 @@ export async function reanchor(
         state: 'active',
         last_seen_snapshot: snapshotId,
         updated_at: t,
+        ...(sha === null ? {} : { commit_sha: sha }),
       })
       .where('id', '=', thread.id)
       .execute()
@@ -204,36 +210,89 @@ export function locateEnd(
 }
 
 /**
+ * Which commit of the new revision a thread belongs to, or null for a thread
+ * about the change as a whole.
+ *
+ * The sha answers first, and stops answering the moment anybody rebases:
+ * a rewrite gives every commit it touches a new sha and leaves the change
+ * alone. Reading only the sha meant a comment left on a commit outdated on
+ * every amend, rebase and cherry-pick, which is most of what revising a stack
+ * consists of, so commenting on a commit was worth much less than it looked.
+ *
+ * `git patch-id --stable` says what a commit does rather than where it sits,
+ * and an earlier revision's rows still hold the one the comment was written
+ * against. So a sha that no longer exists is looked up by what it did, and the
+ * comment follows the change.
+ *
+ * Null when nothing in the new revision does what that commit did, which is
+ * what a squash produces and is a commit genuinely gone.
+ */
+async function commitOf(
+  db: Kysely<Database>,
+  reviewId: string,
+  snapshotId: string,
+  sha: string,
+): Promise<{ id: string; sha: string } | null> {
+  const exact = await db
+    .selectFrom('commit')
+    .select(['id', 'sha'])
+    .where('snapshot_id', '=', snapshotId)
+    .where('sha', '=', sha)
+    .executeTakeFirst()
+
+  if (exact) return exact
+
+  // What the commit did, read from whichever revision still carries it.
+  const was = await db
+    .selectFrom('commit')
+    .innerJoin('snapshot', 'snapshot.id', 'commit.snapshot_id')
+    .select('commit.patch_id as patchId')
+    .where('snapshot.review_id', '=', reviewId)
+    .where('commit.sha', '=', sha)
+    .where('commit.patch_id', 'is not', null)
+    .executeTakeFirst()
+
+  if (!was?.patchId) return null
+
+  const moved = await db
+    .selectFrom('commit')
+    .select(['id', 'sha'])
+    .where('snapshot_id', '=', snapshotId)
+    .where('patch_id', '=', was.patchId)
+    .executeTakeFirst()
+
+  return moved ?? null
+}
+
+/**
  * The lines a thread should be measured against in the new revision.
  *
  * A comment on the whole push reads the combined change set. A comment left on
- * one commit reads that commit's rows, found by sha: a commit holds the same
- * path with the blobs that commit saw, and measuring one against the other
- * would move a comment onto a state the reviewer was never shown.
+ * one commit reads that commit's rows: a commit holds the same path with the
+ * blobs that commit saw, and measuring one against the other would move a
+ * comment onto a state the reviewer was never shown.
  *
- * A commit that the new revision does not carry returns nothing, so the thread
- * outdates. That is what a rebase does to a comment: the commit it was about
- * stopped existing, and saying so is more honest than reattaching the note to
- * whichever commit now occupies that position.
+ * Nothing is forced to drift when a commit was rewritten. Drift is a claim
+ * about the code around a line, and the ordinary comparison still makes it
+ * against the moved commit's own content: a patch that survived a rebase
+ * unchanged finds its line with matching context and does not drift, and one
+ * whose surroundings changed drifts because they did.
  */
 async function linesFor(
   db: Kysely<Database>,
+  reviewId: string,
   snapshotId: string,
   thread: ThreadRow,
   cache: Map<string, string[] | null>,
-): Promise<string[] | null> {
+): Promise<{ lines: string[]; sha: string | null } | null> {
   const key = `${thread.commit_sha ?? ''}:${thread.source_id}:${thread.path}:${thread.side}`
   const cached = cache.get(key)
-  if (cached !== undefined) return cached
 
   let commitId: string | undefined
+  let sha: string | null = null
+
   if (thread.commit_sha !== null) {
-    const commit = await db
-      .selectFrom('commit')
-      .select('id')
-      .where('snapshot_id', '=', snapshotId)
-      .where('sha', '=', thread.commit_sha)
-      .executeTakeFirst()
+    const commit = await commitOf(db, reviewId, snapshotId, thread.commit_sha)
 
     if (!commit) {
       cache.set(key, null)
@@ -241,7 +300,10 @@ async function linesFor(
     }
 
     commitId = commit.id
+    sha = commit.sha === thread.commit_sha ? null : commit.sha
   }
+
+  if (cached !== undefined) return cached === null ? null : { lines: cached, sha }
 
   const change = await db
     .selectFrom('file_change')
@@ -266,7 +328,7 @@ async function linesFor(
   const lines = blob ? splitLines(Buffer.from(blob.bytes)) : null
 
   cache.set(key, lines)
-  return lines
+  return lines === null ? null : { lines, sha }
 }
 
 async function markOutdated(
