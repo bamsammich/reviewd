@@ -222,6 +222,50 @@ runs_git() {
   return 1
 }
 
+# One command that is not git and writes a commit anyway.
+#
+# `npm version patch` records its commit inside npm's own process, so no
+# reading of the command text can see it coming, and this hook reads command
+# text. Naming it here catches one wrapper and not the class: `cargo release`,
+# a Makefile target, and a script written a moment ago all still pass. It earns
+# its place because the README documents `npm version` as the way to cut a
+# release, so it is the wrapper most likely to be run against this repository.
+#
+# `reviewd observe` is what covers the class, after the fact rather than
+# before, because nothing before the fact can see a commit that has not
+# happened.
+#
+# A bump argument is required, since bare `npm version` and `npm version
+# --json` only print. `--no-git-tag-version` writes no commit either, so a
+# command carrying it is left alone rather than denied for something it will
+# not do.
+# Recursive for the same reason runs_git is: command_head strips the wrapper
+# off `sh -c 'cd /repo && npm version patch'`, leaving a command line with its
+# own operators to be read again.
+runs_version_bump() {
+  local segment head bare depth=${2:-0}
+  local IFS=$'\n'
+
+  [ "$depth" -gt 8 ] && return 1
+
+  for segment in $(segments "$1"); do
+    segment=$(trim "$segment")
+    head=$(command_head "$segment")
+    bare=$(printf '%s' "$head" | tr -d '"'"'"'')
+
+    if ! printf '%s' "$bare" |
+      grep -Eq -- '(^|[[:space:]])--no-git-tag-version([[:space:]]|$)'; then
+      printf '%s' "$bare" |
+        grep -Eq '^(npm|pnpm|yarn)([[:space:]]+-[^[:space:]]+)*[[:space:]]+version[[:space:]]+[^-][^[:space:]]*' &&
+        return 0
+    fi
+
+    [ "$head" != "$segment" ] && runs_version_bump "$head" $((depth + 1)) && return 0
+  done
+
+  return 1
+}
+
 # Every gated verb this command carries, not the first one found.
 #
 # `git commit -m x && git push` is one command and reaches this hook as one
@@ -229,6 +273,7 @@ runs_git() {
 # that gates pushes, since nothing else looks at this command again.
 verbs=''
 runs_git "$cmd" "$COMMIT_VERBS" && verbs='commit'
+runs_version_bump "$cmd" && verbs='commit'
 runs_git "$cmd" "$PUSH_VERBS" && verbs="${verbs:+$verbs,}push"
 
 [ -n "$verbs" ] || exit 0

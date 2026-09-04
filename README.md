@@ -281,6 +281,20 @@ pieces underneath it are ordinary:
   call `reviewd gate <root>` directly: exit 0 allows, 1 denies, and `--json`
   gives the reason, the review URL, and any open threads.
 
+### What the gate cannot see
+
+The gate reads the text of a command before it runs, so a commit recorded from
+inside another program is invisible to it. `npm version patch` is named in the
+hook because the release path here goes through it, but `cargo release`, a
+Makefile target, and a script written moments earlier all pass the same way.
+Nothing that runs before a command can see a commit that has not happened yet.
+
+`reviewd observe` covers that afterwards. It runs on every Bash command,
+compares what a commit recorded against what an approval cleared, and reports a
+commit that got past. It reports nothing once a review is released, because
+releasing deletes the review and observe speaks only about a repository some
+review covers. So release last, after anything else that writes commits.
+
 ## Developing on reviewd
 
 Load the plugin from a checkout without installing it:

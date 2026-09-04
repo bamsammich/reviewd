@@ -84,8 +84,13 @@ many went outdated. Then wait again.
 
 `review_release({ reviewId })` says you saw the outcome and need none of the
 data. It refuses while an approval has not been used by a commit, since
-releasing first would delete the very approval that clears it. Commit, then
-release.
+releasing first would delete the very approval that clears it.
+
+Release last, after everything that writes a commit in that repository.
+Releasing deletes the review, and `reviewd observe` reports a commit no
+approval cleared only while a review covers the repository, so a release
+command run afterwards is unwatched. Cutting 0.1.3 went exactly that way:
+approve, commit, release, `npm version patch`, and nothing said a word.
 
 ## When the gate denies a commit
 
