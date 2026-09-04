@@ -122,6 +122,8 @@ export function age(seconds: number): string {
  */
 export interface CommitView {
   id: string
+  /** Which root it came from, so a review over several can group by it. */
+  sourceId: string
   sha: string
   subject: string
   author: string
@@ -184,6 +186,7 @@ export async function loadCommits(db: Kysely<Database>, reviewId: string): Promi
 
   return commits.map((commit) => ({
     id: commit.id,
+    sourceId: commit.source_id,
     sha: commit.sha,
     subject: commit.subject,
     author: commit.author,

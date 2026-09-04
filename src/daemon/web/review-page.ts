@@ -352,10 +352,15 @@ function commitList(review: ReviewSummary, scope: CommitScope): SafeHtml {
 
   const open = scope.listOpen === true || selected !== undefined
   const covered = commits.filter((commit) => commit.approved).length
+  const runs = commitRuns(review, commits)
 
   return html`<details class="commits" id="commitnav" ${open ? raw('open') : raw('')}>
     <summary>
-      <span class="what">${count} commit${count === 1 ? '' : 's'}</span>
+      <span class="what"
+        >${count} commit${count === 1 ? '' : 's'}${
+          runs.length === 1 ? '' : ` in ${runs.length} places`
+        }</span
+      >
       ${
         selected === undefined
           ? raw('')
@@ -386,20 +391,75 @@ function commitList(review: ReviewSummary, scope: CommitScope): SafeHtml {
         },
         selected === undefined,
       )}
-      ${commits.map((commit) =>
-        commitRow(
-          {
-            label: commit.subject,
-            href: `/r/${review.reviewId}?commit=${commit.sha}`,
-            sha: shortSha(commit.sha),
-            files: commit.files,
-            approved: commit.approved,
-          },
-          commit.sha === selected?.sha,
-        ),
+      ${runs.map(
+        (run) => html`${
+          runs.length === 1
+            ? raw('')
+            : // Named the way the file tree names the same thing a few rows
+              // down. A reader who has learned that shape once should not meet
+              // a second one for the same question.
+              html`<li class="place">${run.name}</li>`
+        }
+        ${run.commits.map((commit) =>
+          commitRow(
+            {
+              label: commit.subject,
+              href: `/r/${review.reviewId}?commit=${commit.sha}`,
+              sha: shortSha(commit.sha),
+              files: commit.files,
+              approved: commit.approved,
+            },
+            commit.sha === selected?.sha,
+          ),
+        )}`,
       )}
     </ul>
   </details>`
+}
+
+/**
+ * The commits of one root, kept together and in the order they were written.
+ *
+ * A review over two repositories listed every commit in one run with nothing
+ * saying where each came from, while the file tree in the same rail grouped by
+ * repository correctly. Ordering was never the problem: `createSnapshot`
+ * numbers commits across the whole manifest and `pushSnapshot` appends each
+ * source in turn, so the runs are already contiguous and in source order. Only
+ * the labelling was missing.
+ *
+ * One run means one repository, and the heading is left off: a review of a
+ * single root is nearly every review, and naming the only place there is says
+ * nothing a reader did not know.
+ */
+interface CommitRun {
+  sourceId: string
+  name: string
+  commits: CommitView[]
+}
+
+function commitRuns(review: ReviewSummary, commits: CommitView[]): CommitRun[] {
+  const runs: CommitRun[] = []
+
+  for (const commit of commits) {
+    // Tested for existence rather than reached through `?.`: on the first
+    // commit there is no last run, and `undefined === undefined` is true, so
+    // an optional chain sent the first commit into a run that was not there.
+    const last = runs[runs.length - 1]
+    if (last !== undefined && last.sourceId === commit.sourceId) {
+      last.commits.push(commit)
+      continue
+    }
+
+    const source = review.sources.find((one) => one.id === commit.sourceId)
+
+    runs.push({
+      sourceId: commit.sourceId,
+      name: source ? source.label || basenameOf(source.rootPath) : 'elsewhere',
+      commits: [commit],
+    })
+  }
+
+  return runs
 }
 
 interface CommitRow {
@@ -530,14 +590,20 @@ function readingCommit(review: ReviewSummary, scope: CommitScope): SafeHtml {
   const commit = scope.selected
   if (commit === undefined) return raw('')
 
-  const position = scope.commits.findIndex((one) => one.sha === commit.sha) + 1
+  // Counted inside its own repository, and named. Counted across every root it
+  // called the second of two commits in one service "commit 5 of 5", which is
+  // a number describing nothing a reader can hold.
+  const runs = commitRuns(review, scope.commits)
+  const run = runs.find((one) => one.sourceId === commit.sourceId)
+  const within = run ?? { name: '', commits: scope.commits }
+  const position = within.commits.findIndex((one) => one.sha === commit.sha) + 1
 
   return html`<div class="readingcommit">
     <div class="who">
       <span class="subj">${commit.subject}</span>
       <span class="cmeta">
         ${commit.author} &middot; <span class="sha">${shortSha(commit.sha)}</span> &middot; commit
-        ${position} of ${scope.commits.length}
+        ${position} of ${within.commits.length}${runs.length === 1 ? '' : ` in ${within.name}`}
       </span>
     </div>
     <!--
