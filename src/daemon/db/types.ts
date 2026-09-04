@@ -34,6 +34,14 @@ export interface SourceTable {
   vcs: 'git' | 'none'
   base_ref: string | null
   ordinal: number
+  /**
+   * Whether approving this source can clear a commit gate on it.
+   *
+   * Null on a row written before the client sent it, which reads as yes: every
+   * such row was a repository root or a directory outside one, and neither
+   * carried this trap.
+   */
+  can_gate: number | null
 }
 
 export interface SnapshotTable {

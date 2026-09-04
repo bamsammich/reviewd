@@ -496,6 +496,27 @@ const commitApproval: Migration = {
   },
 }
 
+/**
+ * Whether approving a source can clear the commit gate on it.
+ *
+ * A review of a directory inside a repository cannot. The gate resolves the
+ * repository a command acts on and asks about its root, so an approval keyed
+ * to a path below the root never matches, and the review is silently unable to
+ * let anything through. Nothing about the gate changes here: the column exists
+ * so the page can say so before somebody approves in vain.
+ *
+ * The client decides the value, because the daemon never runs git.
+ */
+const sourceGates: Migration = {
+  async up(db: MigrationDb): Promise<void> {
+    await db.schema.alterTable('source').addColumn('can_gate', 'integer').execute()
+  },
+
+  async down(db: MigrationDb): Promise<void> {
+    await db.schema.alterTable('source').dropColumn('can_gate').execute()
+  },
+}
+
 export const migrations: Record<string, Migration> = {
   '0001_initial': initial,
   '0002_line_ranges': lineRanges,
@@ -504,6 +525,7 @@ export const migrations: Record<string, Migration> = {
   '0005_commit_scopes': commitScopes,
   '0006_commit_comments': commitComments,
   '0007_commit_approval': commitApproval,
+  '0008_source_gates': sourceGates,
 }
 
 export class CodeMigrationProvider implements MigrationProvider {
