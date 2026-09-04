@@ -369,8 +369,11 @@ describe('saying what the revision covers', () => {
     const html = await read(`/r/${review.reviewId}`)
 
     expect(html).toContain('class="reading"')
-    expect(html).toContain('2 commits, which is what this push would carry')
-    expect(html).toContain('uncommitted is not part of it')
+    expect(html).toContain('2 commits, no working tree')
+    // "No working tree" is the whole of what the sentence it replaced was for:
+    // a reader whose uncommitted work is missing from the page wants to know
+    // that it is missing on purpose.
+    expect(html).toContain('no working tree')
   })
 
   // A revision with no commits is the working tree against a base, which looks
