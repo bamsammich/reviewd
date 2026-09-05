@@ -505,8 +505,69 @@ fi
 # nothing in it.
 # An explicit template with X's, because `mktemp -t name` is a BSD spelling
 # that GNU mktemp refuses.
+# The remote a push reaches, read out of the command.
+#
+# A branch pushed to a fork used to reach upstream unreviewed. The fork held
+# those commits, the range came back empty, and this gate cleared a push nobody
+# had read. Measured on a repository with two remotes: `rev-list HEAD --not
+# --remotes` answered 0, and `rev-list HEAD --not origin/main` answered 1.
+#
+# Only a name `git remote` lists is passed on. `git push main` names a branch
+# rather than a remote, and reading one as the other excludes the refs of
+# something that does not exist, leaving every commit to be approved. Anything
+# unrecognised goes to the client, which reads the branch setting git reads.
+push_remote() {
+  local segment head token seen_push found=''
+
+  # Two loops, two splittings. Segments hold spaces and are separated by
+  # newlines; the tokens inside one are separated by spaces. Running both under
+  # one IFS reads a whole command as a single token and finds nothing.
+  local IFS=$'\n'
+  local heads=''
+
+  for segment in $(segments "$1"); do
+    head=$(command_head "$(trim "$segment")" | tr -d '"'"'"'')
+
+    printf '%s' "$head" | grep -Eq "^git([[:space:]]+-[^[:space:]]+([[:space:]]+[^-][^[:space:]]*)?)*[[:space:]]+push([[:space:]]|$)" &&
+      heads="${heads}${head}"$'\n'
+  done
+
+  [ -n "$heads" ] || return 1
+
+  for head in $heads; do
+    seen_push=0
+
+    unset IFS
+    for token in $head; do
+      if [ "$seen_push" -eq 1 ]; then
+        case $token in
+          -*) continue ;;
+        esac
+
+        git -C "$2" remote 2>/dev/null | grep -qx -- "$token" && found=$token
+        break
+      fi
+
+      [ "$token" = push ] && seen_push=1
+    done
+    IFS=$'\n'
+
+    [ -n "$found" ] && {
+      printf '%s' "$found"
+      return 0
+    }
+  done
+
+  return 1
+}
+
+remote=''
+case $verbs in
+  *push*) remote=$(push_remote "$cmd" "$root") || remote='' ;;
+esac
+
 gate_error=$(mktemp "${TMPDIR:-/tmp}/reviewd-gate-err.XXXXXX")
-answer=$("$REVIEWD" gate "$root" --json --for "$verbs" 2>"$gate_error")
+answer=$("$REVIEWD" gate "$root" --json --for "$verbs" ${remote:+--remote "$remote"} 2>"$gate_error")
 why=$(head -c 400 "$gate_error")
 rm -f "$gate_error"
 

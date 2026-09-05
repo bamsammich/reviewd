@@ -99,6 +99,21 @@ entry of its own. Under `commit`, every commit needs an approval covering the
 bytes it records. Under `push`, a commit runs free and the push is held
 instead, so a branch of five commits is one approval rather than five.
 
+A branch pushed to a fork used to reach upstream unreviewed. The fork already
+held those commits, so reviewd found nothing left to send, and upstream received
+work nobody had read.
+
+The range is now measured against the single remote a push reaches:
+
+| the command | measured against |
+| --- | --- |
+| `git push origin main` | `origin` |
+| `git push` | whatever `branch.<name>.remote` holds |
+| `git push`, unconfigured | `origin`, which is git's own default |
+
+Naming a remote reviewd holds no refs for asks for approval of every commit on
+the branch, since none of them has been published there.
+
 **`roots`** names exceptions by absolute path. Matching is exact: a repository
 nested inside a named one keeps the default rather than inheriting a setting
 nobody chose for it.

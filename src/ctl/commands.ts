@@ -191,6 +191,8 @@ export async function checkGate(
   path: string,
   json: boolean,
   verbs: GateScope[] = ['commit'],
+  /** The remote a push named, or undefined to read the branch's own setting. */
+  remote?: string | undefined,
 ): Promise<void> {
   const root = await requireRepo(path)
   if (!root) return
@@ -226,7 +228,9 @@ export async function checkGate(
     )
   }
 
-  return scope === 'push' ? gatePush(client, root, json) : gateCommit(client, root, scope, json)
+  return scope === 'push'
+    ? gatePush(client, root, json, remote)
+    : gateCommit(client, root, scope, json)
 }
 
 async function gateCommit(
@@ -296,14 +300,21 @@ async function gateCommit(
  * that already exist, so an uncommitted edit is neither reviewed nor gated,
  * which is right: it is not going anywhere.
  */
-async function gatePush(client: Client, root: string, json: boolean): Promise<void> {
-  const range = await pushRange(root)
+async function gatePush(
+  client: Client,
+  root: string,
+  json: boolean,
+  remote?: string | undefined,
+): Promise<void> {
+  const range = await pushRange(root, remote)
 
   if (range === null) {
     return report(
       {
         decision: 'allow',
-        reason: `Every commit on this branch is already on a remote, so this push carries nothing.`,
+        reason: remote
+          ? `Every commit on this branch is already on ${remote}, so this push carries nothing.`
+          : `Every commit on this branch is already on a remote, so this push carries nothing.`,
         reviewUrl: null,
         warnings: [],
         openThreads: [],
