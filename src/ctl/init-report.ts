@@ -13,7 +13,15 @@ export function renderPlan(plan: InitPlan): string {
   const where = installLocations()
   const lines: string[] = ['reviewd init will:', '']
 
-  lines.push(marketplaceLine(plan), `    checkout   ${where.marketplace}`, '')
+  lines.push(marketplaceLine(plan), `    checkout   ${where.marketplace}`)
+
+  // Named where it will change, and not where it is already on. A plan that
+  // lists what it is about to leave alone reads as longer without saying more.
+  if (!plan.marketplace.autoUpdate) {
+    lines.push('    also       turn on auto-update, so the plugin keeps up without init')
+  }
+
+  lines.push('')
 
   const version =
     plan.plugin.installed && plan.plugin.installed !== plan.plugin.version
@@ -54,6 +62,11 @@ export function renderResult(result: InitResult): string {
   const where = installLocations()
   const lines = [
     `reviewd init: marketplace ${result.marketplace}, plugin ${result.plugin}.`,
+    ...(result.autoUpdate
+      ? // Said only where it changed. Reporting it on every run would put a
+        // line about something that did not happen into every result.
+        ['Marketplace auto-update is on, so the plugin keeps up on its own.']
+      : []),
     '',
     'Touched:',
     ...result.paths.map((path) => `  ${path}`),

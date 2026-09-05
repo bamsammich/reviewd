@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { copyFile, mkdir } from 'node:fs/promises'
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -64,6 +64,14 @@ export interface InitPlan {
     action: MarketplaceAction
     /** What the marketplace points at today, when that is not the source. */
     current?: string | undefined
+    /**
+     * Whether Claude Code refreshes this marketplace on its own already.
+     *
+     * False is the state worth naming in a plan: the plugin then only catches
+     * up when somebody runs init or the MCP server notices a version
+     * mismatch, and neither happens while a session is open.
+     */
+    autoUpdate: boolean
   }
   plugin: { name: string; version: string; installed?: string | undefined }
   /** Every file init may cause Claude Code to rewrite, in the order shown. */
@@ -72,6 +80,8 @@ export interface InitPlan {
 
 export interface InitResult {
   marketplace: MarketplaceAction
+  /** True where init turned marketplace auto-update on, which it does once. */
+  autoUpdate: boolean
   /** Which of the two commands ran, since only one of them can upgrade. */
   plugin: 'installed' | 'updated'
   /** Files copied before anything ran, as `original -> backup`. */
@@ -96,6 +106,65 @@ const touchedPaths = (): string[] => {
     join(home, 'plugins', 'installed_plugins.json'),
   ]
 }
+
+/**
+ * Whether Claude Code refreshes this marketplace on its own.
+ *
+ * Claude Code keeps the answer in `known_marketplaces.json` and reads it on
+ * its own autoupdate pass. Nothing on the `claude` command line sets it, so
+ * init reads and writes the file rather than shelling out.
+ *
+ * A file that cannot be read reads as off, which is the state that makes init
+ * offer to turn it on. Offering where it is already on costs a line in a plan;
+ * failing to read costs nothing else.
+ */
+export async function marketplaceAutoUpdate(): Promise<boolean> {
+  try {
+    const raw = await readFile(marketplacesFile(), 'utf8')
+    const known = JSON.parse(raw) as Record<string, { autoUpdate?: boolean }>
+
+    return known[MARKETPLACE_NAME]?.autoUpdate === true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Turns marketplace auto-update on, leaving everything else in the file alone.
+ *
+ * Written into Claude Code's own state rather than declared in settings.json,
+ * where `extraKnownMarketplaces` would also work and would then win over the
+ * `/plugin` UI. A reviewer who later turns auto-update off in that UI should
+ * find it off, and a declaration reviewd wrote would turn it back on without
+ * saying so.
+ *
+ * The marketplace has to exist first, so this runs after the add or update
+ * that creates the entry. A missing entry means the add did not happen, and
+ * writing one here would invent state Claude Code never made.
+ */
+async function setMarketplaceAutoUpdate(): Promise<boolean> {
+  const path = marketplacesFile()
+
+  try {
+    const raw = await readFile(path, 'utf8')
+    const known = JSON.parse(raw) as Record<string, Record<string, unknown>>
+    const entry = known[MARKETPLACE_NAME]
+
+    if (entry === undefined) return false
+    if (entry['autoUpdate'] === true) return false
+
+    entry['autoUpdate'] = true
+    await writeFile(path, `${JSON.stringify(known, null, 2)}\n`)
+
+    return true
+  } catch {
+    // The plugin is registered either way, and a marketplace that does not
+    // refresh itself is the state everything worked in until now.
+    return false
+  }
+}
+
+const marketplacesFile = (): string => join(claudeHome(), 'plugins', 'known_marketplaces.json')
 
 /** Where the marketplace checkout and the installed plugin copy end up. */
 export const installLocations = (): { marketplace: string; plugin: string } => {
@@ -178,7 +247,13 @@ export async function planInit(run: Runner = runClaude, version = ownVersion()):
 
   return {
     harness,
-    marketplace: { name: MARKETPLACE_NAME, source: wanted, action, current },
+    marketplace: {
+      name: MARKETPLACE_NAME,
+      source: wanted,
+      action,
+      current,
+      autoUpdate: harness ? await marketplaceAutoUpdate() : false,
+    },
     plugin: {
       name: PLUGIN,
       version,
@@ -208,7 +283,19 @@ export async function planInit(run: Runner = runClaude, version = ownVersion()):
  */
 export async function initPlugin(
   run: Runner = runClaude,
-  options: { stamp?: string; backup?: Backup } = {},
+  options: {
+    stamp?: string
+    backup?: Backup
+    /**
+     * Turn marketplace auto-update on where it is off.
+     *
+     * Off by default, because `catchUpPlugin` calls this mid-session with
+     * nobody to ask. Auto-update is a standing preference rather than a
+     * catch-up action, so it is set only where a person read it in a plan and
+     * said yes.
+     */
+    autoUpdate?: boolean
+  } = {},
 ): Promise<InitResult> {
   const plan = await planInit(run)
   if (!plan.harness) throw new Error(noClaudeMessage())
@@ -249,7 +336,15 @@ export async function initPlugin(
     await run(['plugin', 'update', `${PLUGIN}@${MARKETPLACE_NAME}`, '--yes'])
   }
 
-  return { marketplace: plan.marketplace.action, plugin, backups, paths: plan.paths }
+  const autoUpdate = options.autoUpdate === true ? await setMarketplaceAutoUpdate() : false
+
+  return {
+    marketplace: plan.marketplace.action,
+    autoUpdate,
+    plugin,
+    backups,
+    paths: plan.paths,
+  }
 }
 
 /**

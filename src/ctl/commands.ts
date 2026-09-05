@@ -137,7 +137,10 @@ export async function initCommand(options: InitOptions = {}): Promise<void> {
       return
     }
 
-    process.stdout.write(renderResult(await initPlugin()))
+    // Auto-update is set only here, where the plan named it and somebody
+    // agreed. `catchUpPlugin` runs the same install mid-session with nobody to
+    // ask, and a standing preference is not a thing to set on their behalf.
+    process.stdout.write(renderResult(await initPlugin(undefined, { autoUpdate: true })))
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
     process.exitCode = 1
