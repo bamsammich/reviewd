@@ -129,21 +129,21 @@ describe('each command reaches its handler with what it was given', () => {
 
   it('gate defaults its path to the working directory, and asks about a commit', async () => {
     await run(['gate'])
-    expect(handlers.gate).toHaveBeenCalledWith(process.cwd(), false, ['commit'])
+    expect(handlers.gate).toHaveBeenCalledWith(process.cwd(), false, ['commit'], undefined)
   })
 
   // Defaulting to commit is what lets a hook from an older plugin keep working
   // against a newer binary.
   it('gate takes the verb the hook saw', async () => {
     await run(['gate', '/repo', '--for', 'push'])
-    expect(handlers.gate).toHaveBeenCalledWith('/repo', false, ['push'])
+    expect(handlers.gate).toHaveBeenCalledWith('/repo', false, ['push'], undefined)
   })
 
   // `git commit -m x && git push` reaches the hook as one string, so both
   // verbs have to travel or one of them goes ungated.
   it('gate takes both verbs from one command', async () => {
     await run(['gate', '/repo', '--for', 'commit,push'])
-    expect(handlers.gate).toHaveBeenCalledWith('/repo', false, ['commit', 'push'])
+    expect(handlers.gate).toHaveBeenCalledWith('/repo', false, ['commit', 'push'], undefined)
   })
 
   it('gate refuses a verb it does not gate', async () => {
@@ -154,9 +154,17 @@ describe('each command reaches its handler with what it was given', () => {
     expect(handlers.gate).not.toHaveBeenCalled()
   })
 
+  // The remote a push named, when the command named one. Without it the range
+  // is measured against the branch's own remote, which answers a bare push and
+  // gets `git push other` wrong.
+  it('gate carries the remote a push named', async () => {
+    await run(['gate', '/repo', '--for', 'push', '--remote', 'upstream'])
+    expect(handlers.gate).toHaveBeenCalledWith('/repo', false, ['push'], 'upstream')
+  })
+
   it('gate takes a path and --json', async () => {
     await run(['gate', '/repo', '--json'])
-    expect(handlers.gate).toHaveBeenCalledWith('/repo', true, ['commit'])
+    expect(handlers.gate).toHaveBeenCalledWith('/repo', true, ['commit'], undefined)
   })
 
   it('fingerprint takes a path and --json', async () => {

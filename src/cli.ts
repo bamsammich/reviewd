@@ -164,8 +164,13 @@ export function buildProgram(handlers: Handlers = realHandlers): Command {
       parseGateVerbs,
       ['commit'],
     )
-    .action(async (path: string, options: { json: boolean; for: GateScope[] }) => {
-      await handlers.gate(path, options.json, options.for)
+    // Which remote the push named, when it named one. Without it the branch's
+    // own setting is read, which answers `git push` and gets `git push other`
+    // wrong: the range would exclude what the branch's usual remote has seen
+    // rather than what the named one has.
+    .option('--remote <name>', 'The remote a push names, when the command names one')
+    .action(async (path: string, options: { json: boolean; for: GateScope[]; remote?: string }) => {
+      await handlers.gate(path, options.json, options.for, options.remote)
     })
 
   program

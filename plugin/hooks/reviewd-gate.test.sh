@@ -45,16 +45,22 @@ case $1 in
     # Read before the loop below shifts it away.
     root=$2
     verbs=''
+    remote=''
     while [ $# -gt 0 ]; do
-      case $1 in --for) verbs=$2; shift ;; esac
+      case $1 in
+        --for) verbs=$2; shift ;;
+        # Echoed back so a test can assert which remote the hook read out of
+        # the push command.
+        --remote) remote=$2; shift ;;
+      esac
       shift
     done
 
     if [ -z "$(git -C "$root" status --porcelain 2>/dev/null)" ]; then
       printf '{"decision":"allow","reason":"%s has no changes against HEAD","warnings":[]}\n' "$root"
     else
-      printf '{"decision":"deny","reason":"stubbed for %s verbs=%s","reviewUrl":"http://example/r/1"}\n' \
-        "$root" "$verbs"
+      printf '{"decision":"deny","reason":"stubbed for %s verbs=%s remote=%s","reviewUrl":"http://example/r/1"}\n' \
+        "$root" "$verbs" "${remote:-none}"
     fi
     ;;
 esac
@@ -87,6 +93,23 @@ verdict() {
   out=$(jq -nc --arg c "$command" --arg d "$cwd" '{tool_input:{command:$c},cwd:$d}' | "$HOOK")
 
   if printf '%s' "$out" | grep -q '"deny"'; then printf 'deny'; else printf 'allow'; fi
+}
+
+# Which remote the hook read out of a push command, from its denial.
+check_remote() {
+  local name=$1 want=$2 command=$3 cwd=$4 out got
+  out=$(jq -nc --arg c "$command" --arg d "$cwd" '{tool_input:{command:$c},cwd:$d}' | "$HOOK")
+  got=$(printf '%s' "$out" |
+    jq -r '.hookSpecificOutput.permissionDecisionReason // ""' |
+    sed -nE 's/.*remote=([^ "]*).*/\1/p')
+
+  if [ "$got" = "$want" ]; then
+    pass=$((pass + 1))
+    printf '  ok   %s\n' "$name"
+  else
+    fail=$((fail + 1))
+    printf '  FAIL %s\n    wanted %s, got %s\n    command: %s\n' "$name" "$want" "$got" "$command"
+  fi
 }
 
 # Which repository the gate resolved, read back out of its denial.
@@ -184,6 +207,25 @@ check "commit from inside the repository" deny "git commit -m x" "$A"
 PUSH=$(printf 'push')
 
 check "a push is watched" deny "git $PUSH" "$A"
+
+# The range a push carries was every commit no remote had seen, which counts a
+# fork as publication: a branch pushed to a fork and then to upstream produced
+# an empty range the second time, and the gate reported a push carrying
+# nothing.
+git -C "$A" remote add origin https://example.invalid/origin.git
+git -C "$A" remote add fork https://example.invalid/fork.git
+
+check_remote "a named remote is passed on" origin "git push origin main" "$A"
+check_remote "the other remote is too" fork "git push fork my-branch" "$A"
+check_remote "flags before the remote are stepped over" origin "git push --force-with-lease origin" "$A"
+
+# Left to the client, which reads the branch's own setting the way git does.
+check_remote "a bare push names none" none "git push" "$A"
+
+# `git push main` names a branch and no remote. Reading it as one would exclude
+# the refs of a remote that does not exist, which is every commit on the branch.
+check_remote "a branch is not a remote" none "git push main" "$A"
+check_remote "a URL is not a remote" none "git push https://example.invalid/x.git" "$A"
 
 # `npm version patch` records its commit inside npm's own process, so the text
 # this hook reads carries no git command at all. Found while cutting 0.1.3 by

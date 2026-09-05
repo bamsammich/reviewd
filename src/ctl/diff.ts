@@ -482,7 +482,58 @@ export function relativeTo(root: string, path: string): string {
  * branch pushed to a fork and then to upstream produces an empty range the
  * second time.
  */
-export async function unpushedCommits(root: string): Promise<string[]> {
+/**
+ * Which remote a push would reach, when the command did not say.
+ *
+ * `git push` with no remote sends to the branch's configured one, and to
+ * `origin` when nothing is configured. Reading the same setting git reads is
+ * what keeps the gate's answer and the push's destination the same question.
+ *
+ * Null on a detached HEAD, where there is no branch to carry the setting.
+ */
+export async function pushRemote(root: string): Promise<string | null> {
+  const branch = (
+    await git(root, ['symbolic-ref', '--quiet', '--short', 'HEAD']).catch(() => '')
+  ).trim()
+
+  if (branch.length === 0) return null
+
+  const configured = (
+    await git(root, ['config', '--get', `branch.${branch}.remote`]).catch(() => '')
+  ).trim()
+
+  return configured.length > 0 ? configured : 'origin'
+}
+
+/**
+ * The refs to treat as published, for a push aimed at one remote.
+ *
+ * Every remote counted as published before, which let a branch pushed to a
+ * fork reach upstream unreviewed: the fork had seen the commits, so the range
+ * came back empty and the gate reported a push carrying nothing. Measured on a
+ * repository with two remotes, `rev-list HEAD --not --remotes` answered 0
+ * where `rev-list HEAD --not origin/main` answered 1.
+ *
+ * A remote this repository holds no refs for has published nothing, so nothing
+ * is excluded and every commit on the branch needs an approval. That is the
+ * strict reading and the correct one: a remote nobody has fetched from has
+ * seen none of this.
+ */
+async function publishedRefs(root: string, remote: string | null): Promise<string[]> {
+  if (remote === null) return ['--remotes']
+
+  const refs = (
+    await git(root, ['for-each-ref', '--format=%(refname)', `refs/remotes/${remote}`]).catch(
+      () => '',
+    )
+  )
+    .split('\n')
+    .filter((line) => line.length > 0)
+
+  return refs
+}
+
+export async function unpushedCommits(root: string, remote?: string | null): Promise<string[]> {
   // A repository with no commits has no HEAD to name, and rev-list treats that
   // as an error rather than as an empty answer. Nothing is unpushed there,
   // which is what a fresh `git init` under push gating should read as: the
@@ -491,15 +542,26 @@ export async function unpushedCommits(root: string): Promise<string[]> {
   const head = await git(root, ['rev-parse', '--verify', '--quiet', 'HEAD']).catch(() => '')
   if (head.trim().length === 0) return []
 
-  const out = await git(root, ['rev-list', 'HEAD', '--not', '--remotes'])
+  // Resolved here rather than defaulted to every remote, so the range answers
+  // the question the push asks: what this remote has not seen.
+  const aimed = remote === undefined ? await pushRemote(root) : remote
+  const published = await publishedRefs(root, aimed)
+
+  const out = await git(root, ['rev-list', 'HEAD', '--not', ...published])
   return out.split('\n').filter((line) => line.length > 0)
 }
 
 /** What a push would carry: the two ends of the range, or null when nothing would go. */
 export async function pushRange(
   root: string,
+  /**
+   * The remote the push names, or undefined to read the branch's own setting.
+   * Null asks for every remote, which is what a command naming a URL rather
+   * than a remote gets: nothing here can say which refs that URL holds.
+   */
+  remote?: string | null,
 ): Promise<{ base: string; head: string; commits: string[] } | null> {
-  const commits = await unpushedCommits(root)
+  const commits = await unpushedCommits(root, remote)
   if (commits.length === 0) return null
 
   const oldest = commits[commits.length - 1] as string
