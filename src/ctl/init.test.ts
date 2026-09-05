@@ -1,12 +1,18 @@
-import { describe, expect, it } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   initPlugin,
   installedPluginVersion,
+  marketplaceAutoUpdate,
   marketplaceSource,
   planInit,
   type Backup,
   type Runner,
 } from './init.js'
+import { renderPlan } from './init-report.js'
 
 /**
  * A `claude` that records what it was asked and answers from a script.
@@ -320,5 +326,139 @@ describe('REVIEWD_MARKETPLACE_SOURCE', () => {
       expect(plan.marketplace.action).toBe('repoint')
       expect(plan.marketplace.current).toBe('bamsammich/reviewd')
     })
+  })
+})
+
+/**
+ * Whether Claude Code refreshes the marketplace on its own.
+ *
+ * Without it the plugin only catches up when somebody runs init or the MCP
+ * server notices a version mismatch, and neither happens while a session is
+ * open. Claude Code keeps the answer in `known_marketplaces.json` and nothing
+ * on the `claude` command line sets it, so init reads and writes the file.
+ */
+describe('marketplace auto-update', () => {
+  let home: string
+
+  const known = (): string => join(home, 'plugins', 'known_marketplaces.json')
+
+  const write = async (entries: Record<string, unknown>): Promise<void> => {
+    await mkdir(join(home, 'plugins'), { recursive: true })
+    await writeFile(known(), JSON.stringify(entries, null, 2))
+  }
+
+  const read = async (): Promise<Record<string, Record<string, unknown>>> =>
+    JSON.parse(await readFile(known(), 'utf8')) as Record<string, Record<string, unknown>>
+
+  beforeEach(async () => {
+    home = mkdtempSync(join(tmpdir(), 'reviewd-claude-'))
+    process.env['CLAUDE_CONFIG_DIR'] = home
+  })
+
+  afterEach(() => {
+    delete process.env['CLAUDE_CONFIG_DIR']
+    rmSync(home, { recursive: true, force: true })
+  })
+
+  it('reads as off when the marketplace does not carry it', async () => {
+    await write({ bamsammich: { source: { source: 'github', repo: 'bamsammich/reviewd' } } })
+
+    expect(await marketplaceAutoUpdate()).toBe(false)
+  })
+
+  it('reads as on when it does', async () => {
+    await write({ bamsammich: { autoUpdate: true } })
+
+    expect(await marketplaceAutoUpdate()).toBe(true)
+  })
+
+  // A file that cannot be read is the state init offers to change, which costs
+  // a line in a plan and nothing else.
+  it('reads as off when there is no file at all', async () => {
+    expect(await marketplaceAutoUpdate()).toBe(false)
+  })
+
+  it('is named in the plan while it is off', async () => {
+    await write({ bamsammich: { source: { source: 'github', repo: 'bamsammich/reviewd' } } })
+    const { run } = fakeClaude({ marketplaces: onGitHub })
+
+    expect(renderPlan(await planInit(run))).toContain('turn on auto-update')
+  })
+
+  it('is left out of the plan once it is on', async () => {
+    await write({ bamsammich: { autoUpdate: true } })
+    const { run } = fakeClaude({ marketplaces: onGitHub })
+
+    expect(renderPlan(await planInit(run))).not.toContain('auto-update')
+  })
+
+  it('is turned on where init was asked to', async () => {
+    await write({ bamsammich: { source: { source: 'github', repo: 'bamsammich/reviewd' } } })
+    const { run } = fakeClaude({ marketplaces: onGitHub })
+    const { backup } = fakeBackups()
+
+    const result = await initPlugin(run, { stamp: 'STAMP', backup, autoUpdate: true })
+
+    expect(result.autoUpdate).toBe(true)
+    expect((await read())['bamsammich']?.['autoUpdate']).toBe(true)
+  })
+
+  /**
+   * `catchUpPlugin` runs the same install mid-session with nobody to ask, and
+   * a standing preference is not a thing to set on somebody's behalf.
+   */
+  it('is left alone when init was not asked to set it', async () => {
+    await write({ bamsammich: { source: { source: 'github', repo: 'bamsammich/reviewd' } } })
+    const { run } = fakeClaude({ marketplaces: onGitHub })
+    const { backup } = fakeBackups()
+
+    const result = await initPlugin(run, { stamp: 'STAMP', backup })
+
+    expect(result.autoUpdate).toBe(false)
+    expect((await read())['bamsammich']?.['autoUpdate']).toBeUndefined()
+  })
+
+  it('leaves every other marketplace alone', async () => {
+    await write({
+      thedotmack: { autoUpdate: true, source: { source: 'github', repo: 'thedotmack/x' } },
+      bamsammich: { source: { source: 'github', repo: 'bamsammich/reviewd' } },
+      impeccable: { source: { source: 'github', repo: 'pbakaus/impeccable' } },
+    })
+    const { run } = fakeClaude({ marketplaces: onGitHub })
+    const { backup } = fakeBackups()
+
+    await initPlugin(run, { stamp: 'STAMP', backup, autoUpdate: true })
+    const after = await read()
+
+    expect(Object.keys(after)).toEqual(['thedotmack', 'bamsammich', 'impeccable'])
+    expect(after['impeccable']?.['autoUpdate']).toBeUndefined()
+    expect(after['thedotmack']?.['source']).toEqual({ source: 'github', repo: 'thedotmack/x' })
+  })
+
+  // Reported only where it changed, so a result never mentions something that
+  // did not happen.
+  it('reports nothing the second time, because there is nothing to report', async () => {
+    await write({ bamsammich: { autoUpdate: true } })
+    const { run } = fakeClaude({ marketplaces: onGitHub })
+    const { backup } = fakeBackups()
+
+    const result = await initPlugin(run, { stamp: 'STAMP', backup, autoUpdate: true })
+
+    expect(result.autoUpdate).toBe(false)
+  })
+
+  /**
+   * The entry is made by the marketplace add. Writing one here would invent
+   * state Claude Code never made.
+   */
+  it('writes nothing when the marketplace is not in the file', async () => {
+    await write({ impeccable: { source: { source: 'github', repo: 'pbakaus/impeccable' } } })
+    const { run } = fakeClaude({ marketplaces: onGitHub })
+    const { backup } = fakeBackups()
+
+    const result = await initPlugin(run, { stamp: 'STAMP', backup, autoUpdate: true })
+
+    expect(result.autoUpdate).toBe(false)
+    expect(Object.keys(await read())).toEqual(['impeccable'])
   })
 })

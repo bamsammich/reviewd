@@ -78,6 +78,12 @@ start and updates, and the new copy loads the session after. `reviewd init` does
 the same thing on demand, and `reviewd doctor` says whether the two are lined
 up. Nothing here asks you to run `claude plugin` yourself.
 
+`reviewd init` also turns on auto-update for the marketplace it adds, which it
+names in the plan before asking. Claude Code then refreshes the plugin on its
+own, so an upgrade no longer waits for the next session to notice. Turning it
+back off is a job for the `/plugin` UI, and init writes Claude Code's own state
+rather than a declaration that would override that choice later.
+
 A daemon in a container is the one piece npm cannot reach, because the image
 carries its own copy of reviewd:
 
